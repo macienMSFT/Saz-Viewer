@@ -67,13 +67,17 @@ public sealed partial class SazParser
                     session.Warnings);
             }
 
+        }
+
+        report.Sessions.Sort(CompareSessions);
+        report.Mapi = MapiCaptureParser.Parse(report.Sessions);
+        foreach (var session in report.Sessions)
+        {
             foreach (var warning in session.Warnings)
             {
                 report.Warnings.Add($"Session {session.Id}: {warning}");
             }
         }
-
-        report.Sessions.Sort(CompareSessions);
         report.WebSocketMessages.Sort(CompareWebSocketMessages);
         if (groups.Count == 0)
         {

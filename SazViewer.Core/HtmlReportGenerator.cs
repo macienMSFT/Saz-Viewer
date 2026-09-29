@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 
 namespace SazViewer.Core;
 
@@ -39,6 +40,7 @@ details{margin:4px 0}summary{cursor:pointer;color:var(--accent)}pre{white-space:
 .message-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}.message-panel{min-width:0;border:1px solid var(--line);border-radius:7px;padding:10px;background:var(--bg)}
 .detail-block{margin-top:10px}.detail-block h4{display:flex;align-items:center;gap:8px}.headers{max-height:220px}.body-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:5px 0}.body-toolbar .format-status{flex:1;min-width:180px}
 .body-view{max-height:360px;margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:#13233a}.session-meta{margin-top:10px}.session-meta pre{max-height:180px}.empty-message{color:var(--muted);padding:18px;text-align:center}
+.protocol-block{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}.protocol-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}.protocol-toolbar input{min-width:160px}.protocol-tree{max-height:420px;overflow:auto;border:1px solid var(--line);padding:6px;background:var(--panel)}.protocol-node{margin-left:14px}.protocol-node>summary{display:flex;gap:7px;align-items:baseline}.protocol-field{display:flex;gap:7px;margin-left:16px;padding:2px 0}.protocol-offset{color:var(--muted);font:12px ui-monospace,Consolas,monospace}.protocol-value{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}.protocol-kind{color:var(--accent);font-size:12px}.protocol-hidden{display:none!important}
 .syn-key{color:#79c0ff}.syn-string{color:#a5d6ff}.syn-number{color:#ffa657}.syn-literal{color:#ff7b72}.syn-punct{color:#8b949e}.syn-tag{color:#7ee787}.syn-attr{color:#d2a8ff}.syn-comment{color:#8b949e;font-style:italic}.syn-value{color:#a5d6ff}
 .ws-table-scroll{max-height:70vh;overflow:auto;border:1px solid var(--line);margin-bottom:24px}.ws-table-scroll pre{max-height:320px}
 @media(max-width:900px){main{padding:2px}.message-grid{grid-template-columns:1fr}.detail-pane.has-selection{--detail-height:52vh}.body-view{max-height:260px}.http-workspace{height:calc(100vh - 4px);height:calc(100dvh - 4px);min-height:360px}}
@@ -64,6 +66,45 @@ function showPlaceholder(message){
   placeholder.textContent=message;
   detailContent.append(placeholder);
 }
+function renderProtocolTrees(root){
+  root.querySelectorAll('[data-protocol]').forEach(host=>{
+    let data;
+    try{data=JSON.parse(host.dataset.protocol)}
+    catch{host.textContent='Protocol tree data could not be loaded.';host.className='warning';return}
+    host.removeAttribute('data-protocol');
+    const toolbar=document.createElement('div');toolbar.className='protocol-toolbar';
+    const search=document.createElement('input');search.type='search';search.placeholder='Search protocol fields...';search.setAttribute('aria-label','Search protocol tree');
+    const expand=document.createElement('button');expand.type='button';expand.textContent='Expand all';
+    const collapse=document.createElement('button');collapse.type='button';collapse.textContent='Collapse all';
+    toolbar.append(search,expand,collapse);
+    const tree=document.createElement('div');tree.className='protocol-tree';tree.setAttribute('role','tree');
+    function addNode(node,parent){
+      const hasChildren=Array.isArray(node.children)&&node.children.length>0;
+      const element=document.createElement(hasChildren?'details':'div');
+      element.className=hasChildren?'protocol-node':'protocol-field';
+      const line=document.createElement(hasChildren?'summary':'span');
+      const name=document.createElement('b');name.textContent=node.name;line.append(name);
+      const kind=document.createElement('span');kind.className='protocol-kind';kind.textContent=node.kind;line.append(kind);
+      const offset=document.createElement('span');offset.className='protocol-offset';offset.textContent=`@${node.offset} +${node.length}`;line.append(offset);
+      if(node.value!==null&&node.value!==undefined){const value=document.createElement('span');value.className='protocol-value';value.textContent=String(node.value);line.append(value)}
+      element.append(line);element.dataset.search=line.textContent.toLowerCase();
+      if(hasChildren)node.children.forEach(child=>addNode(child,element));
+      parent.append(element);
+    }
+    addNode(data.root,tree);host.replaceChildren(toolbar,tree);
+    function filterNode(node,query){
+      const children=[...node.children].filter(child=>child.classList.contains('protocol-node')||child.classList.contains('protocol-field'));
+      let childMatch=false;children.forEach(child=>{if(filterNode(child,query))childMatch=true});
+      const ownMatch=!query||(node.dataset.search||'').includes(query);
+      const visible=ownMatch||childMatch;node.classList.toggle('protocol-hidden',!visible);
+      if(query&&childMatch&&node.tagName==='DETAILS')node.open=true;
+      return visible;
+    }
+    search.addEventListener('input',()=>filterNode(tree.firstElementChild,search.value.trim().toLowerCase()));
+    expand.addEventListener('click',()=>tree.querySelectorAll('details').forEach(item=>item.open=true));
+    collapse.addEventListener('click',()=>tree.querySelectorAll('details').forEach(item=>item.open=false));
+  });
+}
 function clearSelection(message){
   if(selectedRow){selectedRow.classList.remove('selected');selectedRow.setAttribute('aria-selected','false')}
   selectedRow=null;detailPane.classList.remove('has-selection');
@@ -76,7 +117,7 @@ function selectRow(row){
   if(selectedRow){selectedRow.classList.remove('selected');selectedRow.setAttribute('aria-selected','false')}
   selectedRow=row;row.classList.add('selected');row.setAttribute('aria-selected','true');
   detailContent.replaceChildren(template.content.cloneNode(true));detailPane.classList.add('has-selection');
-  highlightSelected(detailContent);resizer.setAttribute('aria-disabled','false');
+  highlightSelected(detailContent);renderProtocolTrees(detailContent);resizer.setAttribute('aria-disabled','false');
   requestAnimationFrame(updateResizeAria);
 }
 httpRows.forEach(row=>{
@@ -90,7 +131,8 @@ function bindFilter(inputId,selectId,tableId,onFiltered){
   function apply(){
     const query=input.value.toLowerCase(),filter=select.value;
     rows.forEach(row=>{
-      const visible=(!query||row.dataset.search.includes(query))&&(!filter||row.dataset.filter===filter);
+      const filterMatch=!filter||(filter==='mapi'?row.dataset.mapi==='true':row.dataset.filter===filter);
+      const visible=(!query||row.dataset.search.includes(query))&&filterMatch;
       row.classList.toggle('hidden',!visible);
     });
     if(onFiltered)onFiltered();
@@ -233,8 +275,8 @@ clearSelection();
         html.Append("""
 <section class="http-workspace" aria-label="HTTP sessions">
 <div class="controls"><input id="httpSearch" type="search" aria-label="Search HTTP sessions" placeholder="Search method, URL, status, content type, endpoints...">
-<select id="httpFilter" aria-label="Filter HTTP status"><option value="">All statuses</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option></select></div>
-<div class="http-table-scroll"><table id="httpTable"><thead><tr><th>Time</th><th>ID</th><th>Method</th><th>URL</th><th>Status</th><th>Type</th><th class="num">Req</th><th class="num">Resp</th></tr></thead><tbody>
+<select id="httpFilter" aria-label="Filter HTTP status or protocol"><option value="">All sessions</option><option value="mapi">MAPI/NSPI only</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option></select></div>
+<div class="http-table-scroll"><table id="httpTable"><thead><tr><th>Time</th><th>ID</th><th>Method</th><th>Protocol</th><th>URL</th><th>Status</th><th>Type</th><th class="num">Req</th><th class="num">Resp</th></tr></thead><tbody>
 """);
         for (var index = 0; index < sessions.Count; index++)
         {
@@ -263,12 +305,14 @@ clearSelection();
         var search = string.Join(' ', new[]
         {
             session.Id, session.Method, session.Url, session.StatusCode?.ToString(CultureInfo.InvariantCulture),
-            session.StatusText, session.ContentType, session.ClientEndpoint, session.ServerEndpoint
+            session.StatusText, session.ContentType, session.ClientEndpoint, session.ServerEndpoint,
+            session.Mapi?.RequestType, session.Mapi?.Endpoint.ToString()
         }.Where(value => !string.IsNullOrWhiteSpace(value))).ToLowerInvariant();
         html.Append("<tr tabindex=\"0\" aria-selected=\"false\" aria-label=\"Inspect HTTP session ");
         Attribute(html, session.Id);
         html.Append("\" data-detail=\"http-detail-").Append(index).Append("\" data-filter=\"")
-            .Append(filter).Append("\" data-search=\"");
+            .Append(filter).Append("\" data-mapi=\"").Append(session.Mapi is not null ? "true" : "false")
+            .Append("\" data-search=\"");
         Attribute(html, search);
         html.Append("\"><td>");
         Text(html, FormatTimestamp(session.Timestamp));
@@ -277,6 +321,17 @@ clearSelection();
         html.Append("</td><td><span class=\"badge\">");
         Text(html, session.Method ?? "-");
         html.Append("</span></td><td class=\"url\">");
+        if (session.Mapi is not null)
+        {
+            html.Append("<span class=\"badge\">");
+            Text(html, session.Mapi.Endpoint == MapiEndpoint.AddressBook ? "NSPI" : "MAPI");
+            html.Append("</span>");
+        }
+        else
+        {
+            html.Append("-");
+        }
+        html.Append("</td><td class=\"url\">");
         Text(html, session.Url ?? "-");
         html.Append("</td><td>");
         Text(html, session.StatusCode?.ToString(CultureInfo.InvariantCulture) ?? "-");
@@ -301,8 +356,8 @@ clearSelection();
         html.Append("</span><span class=\"url\">");
         Text(html, session.Url ?? "-");
         html.Append("</span></div><div class=\"message-grid\">");
-        AppendMessagePanel(html, "Request", session.Request);
-        AppendMessagePanel(html, "Response", session.Response);
+        AppendMessagePanel(html, "Request", session.Request, session.Mapi?.Request);
+        AppendMessagePanel(html, "Response", session.Response, session.Mapi?.Response);
         html.Append("</div><div class=\"session-meta\">");
         if (session.ClientEndpoint is not null || session.ServerEndpoint is not null)
         {
@@ -328,7 +383,11 @@ clearSelection();
         html.Append("</div></template>");
     }
 
-    private void AppendMessagePanel(StringBuilder html, string title, HttpMessage? message)
+    private void AppendMessagePanel(
+        StringBuilder html,
+        string title,
+        HttpMessage? message,
+        MapiMessageParse? protocol)
     {
         html.Append("<section class=\"message-panel\"><h3>").Append(title).Append("</h3>");
         if (message is null)
@@ -355,8 +414,45 @@ clearSelection();
         }
         html.Append(")</span></h4>");
         AppendBody(html, bodyFormatter.Format(message.Body, message.Header("Content-Type")), message.Body);
-        html.Append("</div></section>");
+        html.Append("</div>");
+        if (protocol is not null)
+        {
+            AppendProtocol(html, protocol);
+        }
+        html.Append("</section>");
     }
+
+    private static void AppendProtocol(StringBuilder html, MapiMessageParse protocol)
+    {
+        html.Append("<section class=\"protocol-block\"><h4>Protocol <span class=\"muted\">(")
+            .Append(protocol.Complete ? "complete" : "partial").Append(", ")
+            .Append(protocol.ParsedBytes.ToString("N0", CultureInfo.InvariantCulture)).Append(" of ")
+            .Append(protocol.TotalBytes.ToString("N0", CultureInfo.InvariantCulture))
+            .Append(" bytes)</span></h4>");
+        foreach (var warning in protocol.Warnings.Take(50))
+        {
+            html.Append("<div class=\"warning\">");
+            Text(html, warning);
+            html.Append("</div>");
+        }
+        var payload = JsonSerializer.Serialize(new
+        {
+            root = ToProtocolData(protocol.Root)
+        });
+        html.Append("<div data-protocol=\"");
+        Attribute(html, payload);
+        html.Append("\"><span class=\"muted\">Protocol tree loads when this session is selected.</span></div></section>");
+    }
+
+    private static object ToProtocolData(MapiNode node) => new
+    {
+        name = node.Name,
+        kind = node.Kind.ToString(),
+        offset = node.Offset,
+        length = node.Length,
+        value = node.Value,
+        children = node.Children.Select(ToProtocolData).ToArray()
+    };
 
     private static void AppendBody(
         StringBuilder html,

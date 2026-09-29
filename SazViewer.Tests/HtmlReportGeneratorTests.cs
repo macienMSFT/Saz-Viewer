@@ -1,4 +1,5 @@
 using SazViewer.Core;
+using System.Collections.Immutable;
 
 namespace SazViewer.Tests;
 
@@ -123,6 +124,60 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("main{width:100%;padding:4px}", html, StringComparison.Ordinal);
         Assert.Contains("height:calc(100dvh - 8px)", html, StringComparison.Ordinal);
         Assert.Contains("aria-label=\"HTTP sessions\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GeneratesLazySafeMapiProtocolTreeAndFilter()
+    {
+        const string attack = "</script><img src=x onerror=alert(1)>";
+        var root = new MapiNode(
+            "Execute",
+            MapiNodeKind.Operation,
+            0,
+            8,
+            null,
+            [MapiNode.Leaf("PropertyValue", MapiNodeKind.Property, 4, 4, attack)]);
+        var parse = new MapiMessageParse(
+            MapiDirection.Request,
+            root,
+            ImmutableArray<string>.Empty,
+            true,
+            8,
+            8);
+        var mapi = new MapiSession(
+            "1",
+            0,
+            MapiEndpoint.Mailbox,
+            "Execute",
+            "0",
+            false,
+            parse,
+            null,
+            ImmutableArray<string>.Empty);
+        var session = new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "POST",
+            Url = "https://example.test/mapi",
+            StatusCode = 200,
+            Request = Message("POST /mapi HTTP/1.1", "application/mapi-http", "binary")
+        };
+        session.Mapi = mapi;
+        var report = new SazReport { SourceName = "mapi.saz" };
+        report.Sessions.Add(session);
+
+        var html = new HtmlReportGenerator().Generate(report);
+
+        Assert.Contains("<option value=\"mapi\">MAPI/NSPI only</option>", html, StringComparison.Ordinal);
+        Assert.Contains("data-mapi=\"true\"", html, StringComparison.Ordinal);
+        Assert.Contains("<th>Protocol</th>", html, StringComparison.Ordinal);
+        Assert.Contains("data-protocol=", html, StringComparison.Ordinal);
+        Assert.Contains("renderProtocolTrees(detailContent)", html, StringComparison.Ordinal);
+        Assert.Contains("document.createElement(hasChildren?'details':'div')", html, StringComparison.Ordinal);
+        Assert.Contains("value.textContent=String(node.value)", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(attack, html, StringComparison.Ordinal);
+        Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);
     }
 
     private static HttpMessage Message(string startLine, string contentType, string body)

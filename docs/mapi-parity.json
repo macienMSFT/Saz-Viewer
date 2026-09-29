@@ -1,0 +1,137 @@
+{
+  "reference": {
+    "repository": "https://github.com/OfficeDev/Office-Inspectors-for-Fiddler",
+    "commit": "c18dd66c99f3b5a96c2e1d31698c5cf2deb828e7",
+    "license": "MIT"
+  },
+  "upstreamInventory": {
+    "protocolParserFiles": 632,
+    "mapiHttpMethods": 23,
+    "ropIds": 132,
+    "ropRequestDispatchCases": 128,
+    "ropResponseDispatchCases": 131,
+    "auxiliaryV1Labels": 29,
+    "auxiliaryV2Labels": 11,
+    "propertyValueDispatchCases": 32,
+    "restrictionDispatchCases": 11,
+    "pidTagSymbols": 572,
+    "lidNamedProperties": 365,
+    "stringNamedProperties": 131
+  },
+  "implemented": {
+    "mapiHttpMethodsDetected": {
+      "count": 23,
+      "of": 23
+    },
+    "requestMethodEnvelopesFullyDecoded": {
+      "count": 20,
+      "of": 23,
+      "names": [
+        "Connect",
+        "Execute",
+        "Disconnect",
+        "NotificationWait",
+        "GetMailboxUrl",
+        "GetAddressBookUrl",
+        "Bind",
+        "Unbind",
+        "CompareMIds",
+        "DNToMId",
+        "GetPropList",
+        "GetProps",
+        "GetSpecialTable",
+        "GetTemplateInfo",
+        "ModLinkAtt",
+        "QueryRows",
+        "QueryColumns",
+        "ResolveNames",
+        "ResortRestriction",
+        "UpdateStat"
+      ]
+    },
+    "responseMethodEnvelopesFullyDecoded": {
+      "count": 16,
+      "of": 23,
+      "names": [
+        "Connect",
+        "Execute",
+        "Disconnect",
+        "NotificationWait",
+        "GetMailboxUrl",
+        "GetAddressBookUrl",
+        "Bind",
+        "Unbind",
+        "CompareMIds",
+        "DNToMId",
+        "GetPropList",
+        "ModLinkAtt",
+        "ModProps",
+        "QueryColumns",
+        "ResortRestriction",
+        "UpdateStat"
+      ]
+    },
+    "extendedBufferFraming": true,
+    "chainedExtendedBuffers": true,
+    "xorA5": true,
+    "direct2Lz77": true,
+    "ropIdsNamed": {
+      "count": 132,
+      "of": 132
+    },
+    "ropListAndHandleTableFraming": true,
+    "individualRopSemanticDispatch": {
+      "request": {
+        "count": 0,
+        "of": 128
+      },
+      "response": {
+        "count": 0,
+        "of": 131
+      }
+    },
+    "auxiliaryPayloadSemanticDispatch": {
+      "count": 0,
+      "of": 40
+    },
+    "propertyValueSemanticDispatch": {
+      "count": 0,
+      "of": 32
+    },
+    "restrictionSemanticDispatch": {
+      "count": 0,
+      "of": 11
+    }
+  },
+  "namedMethodGaps": {
+    "request": [
+      "GetMatches",
+      "ModProps",
+      "SeekEntries"
+    ],
+    "response": [
+      "GetMatches",
+      "GetProps",
+      "GetSpecialTable",
+      "GetTemplateInfo",
+      "QueryRows",
+      "ResolveNames",
+      "SeekEntries"
+    ]
+  },
+  "remainingSemanticAreas": [
+    "All 128 request and 131 response individual ROP dispatchers",
+    "All 32 property-value dispatch cases and the 572 PidTag property-name map",
+    "All 11 upstream restriction dispatch cases, plus the upstream-omitted SubObject restriction",
+    "All 40 auxiliary payload semantic layouts",
+    "FastTransfer and ICS lexical/syntactical grammars and partial-stream reconstruction",
+    "Capture-local logon, table-column, notification, and handle correlation beyond framing",
+    "365 LID and 131 string-named property mappings"
+  ],
+  "safetyDivergences": [
+    "Unknown operations, properties, restrictions, and auxiliary blocks are retained as bounded offset/length raw nodes with warnings.",
+    "Malformed XOR/compression/framing is transactional and never exposed as successful decoded data.",
+    "All declared lengths, counts, strings, allocations, recursion, nodes, and payloads are explicitly bounded.",
+    "Parser state is per capture rather than upstream static global state."
+  ]
+}

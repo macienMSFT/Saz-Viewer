@@ -27,7 +27,8 @@ internal static class HttpBodyDecoder
         long capturedLength,
         IReadOnlyList<HttpHeader> headers,
         string label,
-        List<string> warnings)
+        List<string> warnings,
+        bool retainNormalizedBody)
     {
         var contentType = HeaderValues(headers, "Content-Type").FirstOrDefault();
         if (capturedLength == 0)
@@ -52,11 +53,12 @@ internal static class HttpBodyDecoder
 
         if (declaredCodings.Count == 0)
         {
-            return HttpMessageParser.CreateBodyPreview(
+            var direct = HttpMessageParser.CreateBodyPreview(
                 availableBody[..Math.Min(availableBody.Length, HttpMessageParser.MaxBodyPreview)],
                 capturedLength,
                 capturedLength,
                 contentType);
+            return WithNormalizedBytes(direct, availableBody, capturedLength, retainNormalizedBody);
         }
 
         var totalCodingCount = transferResult.Codings.Count + contentResult.Codings.Count;
@@ -167,9 +169,34 @@ internal static class HttpBodyDecoder
                 original.AsSpan(0, Math.Min(original.Length, CapturedBytesPreviewLimit))),
             CapturedBytesPreviewTruncated = original.Length > CapturedBytesPreviewLimit,
             RemovedEncodings = removed,
-            DecodingStatus = $"Decoded in wire-removal order: {string.Join(" -> ", removed)}."
+            DecodingStatus = $"Decoded in wire-removal order: {string.Join(" -> ", removed)}.",
+            NormalizedBytes = retainNormalizedBody ? current : ReadOnlyMemory<byte>.Empty
         };
     }
+
+    private static BodyPreview WithNormalizedBytes(
+        BodyPreview preview,
+        ReadOnlySpan<byte> availableBody,
+        long capturedLength,
+        bool retainNormalizedBody) =>
+        new()
+        {
+            Length = preview.Length,
+            CapturedLength = preview.CapturedLength,
+            IsBinary = preview.IsBinary,
+            IsTruncated = preview.IsTruncated,
+            Charset = preview.Charset,
+            Preview = preview.Preview,
+            CapturedBytesPreview = preview.CapturedBytesPreview,
+            CapturedBytesPreviewTruncated = preview.CapturedBytesPreviewTruncated,
+            RemovedEncodings = preview.RemovedEncodings,
+            DecodingStatus = preview.DecodingStatus,
+            NormalizedBytes = retainNormalizedBody
+                && capturedLength == availableBody.Length
+                && availableBody.Length <= MapiParseLimits.MaxPayloadBytes
+                    ? availableBody.ToArray()
+                    : ReadOnlyMemory<byte>.Empty
+        };
 
     private static BodyPreview Failure(
         ReadOnlySpan<byte> availableBody,

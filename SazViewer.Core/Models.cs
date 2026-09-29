@@ -6,6 +6,7 @@ public sealed class SazReport
     public List<HttpSession> Sessions { get; } = [];
     public List<WebSocketMessage> WebSocketMessages { get; } = [];
     public List<string> Warnings { get; } = [];
+    public MapiCapture? Mapi { get; internal set; }
 }
 
 public sealed class HttpSession
@@ -27,6 +28,7 @@ public sealed class HttpSession
     public Dictionary<string, string> Timers { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> Metadata { get; } = new(StringComparer.OrdinalIgnoreCase);
     public List<string> Warnings { get; } = [];
+    public MapiSession? Mapi { get; internal set; }
 }
 
 public sealed class HttpMessage
@@ -57,6 +59,7 @@ public sealed class BodyPreview
     public IReadOnlyList<string> RemovedEncodings { get; init; } = [];
     public string? DecodingStatus { get; init; }
     public bool WasDecoded => RemovedEncodings.Count > 0;
+    internal ReadOnlyMemory<byte> NormalizedBytes { get; init; }
 }
 
 public sealed class WebSocketMessage

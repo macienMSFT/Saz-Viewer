@@ -24,7 +24,7 @@ dotnet run --project .\SazViewer.Cli -- --help
 
 When no output path is supplied, the report is written beside the input archive with an `.html` extension.
 
-In the report, select an HTTP row with the mouse or keyboard to open its request and response in the resizable bottom pane. The pane keeps the session table visible, switches to a vertical layout on narrow windows, and provides formatted/raw views for detected JSON, XML, and text bodies.
+In the report, select an HTTP row with the mouse or keyboard to open its request and response in the resizable bottom pane. The pane keeps the session table visible, switches to a vertical layout on narrow windows, and provides formatted/raw views for detected JSON, XML, and text bodies. Detected MAPI/HTTP and NSPI sessions have a protocol badge/filter and a searchable, expandable protocol tree with byte offsets and lengths.
 
 ## Publish a self-contained Windows executable
 
@@ -41,7 +41,7 @@ Use `win-arm64` instead of `win-x64` for Windows on ARM. The published executabl
 - Individual missing or malformed records produce warnings instead of aborting the archive.
 - HTTP body previews are bounded. Text uses a safely recognized charset; binary data is shown as a bounded hex preview.
 - Declared chunked transfer framing is removed before content decoding. `gzip`, zlib-wrapped `deflate` (with a raw-DEFLATE compatibility fallback), and `br` are supported, including chained and repeated `Content-Encoding` fields in HTTP decoding order.
-- Decoding is transactional and bounded: encoded input must fit the 1 MiB parser window, each decoded stage is limited to at most 4 MiB and 100x expansion (with a 1 MiB floor), gzip content is capped at 128 members, displayed decoded bodies remain capped at 64 KiB, and captured encoded-byte views are capped at 16 KiB. Unsupported, corrupt, incomplete, or oversized content remains available as bounded captured hex with a warning.
+- Decoding is transactional and bounded: an HTTP entry is read through a 4 MiB protocol-payload limit plus bounded headers, each decoded stage is limited to at most 4 MiB and 100x expansion (with a 1 MiB floor), gzip content is capped at 128 members, displayed decoded bodies remain capped at 64 KiB, and captured encoded-byte views are capped at 16 KiB. Unsupported, corrupt, incomplete, or oversized content remains available as bounded captured hex with a warning.
 - The detail pane keeps captured headers unchanged. Successfully decoded bodies offer formatted content, decoded text, and the original captured bytes as distinct views.
 - WebSocket records are displayed separately with direction, opcode/type, length, timestamp when available, and safe text or hex previews.
 - The tool does not execute captured content and does not make network requests.
@@ -49,3 +49,11 @@ Use `win-arm64` instead of `win-x64` for Windows on ARM. The published executabl
 The WebSocket reader follows the mixed pseudo-header/binary record layout [described by Fiddler's author](https://stackoverflow.com/a/29566732) and decodes each declared-length frame according to [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455#section-5.2). Unknown or malformed variants are retained as bounded undecoded summaries with warnings.
 
 Concatenated gzip members are supported. The raw-DEFLATE compatibility path has no format checksum, so it provides structural validation but cannot provide the integrity guarantee available for gzip and zlib-wrapped DEFLATE.
+
+## MAPI/HTTP and NSPI inspection
+
+MAPI parsing uses the fully normalized HTTP entity bytes, not the 64 KiB display preview. Detection is based on `application/mapi-http`, `X-RequestType`, and `X-ResponseCode`. Parser state and budgets are capture-local; payloads are capped at 4 MiB, protocol trees at 25,000 nodes and depth 64, collections at 100,000 items, strings at 1 MiB, and retained raw nodes at 16 KiB.
+
+Implemented transport coverage includes all 23 `X-RequestType` values, response additional headers/status, mailbox service envelopes, high-confidence NSPI scalar/array structures, chained MS-OXCRPC extended buffers, XOR `0xA5`, bounded Direct2/LZ77 decompression, ROP list/handle-table framing, all 132 upstream ROP names, and safe unknown/raw fallback. Individual ROP semantics, the complete property/restriction grammar, auxiliary payload fields, and FastTransfer reconstruction are not yet parity-complete and are reported as partial rather than success-shaped decoded content. See [`docs/mapi-parity.json`](docs/mapi-parity.json) for exact counts and named gaps.
+
+The implementation was independently adapted with reference to the MIT-licensed [Office Inspectors for Fiddler](https://github.com/OfficeDev/Office-Inspectors-for-Fiddler) source at commit `c18dd66c99f3b5a96c2e1d31698c5cf2deb828e7` and Microsoft Open Specifications. See [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). No Fiddler/FiddlerCore, HexBox, Outlook interop, EQATEC, Ionic Zip, or other upstream binary is included.

@@ -5,7 +5,7 @@ namespace SazViewer.Core;
 
 internal static class HttpMessageParser
 {
-    private const int MaxEntryRead = 1024 * 1024;
+    private const int MaxEntryRead = MapiParseLimits.MaxPayloadBytes + (128 * 1024);
     internal const int MaxBodyPreview = 64 * 1024;
 
     public static HttpMessage? Parse(Stream stream, long entryLength, string label, List<string> warnings)
@@ -30,6 +30,7 @@ internal static class HttpMessageParser
         }
 
         var headers = ParseHeaders(lines, label, warnings);
+        var retainNormalizedBody = IsMapiCandidate(headers);
         var message = new HttpMessage
         {
             StartLine = lines[0],
@@ -38,11 +39,20 @@ internal static class HttpMessageParser
                 bodyLength,
                 headers,
                 label,
-                warnings)
+                warnings,
+                retainNormalizedBody)
         };
         message.Headers.AddRange(headers);
         return message;
     }
+
+    private static bool IsMapiCandidate(IReadOnlyList<HttpHeader> headers) =>
+        headers.Any(header =>
+            header.Name.Equals("X-RequestType", StringComparison.OrdinalIgnoreCase)
+            || header.Name.Equals("X-ResponseCode", StringComparison.OrdinalIgnoreCase)
+            || (header.Name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)
+                && header.Value.Split(';', 2)[0].Trim()
+                    .Equals("application/mapi-http", StringComparison.OrdinalIgnoreCase)));
 
     private static HttpMessage? ParseHeaderOnly(
         byte[] bytes,
