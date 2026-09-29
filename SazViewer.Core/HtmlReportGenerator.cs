@@ -18,13 +18,12 @@ public sealed class HtmlReportGenerator
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
-<title>SAZ report</title>
+<title>SAZ capture</title>
 <style>
 :root{color-scheme:light dark;--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--warn:#d29922;--selected:#1f6feb55;--detail-height:38vh}
 *{box-sizing:border-box}html{scrollbar-gutter:stable}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
-header,main{width:100%;padding:16px 20px}h1,h2,h3,h4{margin:.25em 0}.muted,.format-status{color:var(--muted)}
-.cards{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 16px;min-width:140px}.card b{font-size:22px;display:block}
-.controls{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}input,select,button{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:7px 10px}
+main{width:100%;padding:4px}h2,h3,h4{margin:.25em 0}.muted,.format-status{color:var(--muted)}
+.controls{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 4px}input,select,button{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:7px 10px}
 input{min-width:280px;flex:1}button{cursor:pointer}button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
 table{width:100%;border-collapse:collapse;background:var(--panel);font-size:13px}th{position:sticky;top:0;z-index:2;background:var(--panel2);text-align:left}
 th,td{padding:8px;border:1px solid var(--line);vertical-align:top}tbody tr:hover{background:#1f2630}#httpTable tbody tr{cursor:pointer}
@@ -32,7 +31,7 @@ th,td{padding:8px;border:1px solid var(--line);vertical-align:top}tbody tr:hover
 .url{max-width:560px;word-break:break-all}.num{text-align:right;white-space:nowrap}.badge,.format-badge{padding:2px 7px;border:1px solid var(--line);border-radius:10px;white-space:nowrap}
 details{margin:4px 0}summary{cursor:pointer;color:var(--accent)}pre{white-space:pre-wrap;overflow:auto;background:var(--bg);border:1px solid var(--line);padding:10px;word-break:break-word;tab-size:2}
 .warning{border-left:4px solid var(--warn);padding:6px 10px;margin:5px 0;background:#2b2111}.hidden{display:none!important}
-.http-workspace{height:calc(100vh - 32px);min-height:600px;display:flex;flex-direction:column}.http-table-scroll{min-height:180px;flex:1;overflow:auto;border:1px solid var(--line)}
+.http-workspace{height:calc(100vh - 8px);height:calc(100dvh - 8px);min-height:420px;display:flex;flex-direction:column}.http-table-scroll{min-height:180px;flex:1;overflow:auto;border:1px solid var(--line)}
 .detail-pane{position:sticky;bottom:0;z-index:5;flex:0 0 64px;min-height:64px;background:var(--panel);border:1px solid var(--line);box-shadow:0 -8px 22px #0008;overflow:hidden}
 .detail-pane.has-selection{flex-basis:var(--detail-height)}.detail-resizer{height:9px;cursor:row-resize;touch-action:none;background:linear-gradient(transparent 3px,var(--line) 3px,var(--line) 5px,transparent 5px)}
 .detail-resizer:focus{outline:2px solid var(--accent);outline-offset:-2px}.detail-content{height:calc(100% - 9px);overflow:auto;padding:10px 14px}.detail-placeholder{display:flex;height:100%;align-items:center;justify-content:center;color:var(--muted)}
@@ -42,21 +41,13 @@ details{margin:4px 0}summary{cursor:pointer;color:var(--accent)}pre{white-space:
 .body-view{max-height:360px;margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:#13233a}.session-meta{margin-top:10px}.session-meta pre{max-height:180px}.empty-message{color:var(--muted);padding:18px;text-align:center}
 .syn-key{color:#79c0ff}.syn-string{color:#a5d6ff}.syn-number{color:#ffa657}.syn-literal{color:#ff7b72}.syn-punct{color:#8b949e}.syn-tag{color:#7ee787}.syn-attr{color:#d2a8ff}.syn-comment{color:#8b949e;font-style:italic}.syn-value{color:#a5d6ff}
 .ws-table-scroll{max-height:70vh;overflow:auto;border:1px solid var(--line);margin-bottom:24px}.ws-table-scroll pre{max-height:320px}
-@media(max-width:900px){header,main{padding:12px}.message-grid{grid-template-columns:1fr}.detail-pane.has-selection{--detail-height:52vh}.body-view{max-height:260px}.http-workspace{min-height:520px}}
+@media(max-width:900px){main{padding:2px}.message-grid{grid-template-columns:1fr}.detail-pane.has-selection{--detail-height:52vh}.body-view{max-height:260px}.http-workspace{height:calc(100vh - 4px);height:calc(100dvh - 4px);min-height:360px}}
 </style>
 </head>
-<body>
-<header><h1>SAZ report</h1><div class="muted">
+<body><main>
 """);
-        Text(html, report.SourceName);
-        html.Append("</div><div class=\"cards\">");
-        Card(html, "HTTP sessions", report.Sessions.Count);
-        Card(html, "WebSocket messages", report.WebSocketMessages.Count);
-        Card(html, "Warnings", report.Warnings.Count);
-        Card(html, "Total HTTP bytes", report.Sessions.Sum(s => s.RequestBytes + s.ResponseBytes), bytes: true);
-        html.Append("</div></header><main>");
-        AppendWarnings(html, report.Warnings);
         AppendHttpSection(html, report.Sessions);
+        AppendWarnings(html, report.Warnings);
         AppendWebSocketSection(html, report.WebSocketMessages);
         html.Append("""
 </main>
@@ -240,7 +231,7 @@ clearSelection();
     private void AppendHttpSection(StringBuilder html, IReadOnlyList<HttpSession> sessions)
     {
         html.Append("""
-<section class="http-workspace"><h2>HTTP sessions</h2>
+<section class="http-workspace" aria-label="HTTP sessions">
 <div class="controls"><input id="httpSearch" type="search" aria-label="Search HTTP sessions" placeholder="Search method, URL, status, content type, endpoints...">
 <select id="httpFilter" aria-label="Filter HTTP status"><option value="">All statuses</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option></select></div>
 <div class="http-table-scroll"><table id="httpTable"><thead><tr><th>Time</th><th>ID</th><th>Method</th><th>URL</th><th>Status</th><th>Type</th><th class="num">Req</th><th class="num">Resp</th></tr></thead><tbody>
@@ -458,13 +449,6 @@ clearSelection();
             html.Append("</td></tr>");
         }
         html.Append("</tbody></table></div></section>");
-    }
-
-    private static void Card(StringBuilder html, string label, long value, bool bytes = false)
-    {
-        html.Append("<div class=\"card\"><b>").Append(bytes ? FormatBytes(value) : value).Append("</b>");
-        Text(html, label);
-        html.Append("</div>");
     }
 
     private static string FormatTimestamp(DateTimeOffset? value) =>

@@ -84,6 +84,47 @@ public sealed class HtmlReportGeneratorTests
         Assert.DoesNotContain("<span class=\"syn-number\">", html, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void StartsAtHttpControlsWithoutSummaryHeaderOrCards()
+    {
+        var report = new SazReport { SourceName = "capture.saz" };
+        report.Warnings.Add("Synthetic warning");
+        report.Sessions.Add(
+            new HttpSession
+            {
+                Id = "1",
+                ArchiveOrder = 0,
+                Method = "GET",
+                Url = "https://example.test/",
+                StatusCode = 200
+            });
+        report.WebSocketMessages.Add(
+            new WebSocketMessage
+            {
+                SessionId = "1",
+                Direction = "Server",
+                Type = "Text",
+                Preview = "message"
+            });
+
+        var html = new HtmlReportGenerator().Generate(report);
+        var workspace = html.IndexOf("<section class=\"http-workspace\"", StringComparison.Ordinal);
+        var search = html.IndexOf("id=\"httpSearch\"", StringComparison.Ordinal);
+        var warnings = html.IndexOf("<h2>Warnings</h2>", StringComparison.Ordinal);
+        var webSockets = html.IndexOf("<h2>WebSocket messages</h2>", StringComparison.Ordinal);
+
+        Assert.True(workspace >= 0 && search > workspace);
+        Assert.True(warnings > search);
+        Assert.True(webSockets > warnings);
+        Assert.DoesNotContain("<header", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<h1", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("class=\"cards\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("Total HTTP bytes", html, StringComparison.Ordinal);
+        Assert.Contains("main{width:100%;padding:4px}", html, StringComparison.Ordinal);
+        Assert.Contains("height:calc(100dvh - 8px)", html, StringComparison.Ordinal);
+        Assert.Contains("aria-label=\"HTTP sessions\"", html, StringComparison.Ordinal);
+    }
+
     private static HttpMessage Message(string startLine, string contentType, string body)
     {
         var message = new HttpMessage
