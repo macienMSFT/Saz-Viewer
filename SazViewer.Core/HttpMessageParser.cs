@@ -6,7 +6,7 @@ namespace SazViewer.Core;
 internal static class HttpMessageParser
 {
     private const int MaxEntryRead = 1024 * 1024;
-    private const int MaxBodyPreview = 64 * 1024;
+    internal const int MaxBodyPreview = 64 * 1024;
 
     public static HttpMessage? Parse(Stream stream, long entryLength, string label, List<string> warnings)
     {
@@ -29,15 +29,18 @@ internal static class HttpMessageParser
             return null;
         }
 
+        var headers = ParseHeaders(lines, label, warnings);
         var message = new HttpMessage
         {
             StartLine = lines[0],
-            Body = CreateBodyPreview(
-                availableBody[..Math.Min(availableBody.Length, MaxBodyPreview)],
+            Body = HttpBodyDecoder.CreatePreview(
+                availableBody,
                 bodyLength,
-                HeaderValue(lines, "Content-Type"))
+                headers,
+                label,
+                warnings)
         };
-        AddHeaders(message, lines, label, warnings);
+        message.Headers.AddRange(headers);
         return message;
     }
 
@@ -53,33 +56,35 @@ internal static class HttpMessageParser
             return null;
         }
 
+        var headers = ParseHeaders(lines, label, warnings);
         var message = new HttpMessage
         {
             StartLine = lines[0],
             Body = new BodyPreview
             {
                 Length = 0,
+                CapturedLength = 0,
                 Preview = string.Empty,
                 IsTruncated = entryLength > bytes.Length
             }
         };
-        AddHeaders(message, lines, label, warnings);
+        message.Headers.AddRange(headers);
         return message;
     }
 
-    private static void AddHeaders(
-        HttpMessage message,
+    private static List<HttpHeader> ParseHeaders(
         IReadOnlyList<string> lines,
         string label,
         List<string> warnings)
     {
+        var headers = new List<HttpHeader>();
         HttpHeader? previous = null;
         for (var i = 1; i < lines.Count; i++)
         {
             var line = lines[i];
             if ((line.StartsWith(' ') || line.StartsWith('\t')) && previous is not null)
             {
-                message.Headers[^1] = previous = previous with { Value = $"{previous.Value} {line.Trim()}" };
+                headers[^1] = previous = previous with { Value = $"{previous.Value} {line.Trim()}" };
                 continue;
             }
 
@@ -95,8 +100,9 @@ internal static class HttpMessageParser
             }
 
             previous = new HttpHeader(line[..colon].Trim(), line[(colon + 1)..].Trim());
-            message.Headers.Add(previous);
+            headers.Add(previous);
         }
+        return headers;
     }
 
     private static List<string> DecodeHeaders(
@@ -114,9 +120,10 @@ internal static class HttpMessageParser
         return lines;
     }
 
-    private static BodyPreview CreateBodyPreview(
+    internal static BodyPreview CreateBodyPreview(
         ReadOnlySpan<byte> bytes,
         long bodyLength,
+        long capturedLength,
         string? contentType)
     {
         var charset = ParseCharset(contentType);
@@ -128,6 +135,7 @@ internal static class HttpMessageParser
                 return new BodyPreview
                 {
                     Length = bodyLength,
+                    CapturedLength = capturedLength,
                     IsBinary = false,
                     IsTruncated = bodyLength > bytes.Length,
                     Charset = encoding.WebName,
@@ -143,6 +151,7 @@ internal static class HttpMessageParser
         return new BodyPreview
         {
             Length = bodyLength,
+            CapturedLength = capturedLength,
             IsBinary = true,
             IsTruncated = bodyLength > bytes.Length,
             Charset = charset,
@@ -324,14 +333,6 @@ internal static class HttpMessageParser
         }
 
         return output.ToArray();
-    }
-
-    private static string? HeaderValue(IReadOnlyList<string> lines, string name)
-    {
-        var prefix = name + ":";
-        return lines.Skip(1)
-            .FirstOrDefault(line => line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            ?[prefix.Length..].Trim();
     }
 
     private static string Truncate(string value, int length) =>

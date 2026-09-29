@@ -37,6 +37,9 @@ public sealed class HttpMessage
 
     public string? Header(string name) =>
         Headers.FirstOrDefault(h => h.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value;
+
+    public IEnumerable<string> HeaderValues(string name) =>
+        Headers.Where(h => h.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).Select(h => h.Value);
 }
 
 public sealed record HttpHeader(string Name, string Value);
@@ -44,10 +47,16 @@ public sealed record HttpHeader(string Name, string Value);
 public sealed class BodyPreview
 {
     public long Length { get; init; }
+    public long CapturedLength { get; init; }
     public bool IsBinary { get; init; }
     public bool IsTruncated { get; init; }
     public string? Charset { get; init; }
     public required string Preview { get; init; }
+    public string? CapturedBytesPreview { get; init; }
+    public bool CapturedBytesPreviewTruncated { get; init; }
+    public IReadOnlyList<string> RemovedEncodings { get; init; } = [];
+    public string? DecodingStatus { get; init; }
+    public bool WasDecoded => RemovedEncodings.Count > 0;
 }
 
 public sealed class WebSocketMessage

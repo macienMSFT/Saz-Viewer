@@ -39,7 +39,7 @@ details{margin:4px 0}summary{cursor:pointer;color:var(--accent)}pre{white-space:
 .session-heading{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}.session-heading .url{font-weight:600}
 .message-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}.message-panel{min-width:0;border:1px solid var(--line);border-radius:7px;padding:10px;background:var(--bg)}
 .detail-block{margin-top:10px}.detail-block h4{display:flex;align-items:center;gap:8px}.headers{max-height:220px}.body-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:5px 0}.body-toolbar .format-status{flex:1;min-width:180px}
-.body-view{max-height:360px;margin:6px 0}.session-meta{margin-top:10px}.session-meta pre{max-height:180px}.empty-message{color:var(--muted);padding:18px;text-align:center}
+.body-view{max-height:360px;margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:#13233a}.session-meta{margin-top:10px}.session-meta pre{max-height:180px}.empty-message{color:var(--muted);padding:18px;text-align:center}
 .syn-key{color:#79c0ff}.syn-string{color:#a5d6ff}.syn-number{color:#ffa657}.syn-literal{color:#ff7b72}.syn-punct{color:#8b949e}.syn-tag{color:#7ee787}.syn-attr{color:#d2a8ff}.syn-comment{color:#8b949e;font-style:italic}.syn-value{color:#a5d6ff}
 .ws-table-scroll{max-height:70vh;overflow:auto;border:1px solid var(--line);margin-bottom:24px}.ws-table-scroll pre{max-height:320px}
 @media(max-width:900px){header,main{padding:12px}.message-grid{grid-template-columns:1fr}.detail-pane.has-selection{--detail-height:52vh}.body-view{max-height:260px}.http-workspace{min-height:520px}}
@@ -352,13 +352,25 @@ clearSelection();
         {
             Text(html, $"{header.Name}: {header.Value}\n");
         }
-        html.Append("</pre></div><div class=\"detail-block body-block\"><h4>Body <span class=\"muted\">(")
-            .Append(FormatBytes(message.Body.Length)).Append(")</span></h4>");
-        AppendBody(html, bodyFormatter.Format(message.Body, message.Header("Content-Type")));
+        html.Append("</pre></div><div class=\"detail-block body-block\"><h4>Body <span class=\"muted\">(");
+        if (message.Body.WasDecoded)
+        {
+            html.Append(FormatBytes(message.Body.Length)).Append(" decoded; ")
+                .Append(FormatBytes(message.Body.CapturedLength)).Append(" captured");
+        }
+        else
+        {
+            html.Append(FormatBytes(message.Body.Length));
+        }
+        html.Append(")</span></h4>");
+        AppendBody(html, bodyFormatter.Format(message.Body, message.Header("Content-Type")), message.Body);
         html.Append("</div></section>");
     }
 
-    private static void AppendBody(StringBuilder html, BodyPresentation body)
+    private static void AppendBody(
+        StringBuilder html,
+        BodyPresentation body,
+        BodyPreview source)
     {
         var syntaxFormat = body.CanToggle ? body.Format : BodyFormat.Text;
         html.Append("<div class=\"body-toolbar\"><span class=\"format-badge\">");
@@ -366,16 +378,29 @@ clearSelection();
         html.Append("</span><span class=\"format-status\">");
         Text(html, body.Status);
         html.Append("</span>");
-        if (body.CanToggle)
+        if (body.CanToggle || source.CapturedBytesPreview is not null)
         {
-            html.Append("""
-<span class="body-toggle" role="group" aria-label="Body display mode">
-<button type="button" data-body-view="formatted" aria-pressed="true">Formatted</button>
-<button type="button" data-body-view="raw" aria-pressed="false">Raw</button>
-</span>
-""");
+            html.Append("<span class=\"body-toggle\" role=\"group\" aria-label=\"Body display mode\"><button type=\"button\" data-body-view=\"formatted\" aria-pressed=\"true\">Formatted</button>");
+            if (body.CanToggle)
+            {
+                html.Append("<button type=\"button\" data-body-view=\"raw\" aria-pressed=\"false\">");
+                Text(html, source.WasDecoded ? "Decoded text" : "Raw");
+                html.Append("</button>");
+            }
+            if (source.CapturedBytesPreview is not null)
+            {
+                html.Append("<button type=\"button\" data-body-view=\"captured\" aria-pressed=\"false\">Captured bytes</button>");
+            }
+            html.Append("</span>");
         }
-        html.Append("</div><pre class=\"body-view formatted-view\" data-format=\"")
+        html.Append("</div>");
+        if (source.DecodingStatus is not null)
+        {
+            html.Append(source.WasDecoded ? "<div class=\"decode-status\">" : "<div class=\"warning\">");
+            Text(html, source.DecodingStatus);
+            html.Append("</div>");
+        }
+        html.Append("<pre class=\"body-view formatted-view\" data-format=\"")
             .Append(syntaxFormat.ToString().ToLowerInvariant()).Append("\">");
         Text(html, body.Formatted);
         html.Append("</pre>");
@@ -383,6 +408,16 @@ clearSelection();
         {
             html.Append("<pre class=\"body-view raw-view hidden\">");
             Text(html, body.Raw);
+            html.Append("</pre>");
+        }
+        if (source.CapturedBytesPreview is not null)
+        {
+            html.Append("<pre class=\"body-view captured-view hidden\">");
+            Text(html, source.CapturedBytesPreview);
+            if (source.CapturedBytesPreviewTruncated)
+            {
+                Text(html, "\n[Captured byte preview truncated]");
+            }
             html.Append("</pre>");
         }
     }

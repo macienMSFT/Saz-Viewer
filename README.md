@@ -40,7 +40,12 @@ Use `win-arm64` instead of `win-x64` for Windows on ARM. The published executabl
 - SAZ files are treated as ZIP archives, and sparse `raw/<id>_*` entries are supported.
 - Individual missing or malformed records produce warnings instead of aborting the archive.
 - HTTP body previews are bounded. Text uses a safely recognized charset; binary data is shown as a bounded hex preview.
+- Declared chunked transfer framing is removed before content decoding. `gzip`, zlib-wrapped `deflate` (with a raw-DEFLATE compatibility fallback), and `br` are supported, including chained and repeated `Content-Encoding` fields in HTTP decoding order.
+- Decoding is transactional and bounded: encoded input must fit the 1 MiB parser window, each decoded stage is limited to at most 4 MiB and 100x expansion (with a 1 MiB floor), gzip content is capped at 128 members, displayed decoded bodies remain capped at 64 KiB, and captured encoded-byte views are capped at 16 KiB. Unsupported, corrupt, incomplete, or oversized content remains available as bounded captured hex with a warning.
+- The detail pane keeps captured headers unchanged. Successfully decoded bodies offer formatted content, decoded text, and the original captured bytes as distinct views.
 - WebSocket records are displayed separately with direction, opcode/type, length, timestamp when available, and safe text or hex previews.
 - The tool does not execute captured content and does not make network requests.
 
 The WebSocket reader follows the mixed pseudo-header/binary record layout [described by Fiddler's author](https://stackoverflow.com/a/29566732) and decodes each declared-length frame according to [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455#section-5.2). Unknown or malformed variants are retained as bounded undecoded summaries with warnings.
+
+Concatenated gzip members are supported. The raw-DEFLATE compatibility path has no format checksum, so it provides structural validation but cannot provide the integrity guarantee available for gzip and zlib-wrapped DEFLATE.
