@@ -24,6 +24,8 @@ dotnet run --project .\SazViewer.Cli -- --help
 
 When no output path is supplied, the report is written beside the input archive with an `.html` extension.
 
+In the report, select an HTTP row with the mouse or keyboard to open its request and response in the resizable bottom pane. The pane keeps the session table visible, switches to a vertical layout on narrow windows, and provides formatted/raw views for detected JSON, XML, and text bodies.
+
 ## Publish a self-contained Windows executable
 
 ```powershell
