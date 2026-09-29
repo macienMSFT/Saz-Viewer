@@ -107,6 +107,60 @@ public sealed class HttpBodyDecodingTests
     }
 
     [Fact]
+    public void DechunksMultiChunkUtf8JsonWithFiddlerTransferLengthMetadata()
+    {
+        const string json = """{"items":[{"id":1},{"id":2}],"message":"synthetic"}""";
+        var plain = Bytes(json);
+        var chunked = ChunkPieces(plain, 7, 3, 11, 5);
+        var metadata =
+            $"<Session><SessionFlag N=\"x-responsebodytransferlength\" V=\"{chunked.Length}\"/></Session>";
+        using var saz = Fixture(
+            ("raw/1_c.txt", HttpBytes("GET https://example.test/data HTTP/1.1", [], ("Host", "example.test"))),
+            ("raw/1_s.txt", HttpBytes(
+                "HTTP/1.1 200 OK",
+                chunked,
+                ("Transfer-Encoding", "chunked"),
+                ("Content-Type", "application/json; odata.metadata=minimal; odata.streaming=true; charset=utf-8"))),
+            ("raw/1_m.xml", Bytes(metadata)));
+
+        var session = Assert.Single(new SazParser().Parse(saz).Sessions);
+        var body = session.Response!.Body;
+        var presentation = new BodyFormatter().Format(body, session.Response.Header("Content-Type"));
+
+        Assert.Equal(json, body.Preview);
+        Assert.Equal(plain, Encoding.UTF8.GetBytes(body.Preview));
+        Assert.Equal(chunked.Length, body.CapturedLength);
+        Assert.Equal(plain.Length, body.Length);
+        Assert.Equal(["transfer: chunked"], body.RemovedEncodings);
+        Assert.Equal(chunked.Length.ToString(), session.Metadata["x-responsebodytransferlength"]);
+        Assert.Equal(BodyFormat.Json, presentation.Format);
+    }
+
+    [Fact]
+    public void StaleChunkedHeaderProducesExplicitRawFallback()
+    {
+        const string normalizedJson = """{"already":"dechunked"}""";
+        var bodyBytes = Bytes(normalizedJson);
+        using var saz = Fixture(
+            ("raw/1_c.txt", HttpBytes("GET https://example.test/data HTTP/1.1", [], ("Host", "example.test"))),
+            ("raw/1_s.txt", HttpBytes(
+                "HTTP/1.1 200 OK",
+                bodyBytes,
+                ("Transfer-Encoding", "chunked"),
+                ("Content-Type", "application/json"))),
+            ("raw/1_m.xml", Bytes(
+                $"<Session><SessionFlag N=\"x-responsebodytransferlength\" V=\"{bodyBytes.Length}\"/></Session>")));
+
+        var report = new SazParser().Parse(saz);
+        var body = Assert.Single(report.Sessions).Response!.Body;
+
+        Assert.False(body.WasDecoded);
+        Assert.True(body.IsBinary);
+        Assert.Contains("already normalized by the SAZ producer", body.DecodingStatus, StringComparison.Ordinal);
+        Assert.Contains(report.Warnings, warning => warning.Contains("already normalized", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void DecodesMultipleContentEncodingLinesInReverseOrder()
     {
         const string json = """{"chain":["gzip","br"]}""";
@@ -419,6 +473,33 @@ public sealed class HttpBodyDecodingTests
             Write(output, "X-Checksum: complete\r\n");
         }
         Write(output, "\r\n");
+        return output.ToArray();
+    }
+
+    private static byte[] ChunkPieces(byte[] body, params int[] requestedSizes)
+    {
+        using var output = new MemoryStream();
+        var offset = 0;
+        foreach (var requestedSize in requestedSizes)
+        {
+            if (offset >= body.Length)
+            {
+                break;
+            }
+            var size = Math.Min(requestedSize, body.Length - offset);
+            Write(output, $"{size:X}\r\n");
+            output.Write(body, offset, size);
+            Write(output, "\r\n");
+            offset += size;
+        }
+        if (offset < body.Length)
+        {
+            var size = body.Length - offset;
+            Write(output, $"{size:X}\r\n");
+            output.Write(body, offset, size);
+            Write(output, "\r\n");
+        }
+        Write(output, "0\r\n\r\n");
         return output.ToArray();
     }
 

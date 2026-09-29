@@ -85,6 +85,19 @@ public sealed class BodyFormatterTests
     }
 
     [Fact]
+    public void FormatsJsonAfterAUnicodeBomWhilePreservingRawText()
+    {
+        const string raw = "\uFEFF{\"value\":1}";
+
+        var result = formatter.Format(TextBody(raw), "application/json; charset=utf-8");
+
+        Assert.Equal(BodyFormat.Json, result.Format);
+        Assert.Equal(raw, result.Raw);
+        Assert.DoesNotContain("\uFEFF", result.Formatted, StringComparison.Ordinal);
+        Assert.Contains("\"value\": 1", result.Formatted, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RejectsXmlDocumentTypeDeclarations()
     {
         const string raw = "<!DOCTYPE root [<!ENTITY x SYSTEM \"file:///windows/win.ini\">]><root>&x;</root>";

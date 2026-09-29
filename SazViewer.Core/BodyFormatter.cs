@@ -46,7 +46,8 @@ public sealed class BodyFormatter
         }
 
         var raw = body.Preview;
-        var trimmed = raw.AsSpan().TrimStart();
+        var parseable = raw.Length > 0 && raw[0] == '\uFEFF' ? raw[1..] : raw;
+        var trimmed = parseable.AsSpan().TrimStart();
         var mediaType = MediaType(contentType);
         var declaredJson = IsJsonMediaType(mediaType);
         var declaredXml = IsXmlMediaType(mediaType);
@@ -67,7 +68,7 @@ public sealed class BodyFormatter
                 $"The body preview is truncated; {hinted} formatting was skipped to avoid showing an incomplete parse.");
         }
 
-        if (looksJson && ExceedsJsonDepth(raw))
+        if (looksJson && ExceedsJsonDepth(parseable))
         {
             return FormattingLimited(
                 body,
@@ -76,7 +77,7 @@ public sealed class BodyFormatter
                 "JSON-like nesting exceeds the safe formatting depth; showing the original text.");
         }
 
-        if (looksXml && ExceedsXmlDepth(raw))
+        if (looksXml && ExceedsXmlDepth(parseable))
         {
             return FormattingLimited(
                 body,
@@ -85,22 +86,22 @@ public sealed class BodyFormatter
                 "XML-like nesting exceeds the safe formatting depth; showing the original text.");
         }
 
-        if (looksJson && TryFormatJson(raw, out var json))
+        if (looksJson && TryFormatJson(parseable, out var json))
         {
             return Structured(body, BodyFormat.Json, "JSON", DetectionStatus("JSON", declaredJson), json);
         }
 
-        if (looksXml && TryFormatXml(raw, out var xml))
+        if (looksXml && TryFormatXml(parseable, out var xml))
         {
             return Structured(body, BodyFormat.Xml, "XML", DetectionStatus("XML", declaredXml), xml);
         }
 
-        if (declaredJson && TryFormatJson(raw, out json))
+        if (declaredJson && TryFormatJson(parseable, out json))
         {
             return Structured(body, BodyFormat.Json, "JSON", "Parsed as JSON from Content-Type.", json);
         }
 
-        if (declaredXml && TryFormatXml(raw, out xml))
+        if (declaredXml && TryFormatXml(parseable, out xml))
         {
             return Structured(body, BodyFormat.Xml, "XML", "Parsed as XML from Content-Type.", xml);
         }
