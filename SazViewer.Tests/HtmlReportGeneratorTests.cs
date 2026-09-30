@@ -499,6 +499,27 @@ public sealed class HtmlReportGeneratorTests
     }
 
     [Fact]
+    public void EmitsPersistentAccessibleSystemLightDarkThemeControls()
+    {
+        var html = new HtmlReportGenerator().Generate(new SazReport { SourceName = "theme.saz" });
+
+        Assert.Contains("<html lang=\"en\" data-theme=\"system\">", html, StringComparison.Ordinal);
+        Assert.Equal(2, html.Split("class=\"theme-select\"", StringSplitOptions.None).Length - 1);
+        Assert.Equal(2, html.Split("aria-label=\"Color theme\"", StringSplitOptions.None).Length - 1);
+        Assert.Contains("<option value=\"system\">System</option><option value=\"light\">Light</option><option value=\"dark\">Dark</option>", html, StringComparison.Ordinal);
+        Assert.Contains("localStorage.getItem('saz-viewer-theme')", html, StringComparison.Ordinal);
+        Assert.Contains("try{localStorage.setItem(THEME_STORAGE_KEY,theme)}catch{}", html, StringComparison.Ordinal);
+        Assert.Contains("const THEME_VALUES=new Set(['system','light','dark'])", html, StringComparison.Ordinal);
+        Assert.Contains("window.addEventListener('storage'", html, StringComparison.Ordinal);
+        Assert.Contains(":root[data-theme=light]{color-scheme:light", html, StringComparison.Ordinal);
+        Assert.Contains(":root[data-theme=system]{color-scheme:light dark}", html, StringComparison.Ordinal);
+        Assert.Contains("@media(prefers-color-scheme:light){:root[data-theme=system]", html, StringComparison.Ordinal);
+        Assert.Contains("tbody tr:hover{background:var(--hover)}", html, StringComparison.Ordinal);
+        Assert.Contains(".warning{border-left:4px solid var(--warn);padding:6px 10px;margin:5px 0;background:var(--warning-bg)}", html, StringComparison.Ordinal);
+        Assert.Contains(".ws-client .ws-arrow{color:var(--direction-client)}", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NavigationControlsExposeAccessibleLabelsAndOperateOnVisibleFilteredRows()
     {
         var report = new SazReport { SourceName = "nav.saz" };
@@ -663,8 +684,8 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("<option value=\"websocket\">WebSocket only</option>", html, StringComparison.Ordinal);
         Assert.Contains("class=\"websocket-inspector\"", html, StringComparison.Ordinal);
         Assert.Contains("data-payload-type=\"websocket-session\"", html, StringComparison.Ordinal);
-        Assert.Contains(".ws-client .ws-arrow{color:#58a6ff}", html, StringComparison.Ordinal);
-        Assert.Contains(".ws-server .ws-arrow{color:#3fb950}", html, StringComparison.Ordinal);
+        Assert.Contains(".ws-client .ws-arrow{color:var(--direction-client)}", html, StringComparison.Ordinal);
+        Assert.Contains(".ws-server .ws-arrow{color:var(--direction-server)}", html, StringComparison.Ordinal);
         Assert.Contains("['ID','Type','Body','Preview'].forEach", html, StringComparison.Ordinal);
         Assert.Contains(".ws-message-tracks{display:grid;grid-template-columns:max-content max-content max-content minmax(180px,1fr);min-width:100%}", html, StringComparison.Ordinal);
         Assert.Contains(".ws-message-header,.ws-message-list,.ws-message-row{display:grid;grid-template-columns:subgrid;grid-column:1/-1}", html, StringComparison.Ordinal);
@@ -696,7 +717,8 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("next.addEventListener('click',()=>move(1))", html, StringComparison.Ordinal);
         Assert.Contains("viewEventTarget.addEventListener('saz-view-change'", html, StringComparison.Ordinal);
         Assert.Contains("removeActiveSearchMarks(options.searchRoot,options.matchClass)", html, StringComparison.Ordinal);
-        Assert.DoesNotContain("localStorage", html, StringComparison.Ordinal);
+        Assert.Contains("localStorage.getItem('saz-viewer-theme')", html, StringComparison.Ordinal);
+        Assert.Contains("localStorage.setItem(THEME_STORAGE_KEY,theme)", html, StringComparison.Ordinal);
         Assert.Contains("const logicalId=index+1", html, StringComparison.Ordinal);
         Assert.DoesNotContain("const meta=wsElement('span','ws-message-meta'", html, StringComparison.Ordinal);
         Assert.Contains("`${message.payloadLengthText}${limited?'*':''}`", html, StringComparison.Ordinal);

@@ -42,6 +42,7 @@ public sealed class HtmlReportBrowserTests
 
             await VerifyInspectorAsync(browser, reportPath, 1440, exerciseAllControls: true);
             await VerifyInspectorAsync(browser, reportPath, 480, exerciseAllControls: false);
+            await VerifyThemePersistenceAsync(browser, reportPath);
             await VerifyHttpActiveViewSearchAsync(browser, reportPath);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 1440);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 320);
@@ -146,6 +147,76 @@ public sealed class HtmlReportBrowserTests
             {
                 await page.CloseAsync();
             }
+    }
+
+    private static async Task VerifyThemePersistenceAsync(IBrowser browser, string reportPath)
+    {
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        var errors = new List<string>();
+        CaptureErrors(page, errors);
+        await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+        await page.EvaluateAsync("()=>{try{localStorage.removeItem('saz-viewer-theme')}catch{}}");
+        await page.ReloadAsync();
+
+        var mainTheme = page.Locator(".controls .theme-select");
+        var inspectorTheme = page.Locator(".inspector-header .theme-select");
+        Assert.Equal("system", await page.Locator("html").GetAttributeAsync("data-theme"));
+        Assert.Equal("system", await mainTheme.InputValueAsync());
+        Assert.Equal("system", await inspectorTheme.InputValueAsync());
+
+        await mainTheme.SelectOptionAsync("light");
+        Assert.Equal("light", await page.Locator("html").GetAttributeAsync("data-theme"));
+        Assert.Equal("light", await inspectorTheme.InputValueAsync());
+        Assert.Equal(
+            "rgb(255, 255, 255)",
+            await page.Locator("body").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundColor"));
+        await page.ReloadAsync();
+        Assert.Equal("light", await page.Locator("html").GetAttributeAsync("data-theme"));
+
+        var secondPage = await context.NewPageAsync();
+        var secondErrors = new List<string>();
+        CaptureErrors(secondPage, secondErrors);
+        await secondPage.GotoAsync(new Uri(reportPath).AbsoluteUri);
+        Assert.Equal("light", await secondPage.Locator("html").GetAttributeAsync("data-theme"));
+
+        await page.Locator("#httpTable tbody tr").First.ClickAsync();
+        inspectorTheme = page.Locator(".inspector-header .theme-select");
+        await inspectorTheme.SelectOptionAsync("dark");
+        Assert.Equal("dark", await page.Locator("html").GetAttributeAsync("data-theme"));
+        Assert.Equal("dark", await page.Locator(".controls .theme-select").InputValueAsync());
+        await Assertions.Expect(secondPage.Locator("html")).ToHaveAttributeAsync("data-theme", "dark");
+        Assert.Equal("dark", await secondPage.Locator(".controls .theme-select").InputValueAsync());
+        await secondPage.CloseAsync();
+        Assert.Equal(
+            "rgb(13, 17, 23)",
+            await page.Locator("body").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundColor"));
+        await page.ReloadAsync();
+        Assert.Equal("dark", await page.Locator("html").GetAttributeAsync("data-theme"));
+        await page.Locator(".controls .theme-select").SelectOptionAsync("system");
+        await page.ReloadAsync();
+        Assert.Equal("system", await page.Locator("html").GetAttributeAsync("data-theme"));
+
+        await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer-theme','invalid')");
+        await page.ReloadAsync();
+        Assert.Equal("system", await page.Locator("html").GetAttributeAsync("data-theme"));
+        Assert.Equal("system", await page.Locator(".controls .theme-select").InputValueAsync());
+        Assert.Empty(errors);
+        Assert.Empty(secondErrors);
+
+        await using var blockedContext = await browser.NewContextAsync();
+        var blockedPage = await blockedContext.NewPageAsync();
+        var blockedErrors = new List<string>();
+        CaptureErrors(blockedPage, blockedErrors);
+        await blockedPage.AddInitScriptAsync(
+            "Storage.prototype.getItem=()=>{throw new DOMException('blocked')};Storage.prototype.setItem=()=>{throw new DOMException('blocked')}");
+        await blockedPage.GotoAsync(new Uri(reportPath).AbsoluteUri);
+        Assert.Equal("system", await blockedPage.Locator("html").GetAttributeAsync("data-theme"));
+        await blockedPage.Locator(".controls .theme-select").SelectOptionAsync("dark");
+        Assert.Equal("dark", await blockedPage.Locator("html").GetAttributeAsync("data-theme"));
+        await blockedPage.ReloadAsync();
+        Assert.Equal("system", await blockedPage.Locator("html").GetAttributeAsync("data-theme"));
+        Assert.Empty(blockedErrors);
     }
 
     private static async Task VerifyHttpActiveViewSearchAsync(IBrowser browser, string reportPath)
@@ -995,10 +1066,14 @@ public sealed class HtmlReportBrowserTests
             Assert.EndsWith("\u2026", listPreview, StringComparison.Ordinal);
             Assert.DoesNotContain("2024-", await messages.First.InnerTextAsync(), StringComparison.Ordinal);
             Assert.DoesNotContain("frame", await messages.First.InnerTextAsync(), StringComparison.OrdinalIgnoreCase);
-            Assert.Equal("rgb(88, 166, 255)", await messages.First.Locator(".ws-arrow")
-                .EvaluateAsync<string>("element=>getComputedStyle(element).color"));
-            Assert.Equal("rgb(63, 185, 80)", await messages.Nth(1).Locator(".ws-arrow")
-                .EvaluateAsync<string>("element=>getComputedStyle(element).color"));
+            Assert.Equal(
+                await page.Locator("html").EvaluateAsync<string>(
+                    "element=>{const probe=document.createElement('span');probe.style.color=getComputedStyle(element).getPropertyValue('--direction-client');document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();return color}"),
+                await messages.First.Locator(".ws-arrow").EvaluateAsync<string>("element=>getComputedStyle(element).color"));
+            Assert.Equal(
+                await page.Locator("html").EvaluateAsync<string>(
+                    "element=>{const probe=document.createElement('span');probe.style.color=getComputedStyle(element).getPropertyValue('--direction-server');document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();return color}"),
+                await messages.Nth(1).Locator(".ws-arrow").EvaluateAsync<string>("element=>getComputedStyle(element).color"));
             Assert.Equal("\u2193 2", await messages.Nth(1).Locator(".ws-id").InnerTextAsync());
             Assert.Equal("Ping", await messages.Nth(1).Locator(".ws-type").InnerTextAsync());
             Assert.Contains("Ping control", await messages.Nth(1).Locator(".ws-message-preview").InnerTextAsync());
