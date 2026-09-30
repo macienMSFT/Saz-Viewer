@@ -65,7 +65,7 @@ public sealed class HtmlReportBrowserTests
 
     private static async Task VerifyLargeMapiTreeAsync(IBrowser browser, string tempDirectory)
     {
-            const int leafCount = 5_000;
+            const int leafCount = MapiParseLimits.MaxNodes - 1;
             var leaves = Enumerable.Range(0, leafCount)
                 .Select(index => MapiNode.Leaf(
                     $"Field[{index}]",
@@ -104,7 +104,10 @@ public sealed class HtmlReportBrowserTests
             var report = new SazReport { SourceName = "large-mapi.saz" };
             report.Sessions.Add(session);
             var path = Path.Combine(tempDirectory, "large-mapi.html");
-            await File.WriteAllTextAsync(path, new HtmlReportGenerator().Generate(report));
+            var html = new HtmlReportGenerator().Generate(report);
+            Assert.Contains("data-payload-type=\"mapi-protocol\"", html, StringComparison.Ordinal);
+            Assert.InRange(Encoding.UTF8.GetByteCount(html), 1, 8 * 1024 * 1024);
+            await File.WriteAllTextAsync(path, html);
 
             var errors = new List<string>();
             var page = await browser.NewPageAsync(new()
@@ -127,9 +130,11 @@ public sealed class HtmlReportBrowserTests
 
                 var started = DateTime.UtcNow;
                 await page.Locator("#httpTable tbody tr").ClickAsync();
-                await Assertions.Expect(page.Locator(".protocol-load-status")).ToHaveTextAsync("5,001 nodes");
-                Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(15));
-                Assert.Equal(5_001, await page.Locator("#request-panel-mapi .tree-item").CountAsync());
+                await Assertions.Expect(page.Locator(".protocol-load-status")).ToHaveTextAsync(
+                    "25,000 nodes",
+                    new() { Timeout = 25_000 });
+                Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(25));
+                Assert.Equal(MapiParseLimits.MaxNodes, await page.Locator("#request-panel-mapi .tree-item").CountAsync());
                 Assert.Equal("true", await page.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
 
                 var search = page.Locator(".http-view-search-input");

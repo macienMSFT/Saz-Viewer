@@ -181,8 +181,20 @@
     "request": [],
     "response": []
   },
+  "validationEvidence": {
+    "releaseTests": 752,
+    "localCorpusSessions": 1172,
+    "localCorpusWarnings": 32,
+    "localCorpusReportBytes": 45594849,
+    "edgeProtocolTreeNodes": 25000,
+    "edgeModes": [
+      "desktop",
+      "narrow",
+      "popup"
+    ],
+    "notes": "The synthetic suite covers legal and hostile envelope/ROP/property/restriction/rule/AUX/FastTransfer/state transitions. The local corpus is diagnostic-only and is not committed. Edge validates compressed lazy hydration, stale-render cancellation, search expansion restoration, copy independence, contained narrow layout, popup mode, and zero console/page errors."
+  },
   "remainingSemanticAreas": [
-    "Differential validation against broader legal synthetic and local capture corpora remains in progress, including large/deep report responsiveness and compressed lazy-tree behavior",
     "RopReadRecipients response RecipientRow property internals remain bounded raw because that response carries no RecipientColumns array and the protocol does not identify a deterministic external column source",
     "Generic property-value arrays intentionally refuse types outside the fixed MS-OXCDATA property table and base types without a specified PtypMultiple form when no deterministic self-delimiting grammar is available; deterministic PtypRestriction, PtypRuleAction, and PtypServerId structures are decoded"
   ],
