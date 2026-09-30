@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.IO.Compression;
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using SazViewer.Core;
 
@@ -547,6 +548,92 @@ public sealed class HtmlReportGeneratorTests
     }
 
     [Fact]
+    public void WebSocketSessionsUseCompressedAccessibleInspectorPayload()
+    {
+        const string hostile = """{"attack":"</script><svg onload=globalThis.pwned=true>","ok":true}""";
+        var report = new SazReport { SourceName = "websocket.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "7",
+            ArchiveOrder = 0,
+            Method = "GET",
+            Url = "wss://example.test/socket",
+            StatusCode = 101
+        });
+        var message = new WebSocketMessage
+        {
+            SessionId = "7",
+            MessageIndex = 0,
+            RecordIndex = 0,
+            Timestamp = DateTimeOffset.Parse("2024-05-01T12:00:00Z"),
+            Direction = "Client",
+            Type = "Text",
+            PayloadLength = Encoding.UTF8.GetByteCount(hostile),
+            Preview = hostile,
+            Text = hostile,
+            IsDecoded = true,
+            IsComplete = true,
+            IsFragmented = true,
+            Payload = Encoding.UTF8.GetBytes(hostile)
+        };
+        message.Frames.Add(new WebSocketFrame
+        {
+            RecordIndex = 0,
+            FiddlerId = 11,
+            BitFlags = 0,
+            Timestamp = message.Timestamp,
+            Direction = "Client",
+            Opcode = 1,
+            Type = "Text",
+            Masked = true,
+            PayloadLength = 10,
+            CapturedPayloadLength = 10,
+            IsDecoded = true,
+            Payload = Encoding.UTF8.GetBytes(hostile[..10])
+        });
+        message.Frames.Add(new WebSocketFrame
+        {
+            RecordIndex = 2,
+            FiddlerId = 13,
+            BitFlags = 4,
+            Timestamp = message.Timestamp.Value.AddSeconds(2),
+            Direction = "Client",
+            Opcode = 0,
+            Type = "Continuation",
+            Final = true,
+            Masked = true,
+            PayloadLength = message.PayloadLength - 10,
+            CapturedPayloadLength = hostile.Length - 10,
+            IsDecoded = true,
+            Payload = Encoding.UTF8.GetBytes(hostile[10..])
+        });
+        report.WebSocketMessages.Add(message);
+
+        var html = new HtmlReportGenerator().Generate(report);
+        using var payload = ExtractCompressedPayload(html, "websocket-session", 0, html.Length);
+        var first = payload.RootElement.GetProperty("messages")[0];
+
+        Assert.Contains("data-websocket=\"true\"", html, StringComparison.Ordinal);
+        Assert.Contains("<option value=\"websocket\">WebSocket only</option>", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"websocket-inspector\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-payload-type=\"websocket-session\"", html, StringComparison.Ordinal);
+        Assert.Contains(".ws-client .ws-direction{color:#58a6ff}", html, StringComparison.Ordinal);
+        Assert.Contains(".ws-server .ws-direction{color:#3fb950}", html, StringComparison.Ordinal);
+        Assert.Contains("tablist.setAttribute('aria-label','WebSocket message views')", html, StringComparison.Ordinal);
+        Assert.Contains("wsTab('json','JSON'", html, StringComparison.Ordinal);
+        Assert.Contains("wsTab('text','Text'", html, StringComparison.Ordinal);
+        Assert.Contains("wsTab('raw','Raw'", html, StringComparison.Ordinal);
+        Assert.Contains("renderWebSocketInspector(host,generation)", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(hostile, html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<h2>WebSocket messages</h2>", html, StringComparison.Ordinal);
+        Assert.Equal(hostile, first.GetProperty("text").GetString());
+        Assert.Contains("\n  \"attack\":", first.GetProperty("jsonPretty").GetString(), StringComparison.Ordinal);
+        Assert.Contains("\"kind\":\"object\"", first.GetProperty("jsonTree").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Frame 0 ID=11 BitFlags=0", first.GetProperty("raw").GetString(), StringComparison.Ordinal);
+        Assert.Equal(2, first.GetProperty("frames").GetArrayLength());
+    }
+
+    [Fact]
     public void NoObsoleteSplitterOrResizerCodeRemains()
     {
         var report = new SazReport { SourceName = "no-resizer.saz" };
@@ -558,7 +645,7 @@ public sealed class HtmlReportGeneratorTests
         Assert.DoesNotContain("httpDetails", html, StringComparison.Ordinal);
         Assert.DoesNotContain("detailResizer", html, StringComparison.Ordinal);
         Assert.DoesNotContain("detail-resizer", html, StringComparison.Ordinal);
-        Assert.DoesNotContain("detail-pane", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(".detail-pane{", html, StringComparison.Ordinal);
         Assert.DoesNotContain("--detail-height", html, StringComparison.Ordinal);
         Assert.DoesNotContain("pointerdown", html, StringComparison.Ordinal);
         Assert.DoesNotContain("resizeTo(", html, StringComparison.Ordinal);
@@ -577,11 +664,11 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        // Only one exactly-visible side, at every viewport width - achieved via the dialog's fixed
-        // full-viewport sizing rather than a responsive grid-column collapse.
-        Assert.DoesNotContain("grid-template-columns", html, StringComparison.Ordinal);
+        // HTTP remains a single visible side. WebSocket traffic intentionally uses a bounded
+        // two-column inspector that stacks at the existing narrow breakpoint.
+        Assert.Contains(".ws-layout{flex:1;min-height:0;display:grid;grid-template-columns:", html, StringComparison.Ordinal);
         Assert.Contains("dialog#httpInspector{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh", html, StringComparison.Ordinal);
-        Assert.Contains("@media(max-width:900px){main{padding:2px}}", html, StringComparison.Ordinal);
+        Assert.Contains("@media(max-width:900px){main{padding:2px}.ws-layout{grid-template-columns:1fr;grid-template-rows:", html, StringComparison.Ordinal);
         Assert.Contains(".primary-panel{flex:1;min-height:0;display:flex;flex-direction:column", html, StringComparison.Ordinal);
     }
 
@@ -761,11 +848,13 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("function focusStableInspectorControl(){", html, StringComparison.Ordinal);
         Assert.Contains("const primaryRequestTab=inspectorBody.querySelector('.primary-tab-strip [role=\"tab\"][aria-selected=\"true\"]');", html, StringComparison.Ordinal);
 
-        // loadRow() captures whether focus was inside the body before replacing it, and restores
-        // focus to the (always-selected-after-navigation) primary Request tab if so.
+        // loadRow() captures whether focus was inside the body before replacing it. HTTP restores
+        // the Request tab; an asynchronously rendered WebSocket destination uses the stable Close
+        // control rather than leaving focus on detached content.
         Assert.Contains("const focusWasInBody=inspectorBody.contains(document.activeElement);", html, StringComparison.Ordinal);
         Assert.Contains("if(focusWasInBody){", html, StringComparison.Ordinal);
-        Assert.Contains("primaryRequestTab?.focus();", html, StringComparison.Ordinal);
+        Assert.Contains("if(primaryRequestTab)primaryRequestTab.focus();", html, StringComparison.Ordinal);
+        Assert.Contains("else inspectorClose.focus();", html, StringComparison.Ordinal);
     }
 
     [Fact]

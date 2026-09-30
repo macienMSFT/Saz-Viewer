@@ -159,12 +159,37 @@ public sealed class SazParserTests
         Assert.Equal("Binary", first.Type);
         Assert.Equal(3, first.PayloadLength);
         Assert.Contains("00 7F FF", first.Preview, StringComparison.Ordinal);
+        Assert.False(Assert.Single(first.Frames).Masked);
 
         var second = report.WebSocketMessages[1];
         Assert.Equal("Client", second.Direction);
         Assert.Equal("Text", second.Type);
         Assert.Equal("hello", second.Preview);
         Assert.True(second.IsDecoded);
+        Assert.True(Assert.Single(second.Frames).Masked);
+    }
+
+    [Fact]
+    public void ParsesFiddlerLeadingBlankFileHeaderAndPreservesPseudoHeaders()
+    {
+        using var websocket = new MemoryStream();
+        Write(websocket, "\r\n");
+        var frame = Frame(1, true, Bytes("hello"));
+        Write(
+            websocket,
+            $"Response-Length: {frame.Length}\r\nID: 17\r\nBitFlags: 4\r\nDoneRead: 2024-05-01T12:00:00.0000000Z\r\n\r\n");
+        websocket.Write(frame);
+        Write(websocket, "\r\n");
+        using var saz = Fixture(
+            ("raw/1_c.txt", Bytes("GET /socket HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/1_w.txt", websocket.ToArray()));
+
+        var message = Assert.Single(new SazParser().Parse(saz).WebSocketMessages);
+
+        var parsedFrame = Assert.Single(message.Frames);
+        Assert.Equal(17, parsedFrame.FiddlerId);
+        Assert.Equal(4, parsedFrame.BitFlags);
+        Assert.Equal("hello", message.Text);
     }
 
     [Fact]
@@ -203,7 +228,7 @@ public sealed class SazParserTests
     [Fact]
     public void TruncatedWebSocketPreviewDoesNotRejectSplitUtf8Character()
     {
-        var text = new string('a', 65_525) + "\u20AC" + new string('b', 5_000);
+        var text = new string('a', (1024 * 1024) - 10) + "\u20AC" + new string('b', 5_000);
         var frame = UnmaskedTextFrame(text);
         using var saz = Fixture(
             ("raw/1_c.txt", Bytes("GET /socket HTTP/1.1\r\nHost: test\r\n\r\n")),
@@ -212,9 +237,115 @@ public sealed class SazParserTests
 
         var message = Assert.Single(new SazParser().Parse(saz).WebSocketMessages);
 
-        Assert.StartsWith(new string('a', 100), message.Preview, StringComparison.Ordinal);
-        Assert.Contains("payload preview is limited", message.Warning, StringComparison.Ordinal);
+        Assert.StartsWith("00000000  61 61", message.Preview, StringComparison.Ordinal);
+        Assert.Null(message.Text);
+        Assert.Contains("retained payload is limited", message.Warning, StringComparison.Ordinal);
+        Assert.True(message.IsPayloadTruncated);
         Assert.DoesNotContain("not valid UTF-8", message.Warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReassemblesFragmentedTextWithInterleavedControlFrames()
+    {
+        using var saz = Fixture(
+            ("raw/1_c.txt", Bytes("GET /socket HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/1_w.txt", WebSocketCapture(
+                ("Response-Length", "1", "2024-05-01T12:00:00Z", Frame(1, false, Bytes("hel"))),
+                ("Response-Length", "2", "2024-05-01T12:00:01Z", Frame(9, true, Bytes("probe"))),
+                ("Response-Length", "3", "2024-05-01T12:00:02Z", Frame(10, true, Bytes("probe"))),
+                ("Response-Length", "4", "2024-05-01T12:00:03Z", Frame(0, true, Bytes("lo"))))));
+
+        var messages = new SazParser().Parse(saz).WebSocketMessages;
+
+        var text = Assert.Single(messages.Where(message => message.Type == "Text"));
+        Assert.Equal("hello", text.Text);
+        Assert.True(text.IsComplete);
+        Assert.True(text.IsFragmented);
+        Assert.Equal([0, 3], text.Frames.Select(frame => frame.RecordIndex));
+        var ping = Assert.Single(messages.Where(message => message.Type == "Ping"));
+        Assert.Equal("probe", Encoding.UTF8.GetString(ping.Payload.Span));
+        Assert.Single(messages.Where(message => message.Type == "Pong"));
+    }
+
+    [Fact]
+    public void KeepsFragmentationIndependentByDirection()
+    {
+        using var saz = Fixture(
+            ("raw/1_c.txt", Bytes("GET /socket HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/1_w.txt", WebSocketCapture(
+                ("Request-Length", "1", "2024-05-01T12:00:00Z", Frame(1, false, Bytes("up-"), true)),
+                ("Response-Length", "2", "2024-05-01T12:00:01Z", Frame(1, true, Bytes("down"))),
+                ("Request-Length", "3", "2024-05-01T12:00:02Z", Frame(0, true, Bytes("done"), true)))));
+
+        var messages = new SazParser().Parse(saz).WebSocketMessages;
+
+        Assert.Equal("up-done", Assert.Single(messages.Where(message => message.Direction == "Client")).Text);
+        Assert.Equal("down", Assert.Single(messages.Where(message => message.Direction == "Server")).Text);
+    }
+
+    [Fact]
+    public void PreservesInvalidFragmentSequencesAndInvalidUtf8()
+    {
+        using var saz = Fixture(
+            ("raw/1_c.txt", Bytes("GET /socket HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/1_w.txt", WebSocketCapture(
+                ("Response-Length", "1", "2024-05-01T12:00:00Z", Frame(0, true, Bytes("orphan"))),
+                ("Response-Length", "2", "2024-05-01T12:00:01Z", Frame(1, false, Bytes("unfinished"))),
+                ("Response-Length", "3", "2024-05-01T12:00:02Z", Frame(2, true, [0x01, 0x02])),
+                ("Response-Length", "4", "2024-05-01T12:00:03Z", Frame(1, true, [0xC3, 0x28])),
+                ("Request-Length", "5", "2024-05-01T12:00:04Z", Frame(2, false, [0x03], true)))));
+
+        var messages = new SazParser().Parse(saz).WebSocketMessages;
+
+        Assert.Contains("orphan continuation", messages[0].Warning, StringComparison.Ordinal);
+        Assert.False(messages[0].IsComplete);
+        Assert.Contains("starts a new binary message", messages[1].Warning, StringComparison.Ordinal);
+        Assert.False(messages[1].IsComplete);
+        Assert.Equal("Binary", messages[2].Type);
+        Assert.Contains("not valid UTF-8", messages[3].Warning, StringComparison.Ordinal);
+        Assert.Null(messages[3].Text);
+        Assert.Contains("capture ended", messages[4].Warning, StringComparison.Ordinal);
+        Assert.False(messages[4].IsComplete);
+    }
+
+    [Fact]
+    public void DoesNotDecodePayloadWhenRsvExtensionBitsAreSet()
+    {
+        var frame = Frame(1, true, Bytes("""{"looks":"json"}"""));
+        frame[0] |= 0x40;
+        using var saz = Fixture(
+            ("raw/1_c.txt", Bytes("GET /socket HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/1_w.txt", WebSocketCapture(
+                ("Response-Length", "1", "2024-05-01T12:00:00Z", frame))));
+
+        var message = Assert.Single(new SazParser().Parse(saz).WebSocketMessages);
+
+        Assert.False(message.IsDecoded);
+        Assert.Null(message.Text);
+        Assert.Contains("RSV bits are set", message.Warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BoundsAggregateRetainedWebSocketPayloadPerEntry()
+    {
+        var records = Enumerable.Range(0, 17)
+            .Select(index => (
+                "Response-Length",
+                (index + 1).ToString(),
+                $"2024-05-01T12:00:{index:00}Z",
+                UnmaskedBinaryFrame(1024 * 1024)))
+            .ToArray();
+        using var saz = Fixture(
+            ("raw/1_c.txt", Bytes("GET /socket HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/1_w.txt", WebSocketCapture(records)));
+
+        var messages = new SazParser().Parse(saz).WebSocketMessages;
+
+        Assert.Equal(17, messages.Count);
+        Assert.True(messages.Sum(message => message.Payload.Length) <= 16 * 1024 * 1024);
+        Assert.All(messages.SelectMany(message => message.Frames), frame => Assert.True(frame.Payload.IsEmpty));
+        Assert.True(messages[^1].IsPayloadTruncated);
+        Assert.Contains("retained payload is limited to 0 bytes", messages[^1].Warning, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -302,6 +433,35 @@ public sealed class SazParserTests
         frame[1] = 127;
         BinaryPrimitives.WriteUInt64BigEndian(frame.AsSpan(2, 8), (ulong)payload.Length);
         payload.CopyTo(frame, 10);
+        return frame;
+    }
+
+    private static byte[] UnmaskedBinaryFrame(int length)
+    {
+        var frame = new byte[10 + length];
+        frame[0] = 0x82;
+        frame[1] = 127;
+        BinaryPrimitives.WriteUInt64BigEndian(frame.AsSpan(2, 8), (ulong)length);
+        return frame;
+    }
+
+    private static byte[] Frame(int opcode, bool final, byte[] payload, bool masked = false)
+    {
+        Assert.True(payload.Length < 126);
+        var key = new byte[] { 0x12, 0x34, 0x56, 0x78 };
+        var frame = new byte[2 + (masked ? 4 : 0) + payload.Length];
+        frame[0] = (byte)((final ? 0x80 : 0) | opcode);
+        frame[1] = (byte)((masked ? 0x80 : 0) | payload.Length);
+        var offset = 2;
+        if (masked)
+        {
+            key.CopyTo(frame, offset);
+            offset += key.Length;
+        }
+        for (var index = 0; index < payload.Length; index++)
+        {
+            frame[offset + index] = masked ? (byte)(payload[index] ^ key[index % key.Length]) : payload[index];
+        }
         return frame;
     }
 

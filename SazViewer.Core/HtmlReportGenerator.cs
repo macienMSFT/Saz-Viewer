@@ -22,6 +22,10 @@ public sealed class HtmlReportGenerator
     private const int CopyPayloadMaxDecodedBytes = 32 * 1024 * 1024;
     private const int ProtocolPayloadMaxDecodedBytes = 32 * 1024 * 1024;
     private const int TreePayloadMaxDecodedBytes = 8 * 1024 * 1024;
+    private const int WebSocketPayloadMaxDecodedBytes = 32 * 1024 * 1024;
+    private const int MaxWebSocketMessagesPerSession = 5000;
+    private const int MaxWebSocketRawPayloadBytes = 160 * 1024;
+    private const int WebSocketPayloadContentBudgetBytes = 28 * 1024 * 1024;
 
     private sealed record CopySource(
         string AccessibleName,
@@ -120,12 +124,19 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .tree-group{margin-left:16px;padding-left:8px;border-left:1px dotted var(--line)}.tree-group[hidden]{display:none}
 .tree-label-object,.tree-label-array,.tree-label-element{color:var(--accent)}.tree-label-string,.tree-label-text,.tree-label-cdata{color:#a5d6ff}.tree-label-number,.tree-label-boolean{color:#ffa657}.tree-label-null{color:#ff7b72}.tree-label-attribute{color:#d2a8ff}.tree-label-comment{color:#8b949e;font-style:italic}
 .tree-truncated{color:var(--warn);font-size:11px}.tree-status{color:var(--muted);font-style:italic;padding:2px 4px}
-@media(max-width:900px){main{padding:2px}}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.websocket-inspector{flex:1;min-height:0;display:flex;flex-direction:column;padding:10px 14px}.ws-layout{flex:1;min-height:0;display:grid;grid-template-columns:minmax(300px,38%) minmax(0,1fr);gap:10px}
+.ws-traffic-pane,.ws-detail-pane{min-height:0;display:flex;flex-direction:column;border:1px solid var(--line);background:var(--panel)}.ws-pane-heading{font-size:14px;padding:8px 10px;margin:0;border-bottom:1px solid var(--line)}
+.ws-message-list{overflow:auto;min-height:0;padding:4px;display:flex;flex-direction:column;gap:3px}.ws-message-row{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;text-align:left;border-radius:4px;padding:7px 8px;background:var(--bg)}
+.ws-message-row:hover{background:#1f2630}.ws-message-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.ws-message-row[aria-selected=true]{background:var(--selected);box-shadow:inset 4px 0 var(--accent)}
+.ws-direction{font-weight:700;white-space:nowrap}.ws-client .ws-direction{color:#58a6ff}.ws-server .ws-direction{color:#3fb950}.ws-unknown .ws-direction{color:var(--warn)}.ws-arrow{font-size:18px;line-height:1}
+.ws-message-meta{color:var(--muted);font-size:12px}.ws-message-preview{grid-column:1/-1;white-space:pre-wrap;overflow-wrap:anywhere;max-height:4.2em;overflow:hidden}.ws-detail-content{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 10px 10px}.ws-detail-content>.tab-panels{overflow:auto}.ws-detail-summary{padding:7px 0;color:var(--muted)}.ws-loading{padding:20px;color:var(--muted)}
+@media(max-width:900px){main{padding:2px}.ws-layout{grid-template-columns:1fr;grid-template-rows:minmax(180px,38%) minmax(0,1fr)}}
 </style>
 </head>
 <body><main>
 """);
-        AppendHttpSection(html, report.Sessions);
+        AppendHttpSection(html, report.Sessions, report.WebSocketMessages);
         html.Append("""
 </main>
 <dialog id="httpInspector" aria-labelledby="inspectorTitle" aria-modal="true">
@@ -161,7 +172,8 @@ const PAYLOAD_LIMITS={
   'copy-model':{encoded:48*1024*1024,decoded:32*1024*1024},
   'mapi-protocol':{encoded:48*1024*1024,decoded:32*1024*1024},
   'json-tree':{encoded:12*1024*1024,decoded:8*1024*1024},
-  'xml-tree':{encoded:12*1024*1024,decoded:8*1024*1024}
+  'xml-tree':{encoded:12*1024*1024,decoded:8*1024*1024},
+  'websocket-session':{encoded:48*1024*1024,decoded:32*1024*1024}
 };
 async function decodeCompressedPayload(host,expectedType){
   if(host._payloadData!==undefined){
@@ -527,8 +539,141 @@ async function renderValueTree(host,generation){
     host._treeLoading=false;
   }
 }
+function wsElement(tag,className,text){
+  const element=document.createElement(tag);
+  if(className)element.className=className;
+  if(text!==undefined&&text!==null)element.textContent=String(text);
+  return element;
+}
+function wsCopyToolbar(accessibleName,description,text){
+  const toolbar=wsElement('div','copy-toolbar');
+  const button=wsElement('button','copy-button','Copy');
+  button.type='button';button.dataset.copyKey='websocket';button.dataset.copyDescription=description;
+  button.setAttribute('aria-label',accessibleName);button._copyText=text;
+  const status=wsElement('span','copy-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+  toolbar.append(button,status);return toolbar;
+}
+function wsTab(key,label,enabled,selected,suffix){
+  const button=wsElement('button','',label);button.type='button';button.id=`ws-${key}-tab-${suffix}`;
+  button.setAttribute('role','tab');button.dataset.tab=key;button.setAttribute('aria-controls',`ws-${key}-panel-${suffix}`);
+  button.setAttribute('aria-selected',String(selected&&enabled));button.tabIndex=selected&&enabled?0:-1;
+  button.disabled=!enabled;if(!enabled)button.setAttribute('aria-disabled','true');
+  return button;
+}
+function wsPanel(key,suffix){
+  const panel=wsElement('div','tab-panel');panel.id=`ws-${key}-panel-${suffix}`;
+  panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',`ws-${key}-tab-${suffix}`);panel.tabIndex=0;
+  return panel;
+}
+function renderWebSocketMessageDetail(container,message,generation){
+  container.replaceChildren();
+  const heading=wsElement('h3','ws-pane-heading',`Selected ${message.type} message`);
+  const content=wsElement('div','ws-detail-content');
+  const summary=wsElement('div','ws-detail-summary',
+    `${message.timestamp} \u2022 ${message.direction==='Client'?'Client to server':message.direction==='Server'?'Server to client':'Unknown direction'} \u2022 ${message.payloadLength} bytes \u2022 ${message.frameCount} frame${message.frameCount===1?'':'s'}`);
+  content.append(summary);
+  if(message.warning)content.append(wsElement('div','warning',message.warning));
+  const suffix=String(message.messageIndex);
+  const hasJson=typeof message.jsonPretty==='string'&&typeof message.jsonTree==='string';
+  const hasText=typeof message.text==='string';
+  const tablist=wsElement('div','tab-strip');tablist.setAttribute('role','tablist');
+  tablist.setAttribute('aria-label','WebSocket message views');tablist.dataset.side=`websocket-${suffix}`;tablist.dataset.priority='json,text,raw';
+  tablist.append(
+    wsTab('json','JSON',hasJson,hasJson,suffix),
+    wsTab('text','Text',hasText,!hasJson&&hasText,suffix),
+    wsTab('raw','Raw',true,!hasJson&&!hasText,suffix));
+  const panels=wsElement('div','tab-panels');
+  const jsonPanel=wsPanel('json',suffix);
+  if(hasJson){
+    jsonPanel.append(wsCopyToolbar('Copy WebSocket JSON pretty text','WebSocket JSON pretty text',message.jsonPretty));
+    const structured=wsElement('div','structured-body');
+    const toolbar=wsElement('div','tree-toolbar');
+    const toggle=wsElement('div','view-toggle');toggle.setAttribute('role','group');toggle.setAttribute('aria-label','JSON view');
+    const treeButton=wsElement('button','','Tree');treeButton.type='button';treeButton.dataset.view='tree';treeButton.setAttribute('aria-pressed','true');
+    const prettyButton=wsElement('button','','Pretty Text');prettyButton.type='button';prettyButton.dataset.view='pretty';prettyButton.setAttribute('aria-pressed','false');
+    toggle.append(treeButton,prettyButton);
+    const expand=wsElement('button','tree-expand-all','Expand all');expand.type='button';
+    const collapse=wsElement('button','tree-collapse-all','Collapse all');collapse.type='button';
+    toolbar.append(toggle,expand,collapse);
+    const tree=wsElement('div','tree-subview');tree._payloadType='json-tree';
+    try{tree._payloadData=JSON.parse(message.jsonTree)}
+    catch{tree.textContent='JSON tree data is invalid.';tree.classList.add('warning');tree._treeRendered=true}
+    const pretty=wsElement('pre','pretty-subview formatted-view hidden',message.jsonPretty);pretty.dataset.format='json';
+    structured.append(toolbar,tree,pretty);jsonPanel.append(structured);
+  }else jsonPanel.append(wsElement('div','tab-empty','JSON is unavailable for this message.'));
+  const textPanel=wsPanel('text',suffix);
+  if(hasText){
+    textPanel.append(wsCopyToolbar('Copy WebSocket text message','WebSocket text message',message.text));
+    textPanel.append(wsElement('pre','ws-text-view',message.text));
+  }else textPanel.append(wsElement('div','tab-empty','Decoded UTF-8 text is unavailable for this message.'));
+  const rawPanel=wsPanel('raw',suffix);
+  rawPanel.append(wsCopyToolbar('Copy WebSocket raw representation','WebSocket raw representation',message.raw));
+  rawPanel.append(wsElement('pre','ws-raw-view',message.raw));
+  panels.append(jsonPanel,textPanel,rawPanel);content.append(tablist,panels);container.append(heading,content);
+  setupTabs(content);setupTreeToggles(content);setupCopyControls(content);highlightSelected(content);
+  hydrateViewPayloads(content,generation);
+}
+async function renderWebSocketInspector(host,generation){
+  if(host._wsRendered||host._wsLoading)return;
+  host._wsLoading=true;
+  try{
+    if(host.dataset.payloadError)throw new Error(host.dataset.payloadError);
+    const data=await decodeCompressedPayload(host,'websocket-session');
+    if(generation!==renderGeneration||host.closest('.hidden'))return;
+    if(!data||!Array.isArray(data.messages)||data.messages.length>5000)throw new Error('WebSocket message data has an invalid format');
+    const messages=data.messages;
+    if(messages.some(message=>!message||typeof message!=='object'||typeof message.direction!=='string'||typeof message.type!=='string'||typeof message.raw!=='string'||!Array.isArray(message.frames))){
+      throw new Error('WebSocket message data has an invalid format');
+    }
+    const layout=wsElement('div','ws-layout');
+    const traffic=wsElement('section','ws-traffic-pane');traffic.setAttribute('aria-label','Chronological WebSocket traffic');
+    traffic.append(wsElement('h3','ws-pane-heading','WebSocket traffic'));
+    if(data.omittedMessages>0)traffic.append(wsElement('div','warning',`${data.omittedMessages} additional message(s) were omitted by the report safety limit.`));
+    const list=wsElement('div','ws-message-list');list.setAttribute('role','listbox');list.setAttribute('aria-label','WebSocket logical messages');
+    const detail=wsElement('section','ws-detail-pane');detail.setAttribute('aria-label','Selected WebSocket message');
+    traffic.append(list);layout.append(traffic,detail);host.replaceChildren(layout);
+    const rows=[];
+    function select(index,focus){
+      if(index<0||index>=messages.length)return;
+      rows.forEach((row,rowIndex)=>{const selected=rowIndex===index;row.setAttribute('aria-selected',String(selected));row.tabIndex=selected?0:-1});
+      renderWebSocketMessageDetail(detail,messages[index],generation);
+      if(focus)rows[index].focus();
+    }
+    messages.forEach((message,index)=>{
+      const direction=message.direction==='Client'?'Client to server':message.direction==='Server'?'Server to client':'Unknown direction';
+      const row=wsElement('button',`ws-message-row ws-${message.direction.toLowerCase()}`);row.type='button';row.setAttribute('role','option');
+      row.setAttribute('aria-label',`${direction}, ${message.type}, ${message.payloadLength} bytes, ${message.frameCount} frames, ${message.timestamp}`);
+      row.title=direction;row.tabIndex=index===0?0:-1;
+      const directionCell=wsElement('span','ws-direction');
+      directionCell.append(wsElement('span','ws-arrow',message.direction==='Client'?'\u2191':message.direction==='Server'?'\u2193':'\u2194'));
+      directionCell.append(document.createTextNode(` ${direction}`));
+      const meta=wsElement('span','ws-message-meta',`${message.timestamp} \u2022 ${message.type} \u2022 ${message.payloadLength} B \u2022 ${message.frameCount} frame${message.frameCount===1?'':'s'}${message.isFragmented?' \u2022 fragmented':''}${message.isComplete?'':' \u2022 incomplete'}`);
+      const preview=wsElement('span','ws-message-preview',message.preview);
+      row.append(directionCell,meta,preview);
+      row.addEventListener('click',()=>select(index,false));
+      row.addEventListener('keydown',event=>{
+        let target=index;
+        if(event.key==='ArrowDown')target=Math.min(rows.length-1,index+1);
+        else if(event.key==='ArrowUp')target=Math.max(0,index-1);
+        else if(event.key==='Home')target=0;
+        else if(event.key==='End')target=rows.length-1;
+        else if(event.key==='Enter'||event.key===' '){event.preventDefault();select(index,false);return}
+        else return;
+        event.preventDefault();select(target,true);
+      });
+      rows.push(row);list.append(row);
+    });
+    if(messages.length)select(0,false);
+    else detail.append(wsElement('div','warning','No WebSocket logical messages are available for this session.'));
+    host._wsRendered=true;
+  }catch(error){
+    host.textContent=payloadFailureText(error,'WebSocket traffic',' Regenerate the report with the current SAZ Viewer.');
+    host.className='websocket-inspector warning';host._wsRendered=true;
+  }finally{host._wsLoading=false}
+}
 function hydrateViewPayloads(root,generation){
   if(root.classList?.contains('hidden')||root.closest?.('.primary-panel.hidden'))return;
+  root.querySelectorAll('.websocket-inspector').forEach(host=>renderWebSocketInspector(host,generation));
   root.querySelectorAll('.protocol-block').forEach(host=>{
     if((host.dataset.compressedPayload||host._payloadData!==undefined)&&!host.closest('.tab-panel.hidden'))renderProtocolTree(host,generation);
   });
@@ -585,6 +730,11 @@ function protocolCopyText(data){
   return exceeded?{error:'MAPI copy exceeds the 1 MiB safety limit.'}:{text};
 }
 function copySource(button){
+  if(typeof button._copyText==='string'){
+    return button._copyText.length>MAX_COPY_CHARACTERS
+      ?{error:'Copy source exceeds the 1 MiB safety limit.'}
+      :{text:button._copyText};
+  }
   if(button.dataset.copyError)return{error:button.dataset.copyError};
   if(button.dataset.copyKind==='mapi'){
     const host=button.closest('[role="tabpanel"]').querySelector('.protocol-block');
@@ -699,7 +849,7 @@ function bindFilter(inputId,selectId,tableId){
   function apply(){
     const query=input.value.toLowerCase(),filter=select.value;
     rows.forEach(row=>{
-      const filterMatch=!filter||(filter==='mapi'?row.dataset.mapi==='true':row.dataset.filter===filter);
+      const filterMatch=!filter||(filter==='mapi'?row.dataset.mapi==='true':filter==='websocket'?row.dataset.websocket==='true':row.dataset.filter===filter);
       const visible=(!query||row.dataset.search.includes(query))&&filterMatch;
       row.classList.toggle('hidden',!visible);
     });
@@ -713,7 +863,7 @@ const applyHttpFilter=bindFilter('httpSearch','httpFilter','httpTable');
 const INSPECTOR_HASH_PREFIX='#saz-inspector?';
 const MAX_INSPECTOR_HASH_LENGTH=4096;
 const MAX_INSPECTOR_QUERY_LENGTH=512;
-const ALLOWED_INSPECTOR_FILTERS=new Set(['','mapi','0','2','3','4','5']);
+const ALLOWED_INSPECTOR_FILTERS=new Set(['','websocket','mapi','0','2','3','4','5']);
 function serializeInspectorState(row){
   if(httpSearch.value.length>MAX_INSPECTOR_QUERY_LENGTH)return null;
   const params=new URLSearchParams();
@@ -882,6 +1032,8 @@ function updateNavState(){
 function focusStableInspectorControl(){
   const primaryRequestTab=inspectorBody.querySelector('.primary-tab-strip [role="tab"][aria-selected="true"]');
   if(primaryRequestTab&&!primaryRequestTab.disabled){primaryRequestTab.focus();return}
+  const websocketMessage=inspectorBody.querySelector('.ws-message-row[aria-selected="true"]');
+  if(websocketMessage){websocketMessage.focus();return}
   inspectorClose.focus();
 }
 function loadRow(row){
@@ -901,6 +1053,7 @@ function loadRow(row){
   setupTabs(inspectorBody);
   setupTreeToggles(inspectorBody);
   setupCopyControls(inspectorBody);
+  hydrateViewPayloads(inspectorBody,generation);
   updateNavState();
   // Request is always the default-selected primary tab after (re)loading a row (see
   // initialTabFor's "request,response" priority and the preferredTab reset above), so it is a
@@ -909,7 +1062,8 @@ function loadRow(row){
   // Alt+Arrow inspector-navigation shortcut).
   if(focusWasInBody){
     const primaryRequestTab=inspectorBody.querySelector('.primary-tab-strip [role="tab"][aria-selected="true"]');
-    primaryRequestTab?.focus();
+    if(primaryRequestTab)primaryRequestTab.focus();
+    else inspectorClose.focus();
   }
   return true;
 }
@@ -1029,28 +1183,40 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         return html.ToString();
     }
 
-    private void AppendHttpSection(StringBuilder html, IReadOnlyList<HttpSession> sessions)
+    private void AppendHttpSection(
+        StringBuilder html,
+        IReadOnlyList<HttpSession> sessions,
+        IReadOnlyList<WebSocketMessage> webSocketMessages)
     {
+        var webSocketsBySession = webSocketMessages
+            .GroupBy(message => message.SessionId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<WebSocketMessage>)group.ToArray(), StringComparer.Ordinal);
         html.Append("""
 <section class="http-workspace" aria-label="HTTP sessions">
 <div class="controls"><input id="httpSearch" type="search" aria-label="Search HTTP sessions" placeholder="Search method, URL, status, content type, endpoints...">
-<select id="httpFilter" aria-label="Filter HTTP status or protocol"><option value="">All sessions</option><option value="mapi">MAPI/NSPI only</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option></select></div>
+<select id="httpFilter" aria-label="Filter HTTP status or protocol"><option value="">All sessions</option><option value="websocket">WebSocket only</option><option value="mapi">MAPI/NSPI only</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option></select></div>
 <div id="reportStatus" class="warning hidden" role="status" aria-live="polite"></div>
 <div class="http-table-scroll"><table id="httpTable"><thead><tr><th class="http-time">Time</th><th class="http-id">ID</th><th class="http-method">Method</th><th class="http-protocol">Protocol</th><th class="http-url">URL</th><th class="http-status">Status</th><th class="http-bytes num">Req</th><th class="http-bytes num">Resp</th></tr></thead><tbody>
 """);
         for (var index = 0; index < sessions.Count; index++)
         {
-            AppendHttpRow(html, sessions[index], index);
+            webSocketsBySession.TryGetValue(sessions[index].Id, out var sessionWebSockets);
+            AppendHttpRow(html, sessions[index], index, sessionWebSockets ?? []);
         }
         html.Append("</tbody></table></div>\n<div class=\"session-templates\" hidden>\n");
         for (var index = 0; index < sessions.Count; index++)
         {
-            AppendSessionTemplate(html, sessions[index], index);
+            webSocketsBySession.TryGetValue(sessions[index].Id, out var sessionWebSockets);
+            AppendSessionTemplate(html, sessions[index], index, sessionWebSockets ?? []);
         }
         html.Append("</div></section>");
     }
 
-    private static void AppendHttpRow(StringBuilder html, HttpSession session, int index)
+    private static void AppendHttpRow(
+        StringBuilder html,
+        HttpSession session,
+        int index,
+        IReadOnlyList<WebSocketMessage> webSocketMessages)
     {
         var filter = session.StatusCode is >= 200 and <= 599
             ? (session.StatusCode.Value / 100).ToString(CultureInfo.InvariantCulture)
@@ -1059,13 +1225,17 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         {
             session.Id, session.Method, session.Url, session.StatusCode?.ToString(CultureInfo.InvariantCulture),
             session.StatusText, session.ContentType, session.ClientEndpoint, session.ServerEndpoint,
-            session.Mapi?.RequestType, session.Mapi?.Endpoint.ToString()
+            session.Mapi?.RequestType, session.Mapi?.Endpoint.ToString(),
+            webSocketMessages.Count > 0 ? "websocket" : null,
+            string.Join(' ', webSocketMessages.Take(100).Select(message =>
+                $"{message.Direction} {message.Type} {message.Preview} {message.Warning}"))
         }.Where(value => !string.IsNullOrWhiteSpace(value))).ToLowerInvariant();
         var summary = $"Session {session.Id}: {session.Method ?? "-"} {session.Url ?? "-"}";
         html.Append("<tr tabindex=\"0\" aria-selected=\"false\" aria-label=\"Inspect HTTP session ");
         Attribute(html, session.Id);
         html.Append("\" data-detail=\"http-detail-").Append(index).Append("\" data-filter=\"")
             .Append(filter).Append("\" data-mapi=\"").Append(session.Mapi is not null ? "true" : "false")
+            .Append("\" data-websocket=\"").Append(webSocketMessages.Count > 0 ? "true" : "false")
             .Append("\" data-summary=\"");
         Attribute(html, summary);
         html.Append("\" data-search=\"");
@@ -1101,9 +1271,19 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             .Append("</td></tr>");
     }
 
-    private void AppendSessionTemplate(StringBuilder html, HttpSession session, int index)
+    private void AppendSessionTemplate(
+        StringBuilder html,
+        HttpSession session,
+        int index,
+        IReadOnlyList<WebSocketMessage> webSocketMessages)
     {
         html.Append("<template id=\"http-detail-").Append(index).Append("\">");
+        if (webSocketMessages.Count > 0)
+        {
+            AppendWebSocketInspector(html, webSocketMessages);
+            html.Append("</template>");
+            return;
+        }
         AppendSessionDetails(html, session);
         html.Append("<div class=\"primary-tab-strip tab-strip\" role=\"tablist\" aria-label=\"Request or response\" data-side=\"primary\" data-priority=\"request,response\">");
         AppendTabButton(html, "primary", "request", "Request", true, true);
@@ -1116,6 +1296,250 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         AppendMessagePanel(html, "Response", "response", session.Response, session.Mapi?.Response);
         html.Append("</div></div></template>");
     }
+
+    private void AppendWebSocketInspector(
+        StringBuilder html,
+        IReadOnlyList<WebSocketMessage> messages)
+    {
+        var bounded = new List<WebSocketPayloadMessage>();
+        var estimatedBytes = 0;
+        foreach (var message in messages.OrderBy(message => message.RecordIndex).Take(MaxWebSocketMessagesPerSession))
+        {
+            var candidate = BuildWebSocketPayloadMessage(message);
+            var candidateBytes = EstimateWebSocketPayloadBytes(candidate);
+            if (estimatedBytes + candidateBytes > WebSocketPayloadContentBudgetBytes)
+            {
+                break;
+            }
+            bounded.Add(candidate);
+            estimatedBytes += candidateBytes;
+        }
+        var payloadBytes = SerializeWebSocketPayload(bounded, messages.Count);
+        while (payloadBytes.Length > WebSocketPayloadMaxDecodedBytes && bounded.Count > 0)
+        {
+            var keep = bounded.Count / 2;
+            bounded.RemoveRange(keep, bounded.Count - keep);
+            payloadBytes = SerializeWebSocketPayload(bounded, messages.Count);
+        }
+        var payload = CreateCompressedPayload(
+            "websocket-session",
+            payloadBytes,
+            WebSocketPayloadMaxDecodedBytes);
+
+        html.Append("<div class=\"websocket-inspector\"");
+        if (payload is not null)
+        {
+            AppendCompressedPayloadAttributes(html, payload);
+            html.Append("><div class=\"ws-loading\" role=\"status\">Loading WebSocket traffic...</div>");
+        }
+        else
+        {
+            html.Append(" data-payload-error=\"WebSocket traffic exceeds the 32 MiB report safety limit.\">")
+                .Append("<div class=\"warning\">WebSocket traffic is too large to include safely in this report.</div>");
+        }
+        html.Append("</div>");
+    }
+
+    private static byte[] SerializeWebSocketPayload(
+        IReadOnlyList<WebSocketPayloadMessage> messages,
+        int totalMessageCount) =>
+        JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            messages,
+            omittedMessages = Math.Max(0, totalMessageCount - messages.Count)
+        }, TreePayloadOptions);
+
+    private static int EstimateWebSocketPayloadBytes(WebSocketPayloadMessage message)
+    {
+        var total = 1024L + (message.Frames.Count * 320L);
+        foreach (var value in new[]
+        {
+            message.Timestamp, message.Direction, message.Type, message.Preview, message.Warning,
+            message.Text, message.JsonPretty, message.JsonTree, message.Raw
+        })
+        {
+            if (value is not null) total += Encoding.UTF8.GetByteCount(value);
+        }
+        return (int)Math.Min(int.MaxValue, total);
+    }
+
+    private WebSocketPayloadMessage BuildWebSocketPayloadMessage(WebSocketMessage message)
+    {
+        BodyPresentation? json = null;
+        if (message.Text is not null)
+        {
+            var body = new BodyPreview
+            {
+                Length = message.PayloadLength,
+                CapturedLength = message.Payload.Length,
+                Preview = message.Text,
+                IsTruncated = message.IsPayloadTruncated
+            };
+            var formatted = bodyFormatter.Format(body, null);
+            if (formatted.Format == BodyFormat.Json
+                && !formatted.IsTruncated
+                && BuildJsonTreePayload(formatted.Formatted) is { } tree)
+            {
+                json = formatted with { Raw = tree };
+            }
+        }
+
+        return new WebSocketPayloadMessage(
+            message.MessageIndex,
+            message.RecordIndex,
+            FormatWebSocketTimestamp(message.Timestamp),
+            message.Direction,
+            message.Type,
+            message.PayloadLength,
+            message.Frames.Count,
+            message.IsComplete,
+            message.IsFragmented,
+            message.IsPayloadTruncated,
+            message.Preview,
+            message.Warning,
+            message.Text,
+            json?.Formatted,
+            json?.Raw,
+            BuildWebSocketRaw(message),
+            message.Frames.Select(frame => new WebSocketPayloadFrame(
+                frame.RecordIndex,
+                frame.FiddlerId,
+                frame.BitFlags,
+                FormatWebSocketTimestamp(frame.Timestamp),
+                frame.Direction,
+                frame.Opcode,
+                frame.Type,
+                frame.Final,
+                frame.Masked,
+                frame.PayloadLength,
+                frame.CapturedPayloadLength,
+                frame.IsDecoded,
+                frame.IsPayloadTruncated,
+                frame.Warning)).ToArray());
+    }
+
+    private static string BuildWebSocketRaw(WebSocketMessage message)
+    {
+        var text = new StringBuilder();
+        text.Append("Direction: ").Append(WebSocketDirectionLabel(message.Direction)).Append('\n')
+            .Append("Type: ").Append(message.Type).Append('\n')
+            .Append("Timestamp: ").Append(FormatWebSocketTimestamp(message.Timestamp)).Append('\n')
+            .Append("Logical payload length: ").Append(message.PayloadLength.ToString("N0", CultureInfo.InvariantCulture)).Append(" bytes\n")
+            .Append("Frames: ").Append(message.Frames.Count.ToString(CultureInfo.InvariantCulture)).Append('\n')
+            .Append("Fragmented: ").Append(message.IsFragmented ? "yes" : "no").Append('\n')
+            .Append("Complete: ").Append(message.IsComplete ? "yes" : "no").Append('\n');
+        if (!string.IsNullOrWhiteSpace(message.Warning))
+        {
+            text.Append("Warnings: ").Append(message.Warning).Append('\n');
+        }
+
+        text.Append("\nFrame metadata:\n");
+        foreach (var frame in message.Frames)
+        {
+            text.Append("  Frame ").Append(frame.RecordIndex.ToString(CultureInfo.InvariantCulture))
+                .Append(" ID=").Append(frame.FiddlerId?.ToString(CultureInfo.InvariantCulture) ?? "?")
+                .Append(" BitFlags=").Append(frame.BitFlags?.ToString(CultureInfo.InvariantCulture) ?? "?")
+                .Append(": ").Append(frame.Type)
+                .Append(" opcode=0x").Append(frame.Opcode < 0 ? "?" : frame.Opcode.ToString("X", CultureInfo.InvariantCulture))
+                .Append(" FIN=").Append(frame.Final ? '1' : '0')
+                .Append(" masked=").Append(frame.Masked ? "yes" : "no")
+                .Append(" payload=").Append(frame.PayloadLength.ToString("N0", CultureInfo.InvariantCulture))
+                .Append(" captured=").Append(frame.CapturedPayloadLength.ToString("N0", CultureInfo.InvariantCulture))
+                .Append(" direction=").Append(WebSocketDirectionLabel(frame.Direction))
+                .Append(" timestamp=").Append(FormatWebSocketTimestamp(frame.Timestamp));
+            if (!string.IsNullOrWhiteSpace(frame.Warning))
+            {
+                text.Append(" warning=").Append(frame.Warning);
+            }
+            text.Append('\n');
+        }
+
+        text.Append("\nPayload:\n");
+        if (message.Type == "Text" && message.Text is not null)
+        {
+            AppendBoundedWebSocketText(text, message.Text);
+        }
+        else
+        {
+            var bytes = message.Payload.Span;
+            var shown = Math.Min(bytes.Length, MaxWebSocketRawPayloadBytes);
+            text.Append(HttpMessageParser.HexPreview(bytes[..shown]));
+            if (shown < bytes.Length)
+            {
+                text.Append("[Payload hex truncated after ")
+                    .Append(shown.ToString("N0", CultureInfo.InvariantCulture))
+                    .Append(" of ").Append(bytes.Length.ToString("N0", CultureInfo.InvariantCulture))
+                    .Append(" retained bytes]\n");
+            }
+        }
+        if (message.IsPayloadTruncated)
+        {
+            text.Append("[Captured logical payload was truncated by report safety limits]\n");
+        }
+        return text.Length <= MaxCopyCharacters
+            ? text.ToString()
+            : string.Concat(
+                text.ToString(0, MaxCopyCharacters - 80),
+                "\n[Raw WebSocket representation truncated at the 1 MiB copy safety limit]\n");
+    }
+
+    private static void AppendBoundedWebSocketText(StringBuilder output, string value)
+    {
+        var remaining = Math.Max(0, MaxCopyCharacters - output.Length - 96);
+        if (value.Length <= remaining)
+        {
+            output.Append(value);
+            if (!value.EndsWith('\n')) output.Append('\n');
+            return;
+        }
+        output.Append(value.AsSpan(0, remaining))
+            .Append("\n[Text payload truncated in Raw view at the 1 MiB copy safety limit]\n");
+    }
+
+    private static string FormatWebSocketTimestamp(DateTimeOffset? timestamp) =>
+        timestamp?.ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture) ?? "Unknown";
+
+    private static string WebSocketDirectionLabel(string direction) => direction switch
+    {
+        "Client" => "Client to server",
+        "Server" => "Server to client",
+        _ => "Unknown direction"
+    };
+
+    private sealed record WebSocketPayloadMessage(
+        int MessageIndex,
+        int RecordIndex,
+        string Timestamp,
+        string Direction,
+        string Type,
+        long PayloadLength,
+        int FrameCount,
+        bool IsComplete,
+        bool IsFragmented,
+        bool IsPayloadTruncated,
+        string Preview,
+        string? Warning,
+        string? Text,
+        string? JsonPretty,
+        string? JsonTree,
+        string Raw,
+        IReadOnlyList<WebSocketPayloadFrame> Frames);
+
+    private sealed record WebSocketPayloadFrame(
+        int RecordIndex,
+        int? FiddlerId,
+        int? BitFlags,
+        string Timestamp,
+        string Direction,
+        int Opcode,
+        string Type,
+        bool Final,
+        bool Masked,
+        long PayloadLength,
+        long CapturedPayloadLength,
+        bool IsDecoded,
+        bool IsPayloadTruncated,
+        string? Warning);
 
     private static void AppendSessionDetails(StringBuilder html, HttpSession session)
     {

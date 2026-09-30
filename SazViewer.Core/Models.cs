@@ -65,6 +65,7 @@ public sealed class BodyPreview
 public sealed class WebSocketMessage
 {
     public required string SessionId { get; init; }
+    public int MessageIndex { get; init; }
     public int RecordIndex { get; init; }
     public DateTimeOffset? Timestamp { get; init; }
     public required string Direction { get; init; }
@@ -73,6 +74,31 @@ public sealed class WebSocketMessage
     public required string Preview { get; init; }
     public bool IsBinary { get; init; }
     public bool IsDecoded { get; init; }
+    public bool IsComplete { get; init; }
+    public bool IsFragmented { get; init; }
+    public bool IsPayloadTruncated { get; init; }
+    public string? Text { get; init; }
     public string? Warning { get; init; }
+    public List<WebSocketFrame> Frames { get; } = [];
+    public ReadOnlyMemory<byte> Payload { get; init; }
     internal long SourceOrder { get; init; }
+}
+
+public sealed class WebSocketFrame
+{
+    public int RecordIndex { get; init; }
+    public int? FiddlerId { get; init; }
+    public int? BitFlags { get; init; }
+    public DateTimeOffset? Timestamp { get; init; }
+    public required string Direction { get; init; }
+    public int Opcode { get; init; }
+    public required string Type { get; init; }
+    public bool Final { get; init; }
+    public bool Masked { get; init; }
+    public long PayloadLength { get; init; }
+    public long CapturedPayloadLength { get; init; }
+    public bool IsDecoded { get; init; }
+    public bool IsPayloadTruncated { get; init; }
+    public string? Warning { get; init; }
+    public ReadOnlyMemory<byte> Payload { get; init; }
 }

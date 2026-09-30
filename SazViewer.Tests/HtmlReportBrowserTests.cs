@@ -11,6 +11,7 @@ public sealed class HtmlReportBrowserTests
     private const string InjectionText = "<img src=x onerror=globalThis.pwned=true>";
     private const string RequestBody = """{"payload":{"enabled":true},"items":[1,2],"attack":"</script><svg onload=globalThis.pwned=true>"}""";
     private const string ResponseBody = "<root><value>safe</value></root>";
+    private const string WebSocketJson = """{"kind":"update","items":[1,2],"safe":true}""";
 
     [WindowsEdgeFact]
     public async Task GeneratedReportInspectorIsVisibleAndInteractiveAtDesktopAndNarrowWidths()
@@ -31,6 +32,8 @@ public sealed class HtmlReportBrowserTests
 
             await VerifyInspectorAsync(browser, reportPath, 1440, exerciseAllControls: true);
             await VerifyInspectorAsync(browser, reportPath, 480, exerciseAllControls: false);
+            await VerifyWebSocketInspectorAsync(browser, reportPath, 1440);
+            await VerifyWebSocketInspectorAsync(browser, reportPath, 480);
             await VerifyNewTabInspectorAsync(browser, reportPath);
             await VerifyBlockedNewTabKeepsInspectorAsync(browser, reportPath);
             await VerifyInvalidInspectorStateAsync(browser, reportPath);
@@ -275,12 +278,143 @@ public sealed class HtmlReportBrowserTests
             Assert.Empty(originalErrors);
             Assert.Empty(popupErrors);
         }
+
         finally
         {
             if (popup is not null)
             {
                 await popup.CloseAsync();
             }
+            await page.CloseAsync();
+        }
+    }
+
+    private static async Task VerifyWebSocketInspectorAsync(IBrowser browser, string reportPath, int width)
+    {
+        var errors = new List<string>();
+        var page = await browser.NewPageAsync(new()
+        {
+            ViewportSize = new ViewportSize { Width = width, Height = 900 },
+        });
+        await InstallClipboardTestHookAsync(page);
+        CaptureErrors(page, errors);
+        IPage? popup = null;
+        try
+        {
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.Locator("#httpFilter").SelectOptionAsync("websocket");
+            Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            await page.Locator("#httpSearch").FillAsync("ping");
+            Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            await page.Locator("#httpSearch").FillAsync("");
+            await page.Locator("#httpFilter").SelectOptionAsync("");
+            var row = page.Locator("#httpTable tbody tr[data-websocket=\"true\"]");
+            Assert.True(await page.EvaluateAsync<bool>(
+                "()=>Boolean(document.getElementById('http-detail-3').content.querySelector('[data-payload-type=\"websocket-session\"]'))"));
+            await row.ClickAsync();
+            await page.Locator(".ws-message-row").First.WaitForAsync();
+            Assert.Null(await page.Locator("#inspectorBody .websocket-inspector")
+                .GetAttributeAsync("data-compressed-payload"));
+
+            var dialog = await page.Locator("#httpInspector").BoundingBoxAsync();
+            var traffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+            var detail = await page.Locator(".ws-detail-pane").BoundingBoxAsync();
+            Assert.NotNull(dialog);
+            Assert.NotNull(traffic);
+            Assert.NotNull(detail);
+            Assert.True(dialog.Width >= width - 1 && dialog.Height >= 899);
+            if (width > 900)
+            {
+                Assert.True(detail.X > traffic.X + traffic.Width - 2);
+            }
+            else
+            {
+                Assert.True(detail.Y > traffic.Y + traffic.Height - 2);
+            }
+
+            var messages = page.Locator(".ws-message-row");
+            Assert.Equal(4, await messages.CountAsync());
+            Assert.Equal("true", await messages.First.GetAttributeAsync("aria-selected"));
+            Assert.Contains("Client to server", await messages.First.InnerTextAsync());
+            Assert.Equal("rgb(88, 166, 255)", await messages.First.Locator(".ws-direction")
+                .EvaluateAsync<string>("element=>getComputedStyle(element).color"));
+            Assert.Equal("rgb(63, 185, 80)", await messages.Nth(1).Locator(".ws-direction")
+                .EvaluateAsync<string>("element=>getComputedStyle(element).color"));
+
+            Assert.Equal("true", await page.Locator("[role=tab][data-tab=json]").GetAttributeAsync("aria-selected"));
+            await page.Locator(".ws-detail-pane .tree-item").First.WaitForAsync();
+            var expectedJson = new BodyFormatter().Format(
+                new BodyPreview
+                {
+                    Length = WebSocketJson.Length,
+                    CapturedLength = WebSocketJson.Length,
+                    Preview = WebSocketJson
+                },
+                null).Formatted;
+            Assert.Equal(expectedJson, await CopyAndReadAsync(page, "ws-json-panel-0"));
+            await page.Locator("[role=tab][data-tab=text]").ClickAsync();
+            Assert.Equal(WebSocketJson, await CopyAndReadAsync(page, "ws-text-panel-0"));
+            await page.Locator("[role=tab][data-tab=json]").ClickAsync();
+            await page.Locator(".ws-detail-pane [data-view=pretty]").ClickAsync();
+            Assert.Contains("\"kind\"", await page.Locator(".ws-detail-pane .pretty-subview").InnerTextAsync());
+            await page.Locator(".ws-detail-pane [data-view=tree]").ClickAsync();
+            await page.Locator(".ws-detail-pane .tree-collapse-all").ClickAsync();
+            Assert.Equal("false", await page.Locator(".ws-detail-pane .tree-item[aria-expanded]").First
+                .GetAttributeAsync("aria-expanded"));
+
+            await messages.Nth(1).ClickAsync();
+            Assert.Contains("Ping", await page.Locator(".ws-detail-pane").InnerTextAsync());
+            Assert.True(await page.Locator("[role=tab][data-tab=json]").IsDisabledAsync());
+            Assert.True(await page.Locator("[role=tab][data-tab=text]").IsDisabledAsync());
+            Assert.Equal("true", await page.Locator("[role=tab][data-tab=raw]").GetAttributeAsync("aria-selected"));
+            Assert.Contains("Frame 1 ID=2", await page.Locator(".ws-raw-view").InnerTextAsync());
+
+            await messages.Nth(2).FocusAsync();
+            await page.Keyboard.PressAsync("ArrowDown");
+            Assert.Equal("true", await messages.Nth(3).GetAttributeAsync("aria-selected"));
+            Assert.Contains("Close", await page.Locator(".ws-detail-pane").InnerTextAsync());
+            await messages.Nth(2).ClickAsync();
+            var binaryRaw = await CopyAndReadAsync(page, "ws-raw-panel-2");
+            Assert.NotNull(binaryRaw);
+            Assert.Contains("00 FF 10 20", binaryRaw.Replace("  ", " ", StringComparison.Ordinal));
+
+            await page.Locator("#inspectorPrev").ClickAsync();
+            Assert.True(await page.Locator(".primary-tab-strip").IsVisibleAsync());
+            Assert.Equal("true", await page.Locator("#primary-tab-request").GetAttributeAsync("aria-selected"));
+            await page.Locator("#primary-tab-request").FocusAsync();
+            await page.Keyboard.PressAsync("Alt+ArrowRight");
+            await page.Locator(".ws-message-row").First.WaitForAsync();
+            Assert.Equal("inspectorClose", await page.EvaluateAsync<string>(
+                "()=>document.activeElement?.id||''"));
+
+            var popupTask = page.WaitForPopupAsync();
+            await page.Locator("#inspectorOpenTab").ClickAsync();
+            popup = await popupTask;
+            CaptureErrors(popup, errors);
+            await popup.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+            await popup.Locator(".ws-message-row").First.WaitForAsync();
+            Assert.False(await page.Locator("#httpInspector").EvaluateAsync<bool>("dialog=>dialog.open"));
+            Assert.True(await popup.Locator("body").EvaluateAsync<bool>("body=>body.classList.contains('inspector-only')"));
+            Assert.Contains("WebSocket traffic", await popup.Locator(".ws-traffic-pane").InnerTextAsync());
+            Assert.Equal("4 of 4", await popup.Locator("#inspectorPosition").InnerTextAsync());
+            await popup.Locator("#inspectorPrev").ClickAsync();
+            Assert.True(await popup.Locator(".primary-tab-strip").IsVisibleAsync());
+            await popup.Locator("#inspectorNext").ClickAsync();
+            await popup.Locator(".ws-message-row").First.WaitForAsync();
+            await popup.Locator("#inspectorClose").ClickAsync();
+            await Assertions.Expect(popup.Locator("main")).ToBeVisibleAsync();
+
+            await page.Locator("#httpTable tbody tr[data-websocket=\"true\"]").FocusAsync();
+            await page.Keyboard.PressAsync("Enter");
+            await page.Locator(".ws-message-row").First.WaitForAsync();
+            await page.Keyboard.PressAsync("Escape");
+            Assert.Equal("http-detail-3", await page.EvaluateAsync<string>(
+                "()=>document.activeElement?.getAttribute('data-detail')||''"));
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            if (popup is not null) await popup.CloseAsync();
             await page.CloseAsync();
         }
     }
@@ -540,6 +674,32 @@ public sealed class HtmlReportBrowserTests
         {
             await mapiPage.CloseAsync();
         }
+
+        var webSocketPage = await browser.NewPageAsync();
+        var webSocketErrors = new List<string>();
+        CaptureErrors(webSocketPage, webSocketErrors);
+        try
+        {
+            await webSocketPage.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await webSocketPage.EvaluateAsync(
+                """
+                () => {
+                  const host=document.getElementById('http-detail-3').content.querySelector('[data-payload-type="websocket-session"]');
+                  host.dataset.compressedPayload='@@@@';
+                }
+                """);
+            await webSocketPage.Locator("#httpTable tbody tr[data-websocket=\"true\"]").ClickAsync();
+            await Assertions.Expect(webSocketPage.Locator(".websocket-inspector"))
+                .ToContainTextAsync("WebSocket traffic could not be loaded because its compressed report payload is corrupt, unsupported, or exceeds safety limits.");
+            Assert.True(await webSocketPage.Locator(".websocket-inspector")
+                .EvaluateAsync<bool>("element=>element.classList.contains('warning')"));
+            await webSocketPage.WaitForTimeoutAsync(50);
+            Assert.Empty(webSocketErrors);
+        }
+        finally
+        {
+            await webSocketPage.CloseAsync();
+        }
     }
 
     private static string GzipBase64(string value)
@@ -774,8 +934,92 @@ public sealed class HtmlReportBrowserTests
             null,
             ImmutableArray<string>.Empty);
         report.Sessions.Add(mapiSession);
+        report.Sessions.Add(
+            new HttpSession
+            {
+                Id = "4",
+                ArchiveOrder = 3,
+                Method = "GET",
+                Url = "wss://example.test/socket",
+                StatusCode = 101
+            });
+
+        var jsonBytes = Encoding.UTF8.GetBytes(WebSocketJson);
+        var json = WebSocketMessage(
+            0, 0, "Client", "Text", jsonBytes, WebSocketJson, complete: true, fragmented: true);
+        json.Frames.Add(WebSocketFrame(0, 1, "Client", 1, "Text", final: false, masked: true, jsonBytes[..12]));
+        json.Frames.Add(WebSocketFrame(2, 3, "Client", 0, "Continuation", final: true, masked: true, jsonBytes[12..]));
+        report.WebSocketMessages.Add(json);
+
+        var pingBytes = Encoding.UTF8.GetBytes("probe");
+        var ping = WebSocketMessage(1, 1, "Server", "Ping", pingBytes, null, complete: true);
+        ping.Frames.Add(WebSocketFrame(1, 2, "Server", 9, "Ping", final: true, masked: false, pingBytes));
+        report.WebSocketMessages.Add(ping);
+
+        var binaryBytes = new byte[] { 0x00, 0xFF, 0x10, 0x20 };
+        var binary = WebSocketMessage(2, 3, "Server", "Binary", binaryBytes, null, complete: true);
+        binary.Frames.Add(WebSocketFrame(3, 4, "Server", 2, "Binary", final: true, masked: false, binaryBytes));
+        report.WebSocketMessages.Add(binary);
+
+        var closeBytes = new byte[] { 0x03, 0xE8 };
+        var close = WebSocketMessage(3, 4, "Server", "Close", closeBytes, null, complete: true);
+        close.Frames.Add(WebSocketFrame(4, 5, "Server", 8, "Close", final: true, masked: false, closeBytes));
+        report.WebSocketMessages.Add(close);
         return report;
     }
+
+    private static WebSocketMessage WebSocketMessage(
+        int messageIndex,
+        int recordIndex,
+        string direction,
+        string type,
+        byte[] payload,
+        string? text,
+        bool complete,
+        bool fragmented = false) =>
+        new()
+        {
+            SessionId = "4",
+            MessageIndex = messageIndex,
+            RecordIndex = recordIndex,
+            Timestamp = DateTimeOffset.Parse("2024-05-01T12:00:00Z").AddSeconds(recordIndex),
+            Direction = direction,
+            Type = type,
+            PayloadLength = payload.Length,
+            Preview = text ?? Convert.ToHexString(payload),
+            IsBinary = type != "Text",
+            IsDecoded = complete,
+            IsComplete = complete,
+            IsFragmented = fragmented,
+            Text = text,
+            Payload = payload
+        };
+
+    private static WebSocketFrame WebSocketFrame(
+        int recordIndex,
+        int fiddlerId,
+        string direction,
+        int opcode,
+        string type,
+        bool final,
+        bool masked,
+        byte[] payload) =>
+        new()
+        {
+            RecordIndex = recordIndex,
+            FiddlerId = fiddlerId,
+            BitFlags = 0,
+            Timestamp = DateTimeOffset.Parse("2024-05-01T12:00:00Z").AddSeconds(recordIndex),
+            Direction = direction,
+            Opcode = opcode,
+            Type = type,
+            Final = final,
+            Masked = masked,
+            PayloadLength = payload.Length,
+            CapturedPayloadLength = payload.Length,
+            IsDecoded = true,
+            Payload = payload
+        };
 
     private static HttpMessage Message(string startLine, string contentType, string body)
     {

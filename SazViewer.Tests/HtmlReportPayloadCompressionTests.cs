@@ -10,6 +10,48 @@ namespace SazViewer.Tests;
 public sealed class HtmlReportPayloadCompressionTests(ITestOutputHelper output)
 {
     [Fact]
+    public void WebSocketEnvelopeKeepsBoundedPrefixWhenJsonEscapingExpandsContent()
+    {
+        var report = new SazReport { SourceName = "websocket-escaping.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "GET",
+            Url = "wss://example.test/socket",
+            StatusCode = 101
+        });
+        var text = new string('\u0001', 900_000);
+        var payload = Encoding.UTF8.GetBytes(text);
+        for (var index = 0; index < 4; index++)
+        {
+            report.WebSocketMessages.Add(new WebSocketMessage
+            {
+                SessionId = "1",
+                MessageIndex = index,
+                RecordIndex = index,
+                Direction = "Server",
+                Type = "Text",
+                PayloadLength = payload.Length,
+                Preview = "control text",
+                Text = text,
+                IsComplete = true,
+                IsDecoded = true,
+                Payload = payload
+            });
+        }
+
+        var html = new HtmlReportGenerator().Generate(report);
+        var envelope = Assert.Single(ExtractEnvelopes(html)
+            .Where(item => item.Type == "websocket-session"));
+        using var decoded = JsonDocument.Parse(envelope.DecodedJson);
+
+        Assert.InRange(envelope.DecodedBytes, 1, 32 * 1024 * 1024);
+        Assert.InRange(decoded.RootElement.GetProperty("messages").GetArrayLength(), 1, 3);
+        Assert.True(decoded.RootElement.GetProperty("omittedMessages").GetInt32() > 0);
+    }
+
+    [Fact]
     public void SharedEnvelopeRoundTripsUnicodeInjectionAndKeepsRepeatedPayloadsCompact()
     {
         const string hostile = "</script><svg onload=globalThis.pwned=true>雪";
@@ -65,6 +107,54 @@ public sealed class HtmlReportPayloadCompressionTests(ITestOutputHelper output)
             ImmutableArray<string>.Empty);
         var report = new SazReport { SourceName = "payload-accounting.saz" };
         report.Sessions.Add(session);
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "2",
+            ArchiveOrder = 1,
+            Method = "GET",
+            Url = "wss://example.test/socket",
+            StatusCode = 101
+        });
+        var webSocketText = JsonSerializer.Serialize(new
+        {
+            kind = "repeat",
+            values = Enumerable.Repeat("alpha-alpha-alpha-alpha", 200),
+            attack = hostile
+        });
+        var webSocketBytes = Encoding.UTF8.GetBytes(webSocketText);
+        for (var index = 0; index < 120; index++)
+        {
+            var webSocket = new WebSocketMessage
+            {
+                SessionId = "2",
+                MessageIndex = index,
+                RecordIndex = index,
+                Direction = index % 2 == 0 ? "Client" : "Server",
+                Type = "Text",
+                PayloadLength = webSocketBytes.Length,
+                Preview = webSocketText[..Math.Min(200, webSocketText.Length)],
+                Text = webSocketText,
+                IsComplete = true,
+                IsDecoded = true,
+                Payload = webSocketBytes
+            };
+            webSocket.Frames.Add(new WebSocketFrame
+            {
+                RecordIndex = index,
+                FiddlerId = index + 1,
+                BitFlags = 0,
+                Direction = webSocket.Direction,
+                Opcode = 1,
+                Type = "Text",
+                Final = true,
+                Masked = webSocket.Direction == "Client",
+                PayloadLength = webSocketBytes.Length,
+                CapturedPayloadLength = webSocketBytes.Length,
+                IsDecoded = true,
+                Payload = webSocketBytes
+            });
+            report.WebSocketMessages.Add(webSocket);
+        }
 
         var html = new HtmlReportGenerator().Generate(report);
         var envelopes = ExtractEnvelopes(html);
@@ -77,6 +167,7 @@ public sealed class HtmlReportPayloadCompressionTests(ITestOutputHelper output)
         Assert.Contains(envelopes, envelope => envelope.Type == "mapi-protocol");
         Assert.Contains(envelopes, envelope => envelope.Type == "json-tree");
         Assert.Contains(envelopes, envelope => envelope.Type == "xml-tree");
+        Assert.Contains(envelopes, envelope => envelope.Type == "websocket-session");
 
         var protocolEnvelope = Assert.Single(envelopes.Where(envelope => envelope.Type == "mapi-protocol"));
         using (var protocolJson = JsonDocument.Parse(protocolEnvelope.DecodedJson))
@@ -116,6 +207,10 @@ public sealed class HtmlReportPayloadCompressionTests(ITestOutputHelper output)
             encodedCharacters < decodedBytes / 2,
             $"Expected repeated structural payloads to compress materially: {encodedCharacters:N0} encoded chars vs {decodedBytes:N0} decoded bytes.");
         Assert.All(structural, envelope => Assert.Equal(envelope.DecodedBytes, Encoding.UTF8.GetByteCount(envelope.DecodedJson)));
+        var webSocketEnvelope = Assert.Single(envelopes.Where(envelope => envelope.Type == "websocket-session"));
+        Assert.True(
+            webSocketEnvelope.EncodedCharacters < webSocketEnvelope.DecodedBytes / 4,
+            $"Expected repeated WebSocket payloads to remain compressed: {webSocketEnvelope.EncodedCharacters:N0} encoded chars vs {webSocketEnvelope.DecodedBytes:N0} decoded bytes.");
 
         output.WriteLine($"Total HTML: {Encoding.UTF8.GetByteCount(html):N0} bytes");
         foreach (var category in envelopes.GroupBy(envelope => envelope.Type).OrderBy(group => group.Key))

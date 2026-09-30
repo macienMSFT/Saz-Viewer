@@ -8,7 +8,10 @@ namespace SazViewer.Core;
 internal static class WebSocketParser
 {
     private const int MaxHeaderBlockBytes = 64 * 1024;
-    private const int MaxFramePrefixBytes = 64 * 1024;
+    private const int MaxFramePrefixBytes = (1024 * 1024) + 14;
+    private const int MaxRecords = 10_000;
+    private const int MaxRetainedEntryPayloadBytes = 16 * 1024 * 1024;
+    private const long MaxEntryBytes = 256L * 1024 * 1024;
 
     public static void Parse(
         ZipArchiveEntry entry,
@@ -19,13 +22,37 @@ internal static class WebSocketParser
     {
         try
         {
+            if (entry.Length > MaxEntryBytes)
+            {
+                var warning = $"WebSocket entry exceeds the {MaxEntryBytes / (1024 * 1024):N0} MiB uncompressed safety limit and was not parsed.";
+                var frame = new WebSocketFrame
+                {
+                    RecordIndex = 0,
+                    Direction = "Unknown",
+                    Opcode = -1,
+                    Type = "Undecoded",
+                    PayloadLength = entry.Length,
+                    IsPayloadTruncated = true,
+                    Warning = warning
+                };
+                messages.AddRange(WebSocketMessageAssembler.Assemble(sessionId, archiveOrder, [frame]));
+                warnings.Add(warning);
+                return;
+            }
+            var frames = new List<WebSocketFrame>();
             using var source = entry.Open();
             var reader = new RecordReader(source);
             var recordIndex = 0;
             var firstBlock = true;
+            var retainedPayloadBytes = 0;
 
             while (true)
             {
+                if (recordIndex >= MaxRecords)
+                {
+                    warnings.Add($"WebSocket parsing stopped after the {MaxRecords:N0}-record safety limit.");
+                    break;
+                }
                 var headerResult = reader.ReadHeaderBlock(MaxHeaderBlockBytes);
                 if (headerResult.EndOfStream)
                 {
@@ -34,11 +61,9 @@ internal static class WebSocketParser
 
                 if (!headerResult.Terminated)
                 {
-                    AddUndecoded(
-                        messages,
-                        sessionId,
+                    AddUndecodedFrame(
+                        frames,
                         recordIndex,
-                        SourceOrder(archiveOrder, recordIndex),
                         entry.Length - reader.BytesRead + headerResult.Bytes.Length,
                         HeaderPreview(headerResult.Bytes),
                         "WebSocket header block is unterminated; the remaining bytes cannot be safely framed.");
@@ -65,11 +90,9 @@ internal static class WebSocketParser
                 {
                     var remaining = Math.Max(0, entry.Length - reader.BytesRead);
                     var warning = "WebSocket record has no Request-Length or Response-Length; the remaining mixed binary stream cannot be safely resynchronized.";
-                    AddUndecoded(
-                        messages,
-                        sessionId,
+                    AddUndecodedFrame(
+                        frames,
                         recordIndex,
-                        SourceOrder(archiveOrder, recordIndex),
                         headerResult.Bytes.Length + remaining,
                         HeaderPreview(headerResult.Bytes),
                         warning);
@@ -81,11 +104,9 @@ internal static class WebSocketParser
                     || unsignedLength > long.MaxValue)
                 {
                     var warning = $"WebSocket record has invalid declared length '{Truncate(lengthValue, 80)}'; parsing stopped.";
-                    AddUndecoded(
-                        messages,
-                        sessionId,
+                    AddUndecodedFrame(
+                        frames,
                         recordIndex,
-                        SourceOrder(archiveOrder, recordIndex),
                         Math.Max(0, entry.Length - reader.BytesRead),
                         HeaderPreview(headerResult.Bytes),
                         warning);
@@ -94,18 +115,21 @@ internal static class WebSocketParser
                 }
 
                 var recordLength = (long)unsignedLength;
-                var frameRead = reader.ReadPrefixAndDiscard(recordLength, MaxFramePrefixBytes);
+                var remainingPayloadBudget = Math.Max(0, MaxRetainedEntryPayloadBytes - retainedPayloadBytes);
+                var frameRead = reader.ReadPrefixAndDiscard(
+                    recordLength,
+                    Math.Min(MaxFramePrefixBytes, remainingPayloadBudget + 14));
                 var frame = ParseFrame(
                     frameRead.Prefix,
                     recordLength,
                     frameRead.BytesRead,
                     headers,
-                    sessionId,
                     recordIndex,
-                    SourceOrder(archiveOrder, recordIndex),
                     requestLength is not null ? "Client" : "Server",
-                    headerWarning);
-                messages.Add(frame);
+                    headerWarning,
+                    remainingPayloadBudget);
+                frames.Add(frame);
+                retainedPayloadBytes += frame.Payload.Length;
                 if (frame.Warning is not null)
                 {
                     warnings.Add($"WebSocket record {recordIndex}: {frame.Warning}");
@@ -132,10 +156,11 @@ internal static class WebSocketParser
                 }
             }
 
-            if (recordIndex == 0 && messages.All(message => message.SessionId != sessionId))
+            if (frames.Count == 0)
             {
                 warnings.Add($"WebSocket entry '{entry.FullName}' contained no decodable records.");
             }
+            messages.AddRange(WebSocketMessageAssembler.Assemble(sessionId, archiveOrder, frames));
         }
         catch (Exception exception) when (exception is InvalidDataException or IOException)
         {
@@ -143,16 +168,15 @@ internal static class WebSocketParser
         }
     }
 
-    private static WebSocketMessage ParseFrame(
+    private static WebSocketFrame ParseFrame(
         byte[] bytes,
         long outerLength,
         long actualLength,
         IReadOnlyList<HttpHeader> headers,
-        string sessionId,
         int recordIndex,
-        long sourceOrder,
         string direction,
-        string? headerWarning)
+        string? headerWarning,
+        int payloadRetentionLimit)
     {
         var diagnostics = new List<string>();
         if (headerWarning is not null)
@@ -174,7 +198,7 @@ internal static class WebSocketParser
         if (bytes.Length < 2)
         {
             diagnostics.Add("record is too short for an RFC 6455 frame header");
-            return UndecodedFrame(bytes, outerLength, sessionId, recordIndex, sourceOrder, timestamp, direction, diagnostics);
+            return UndecodedFrame(bytes, outerLength, recordIndex, timestamp, direction, diagnostics);
         }
 
         var first = bytes[0];
@@ -191,7 +215,7 @@ internal static class WebSocketParser
             if (bytes.Length < 4)
             {
                 diagnostics.Add("record is truncated in the 16-bit payload length");
-                return UndecodedFrame(bytes, outerLength, sessionId, recordIndex, sourceOrder, timestamp, direction, diagnostics);
+                return UndecodedFrame(bytes, outerLength, recordIndex, timestamp, direction, diagnostics);
             }
             payloadLength = BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(2, 2));
             offset = 4;
@@ -205,7 +229,7 @@ internal static class WebSocketParser
             if (bytes.Length < 10)
             {
                 diagnostics.Add("record is truncated in the 64-bit payload length");
-                return UndecodedFrame(bytes, outerLength, sessionId, recordIndex, sourceOrder, timestamp, direction, diagnostics);
+                return UndecodedFrame(bytes, outerLength, recordIndex, timestamp, direction, diagnostics);
             }
             payloadLength = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(2, 8));
             offset = 10;
@@ -225,7 +249,7 @@ internal static class WebSocketParser
             if (bytes.Length < offset + 4)
             {
                 diagnostics.Add("record is truncated in the masking key");
-                return UndecodedFrame(bytes, outerLength, sessionId, recordIndex, sourceOrder, timestamp, direction, diagnostics);
+                return UndecodedFrame(bytes, outerLength, recordIndex, timestamp, direction, diagnostics);
             }
             maskingKey = bytes.AsSpan(offset, 4).ToArray();
             offset += 4;
@@ -271,53 +295,52 @@ internal static class WebSocketParser
         }
 
         var availablePayload = bytes.Length > offset ? bytes.AsSpan(offset) : ReadOnlySpan<byte>.Empty;
-        var previewLength = (int)Math.Min((ulong)availablePayload.Length, payloadLength);
-        var previewBytes = availablePayload[..previewLength].ToArray();
+        var retainedLength = (int)Math.Min(
+            Math.Min((ulong)availablePayload.Length, payloadLength),
+            (ulong)payloadRetentionLimit);
+        var retainedPayload = availablePayload[..retainedLength].ToArray();
         if (maskingKey is not null)
         {
-            for (var i = 0; i < previewBytes.Length; i++)
+            for (var i = 0; i < retainedPayload.Length; i++)
             {
-                previewBytes[i] ^= maskingKey[i % 4];
+                retainedPayload[i] ^= maskingKey[i % 4];
             }
         }
 
         var type = OpcodeName(opcode);
-        var isText = opcode == 1 && final && rsv == 0;
-        var previewTruncated = (ulong)previewBytes.Length < payloadLength;
-        if (previewTruncated)
+        var payloadTruncated = (ulong)retainedPayload.Length < payloadLength;
+        if (payloadTruncated)
         {
-            diagnostics.Add($"payload preview is limited to {previewBytes.Length:N0} bytes");
-        }
-        var preview = isText
-            ? DecodeTextOrHex(previewBytes, previewTruncated, diagnostics)
-            : HttpMessageParser.HexPreview(previewBytes);
-
-        if (opcode == 1 && !final)
-        {
-            diagnostics.Add("fragmented text is shown as hex because UTF-8 may span frames");
+            diagnostics.Add($"retained payload is limited to {retainedPayload.Length:N0} bytes");
         }
         if (opcode == 8)
         {
-            ValidateClosePayload(previewBytes, diagnostics);
+            ValidateClosePayload(retainedPayload, diagnostics);
         }
         if (opcode is 3 or 4 or 5 or 6 or 7 or 11 or 12 or 13 or 14 or 15)
         {
             diagnostics.Add($"reserved opcode 0x{opcode:X}");
         }
 
-        return new WebSocketMessage
+        return new WebSocketFrame
         {
-            SessionId = sessionId,
             RecordIndex = recordIndex,
+            FiddlerId = ParseIntegerHeader(headers, "ID"),
+            BitFlags = ParseIntegerHeader(headers, "BitFlags"),
             Timestamp = timestamp,
             Direction = direction,
-            Type = final ? type : $"{type} (fragment)",
+            Opcode = opcode,
+            Type = type,
+            Final = final,
+            Masked = masked,
             PayloadLength = payloadLength > long.MaxValue ? long.MaxValue : (long)payloadLength,
-            Preview = preview,
-            IsBinary = !isText,
-            IsDecoded = actualLength == outerLength && expectedLength == (ulong)outerLength,
+            CapturedPayloadLength = (long)Math.Min(
+                payloadLength,
+                (ulong)Math.Max(0, actualLength - offset)),
+            IsDecoded = rsv == 0 && actualLength == outerLength && expectedLength == (ulong)outerLength,
+            IsPayloadTruncated = payloadTruncated,
             Warning = JoinDiagnostics(diagnostics),
-            SourceOrder = sourceOrder
+            Payload = retainedPayload
         };
     }
 
@@ -352,76 +375,47 @@ internal static class WebSocketParser
         code is >= 1000 and <= 1014 && code is not (1004 or 1005 or 1006)
         || code is >= 3000 and <= 4999;
 
-    private static string DecodeTextOrHex(
-        byte[] payload,
-        bool previewTruncated,
-        List<string> diagnostics)
-    {
-        var encoding = new UTF8Encoding(false, true);
-        var maxTrim = previewTruncated ? Math.Min(3, payload.Length) : 0;
-        for (var trim = 0; trim <= maxTrim; trim++)
-        {
-            try
-            {
-                return encoding.GetString(payload, 0, payload.Length - trim);
-            }
-            catch (DecoderFallbackException)
-            {
-            }
-        }
-
-        diagnostics.Add("text payload is not valid UTF-8 and is shown as hex");
-        return HttpMessageParser.HexPreview(payload);
-    }
-
-    private static WebSocketMessage UndecodedFrame(
+    private static WebSocketFrame UndecodedFrame(
         byte[] bytes,
         long outerLength,
-        string sessionId,
         int recordIndex,
-        long sourceOrder,
         DateTimeOffset? timestamp,
         string direction,
         List<string> diagnostics) =>
         new()
         {
-            SessionId = sessionId,
             RecordIndex = recordIndex,
             Timestamp = timestamp,
             Direction = direction,
+            Opcode = -1,
             Type = "Undecoded",
             PayloadLength = outerLength,
-            Preview = HttpMessageParser.HexPreview(bytes),
-            IsBinary = true,
+            CapturedPayloadLength = bytes.Length,
             IsDecoded = false,
+            IsPayloadTruncated = bytes.LongLength < outerLength,
             Warning = JoinDiagnostics(diagnostics),
-            SourceOrder = sourceOrder
+            Payload = bytes
         };
 
-    private static void AddUndecoded(
-        List<WebSocketMessage> messages,
-        string sessionId,
+    private static void AddUndecodedFrame(
+        List<WebSocketFrame> frames,
         int recordIndex,
-        long sourceOrder,
         long length,
         string preview,
         string warning) =>
-        messages.Add(new WebSocketMessage
+        frames.Add(new WebSocketFrame
         {
-            SessionId = sessionId,
             RecordIndex = recordIndex,
             Direction = "Unknown",
+            Opcode = -1,
             Type = "Undecoded",
             PayloadLength = Math.Max(0, length),
-            Preview = preview,
-            IsBinary = true,
+            CapturedPayloadLength = Encoding.UTF8.GetByteCount(preview),
             IsDecoded = false,
+            IsPayloadTruncated = true,
             Warning = warning,
-            SourceOrder = sourceOrder
+            Payload = Encoding.UTF8.GetBytes(preview)
         });
-
-    private static long SourceOrder(int archiveOrder, int recordIndex) =>
-        ((long)archiveOrder << 32) | (uint)recordIndex;
 
     private static List<HttpHeader> ParseHeaders(byte[] bytes, out string? warning)
     {
@@ -471,6 +465,11 @@ internal static class WebSocketParser
 
     private static string? Header(IReadOnlyList<HttpHeader> headers, string name) =>
         headers.FirstOrDefault(header => header.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value;
+
+    private static int? ParseIntegerHeader(IReadOnlyList<HttpHeader> headers, string name) =>
+        int.TryParse(Header(headers, name), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : null;
 
     private static string HeaderPreview(byte[] bytes)
     {
@@ -522,6 +521,11 @@ internal static class WebSocketParser
                     return new HeaderReadResult(output.ToArray(), false, output.Length == 0);
                 }
                 output.WriteByte((byte)current);
+                if ((output.Length == 1 && current == '\n')
+                    || (output.Length == 2 && previous == '\r' && current == '\n'))
+                {
+                    return new HeaderReadResult([], true, false);
+                }
                 if ((thirdPrevious == '\r' && beforePrevious == '\n' && previous == '\r' && current == '\n')
                     || (previous == '\n' && current == '\n'))
                 {
