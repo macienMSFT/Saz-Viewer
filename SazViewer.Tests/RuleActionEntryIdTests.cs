@@ -18,6 +18,7 @@ public sealed class RuleActionEntryIdTests
         Assert.Empty(warnings);
         Assert.Equal("000102030405", Find(node, "GlobalCounter").Value);
         Assert.Equal("00000000-0000-0000-0000-000000000002", Find(node, "DatabaseGuid").Value);
+        Assert.Equal("PrivateFolder = 0x0001", Find(node, "FolderType").Value);
         Assert.Equal(MapiNodeKind.Structure, Find(node, "FolderEID").Kind);
     }
 
@@ -34,6 +35,7 @@ public sealed class RuleActionEntryIdTests
         Assert.Empty(warnings);
         Assert.Equal("101112131415", Find(node, "FolderGlobalCounter").Value);
         Assert.Equal("202122232425", Find(node, "MessageGlobalCounter").Value);
+        Assert.Equal("PrivateMessage = 0x0007", Find(node, "MessageType").Value);
         Assert.Equal("00000000-0000-0000-0000-000000000005", Find(node, "ReplyTemplateGUID").Value);
         Assert.Equal(MapiNodeKind.Structure, Find(node, "ReplyTemplateMessageEID").Kind);
     }
@@ -50,6 +52,21 @@ public sealed class RuleActionEntryIdTests
 
         Assert.Contains(warnings, warning => warning.Contains("46 are required", StringComparison.Ordinal));
         Assert.Equal(MapiNodeKind.Raw, Find(node, "FolderEID").Kind);
+    }
+
+    [Fact]
+    public void WarnsWhenStoreObjectTypeDoesNotMatchEntryIdKind()
+    {
+        var warnings = new List<string>();
+        var node = MapiEntryIdParser.ParseFolderEntryId(
+            BuildFolderEntryId(0x0007),
+            0,
+            new MapiNodeBudget(),
+            warnings);
+
+        Assert.Equal("PrivateMessage = 0x0007", Find(node, "FolderType").Value);
+        Assert.Contains(warnings, warning =>
+            warning.Contains("not valid for this field", StringComparison.Ordinal));
     }
 
     private static MapiNode ParseAction(byte type, byte[] payload, List<string> warnings)
@@ -69,12 +86,12 @@ public sealed class RuleActionEntryIdTests
         return node;
     }
 
-    private static byte[] BuildFolderEntryId()
+    private static byte[] BuildFolderEntryId(ushort folderType = 0x0001)
     {
         using var data = new MemoryStream();
         WriteUInt32(data, 0);
         data.Write(Guid.Parse("00000000-0000-0000-0000-000000000001").ToByteArray());
-        WriteUInt16(data, 1);
+        WriteUInt16(data, folderType);
         data.Write(Guid.Parse("00000000-0000-0000-0000-000000000002").ToByteArray());
         data.Write([0, 1, 2, 3, 4, 5]);
         WriteUInt16(data, 0);
@@ -86,7 +103,7 @@ public sealed class RuleActionEntryIdTests
         using var data = new MemoryStream();
         WriteUInt32(data, 0);
         data.Write(Guid.Parse("00000000-0000-0000-0000-000000000001").ToByteArray());
-        WriteUInt16(data, 2);
+        WriteUInt16(data, 7);
         data.Write(Guid.Parse("00000000-0000-0000-0000-000000000002").ToByteArray());
         data.Write([0x10, 0x11, 0x12, 0x13, 0x14, 0x15]);
         WriteUInt16(data, 0);

@@ -30,7 +30,7 @@ internal static class MapiEntryIdParser
         var children = ImmutableArray.CreateBuilder<MapiNode>();
         AddUInt32(ref reader, children, "Flags", budget, warnings, mustBeZero: true);
         AddGuid(ref reader, children, "ProviderUID", budget);
-        AddUInt16(ref reader, children, "FolderType", budget);
+        AddStoreObjectType(ref reader, children, "FolderType", budget, warnings, folderType: true);
         AddGuid(ref reader, children, "DatabaseGuid", budget);
         AddBytes(ref reader, children, "GlobalCounter", 6, budget);
         AddUInt16(ref reader, children, "Pad", budget, warnings, mustBeZero: true);
@@ -60,7 +60,7 @@ internal static class MapiEntryIdParser
         var children = ImmutableArray.CreateBuilder<MapiNode>();
         AddUInt32(ref reader, children, "Flags", budget, warnings, mustBeZero: true);
         AddGuid(ref reader, children, "ProviderUID", budget);
-        AddUInt16(ref reader, children, "MessageType", budget);
+        AddStoreObjectType(ref reader, children, "MessageType", budget, warnings, folderType: false);
         AddGuid(ref reader, children, "FolderDatabaseGuid", budget);
         AddBytes(ref reader, children, "FolderGlobalCounter", 6, budget);
         AddUInt16(ref reader, children, "Pad1", budget, warnings, mustBeZero: true);
@@ -256,6 +256,46 @@ internal static class MapiEntryIdParser
         {
             warnings?.Add(
                 $"{name} in the EntryID is 0x{value:X8}; 0x{expected.Value:X8} is required.");
+        }
+    }
+
+    private static void AddStoreObjectType(
+        ref MapiReader reader,
+        ImmutableArray<MapiNode>.Builder children,
+        string name,
+        MapiNodeBudget budget,
+        List<string>? warnings,
+        bool folderType)
+    {
+        var offset = reader.Position;
+        var value = reader.ReadUInt16(name);
+        var semanticName = value switch
+        {
+            0x0001 => "PrivateFolder",
+            0x0003 => "PublicFolder",
+            0x0005 => "MappedPublicFolder",
+            0x0007 => "PrivateMessage",
+            0x0009 => "PublicMessage",
+            0x000B => "MappedPublicMessage",
+            0x000C => "PublicNewsgroupFolder",
+            _ => "Unknown",
+        };
+        ExtendedBufferParser.AddField(
+            children,
+            name,
+            offset,
+            2,
+            $"{semanticName} = 0x{value:X4}",
+            budget);
+        var validForField = folderType
+            ? value is 0x0001 or 0x0003 or 0x0005 or 0x000C
+            : value is 0x0007 or 0x0009 or 0x000B;
+        if (!validForField)
+        {
+            warnings?.Add(
+                semanticName == "Unknown"
+                    ? $"{name} in the EntryID has unknown StoreObjectType 0x{value:X4}."
+                    : $"{name} in the EntryID has StoreObjectType {semanticName} (0x{value:X4}), which is not valid for this field.");
         }
     }
 

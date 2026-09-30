@@ -1340,6 +1340,31 @@ public sealed class MapiParserTests
         Assert.Contains(warnings, warning => warning.Contains("unsupported code page", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Theory]
+    [InlineData(0x1000)]
+    [InlineData(0x1001)]
+    [InlineData(0x100B)]
+    [InlineData(0x100D)]
+    [InlineData(0x10FB)]
+    [InlineData(0x10FD)]
+    [InlineData(0x10FE)]
+    public void RejectsMultiValueOnTypesWithoutASpecifiedMultipleForm(int type)
+    {
+        var exception = Assert.Throws<MapiParseException>(() =>
+            ParsePropertyValue([0, 0, 0, 0], checked((ushort)type), includePresence: false));
+
+        Assert.Contains("no valid Multi-value element form", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RejectsAbsentMultiValueOnTypeWithoutASpecifiedMultipleForm()
+    {
+        var exception = Assert.Throws<MapiParseException>(() =>
+            ParsePropertyValue([0], 0x100D, includePresence: true));
+
+        Assert.Contains("no valid Multi-value element form", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ParsesServerDefinedPtypServerIdSemanticFields()
     {
@@ -1931,7 +1956,7 @@ public sealed class MapiParserTests
         NspiPropertyParser.ParseValueList(ref reader, "Values", budget);
     }
 
-    private static void ParsePropertyValue(byte[] bytes, ushort type)
+    private static void ParsePropertyValue(byte[] bytes, ushort type, bool includePresence = true)
     {
         var reader = new MapiReader(bytes);
         NspiPropertyParser.ParseValue(
@@ -1940,7 +1965,7 @@ public sealed class MapiParserTests
             "Value",
             new MapiNodeBudget(),
             0,
-            includePresence: true);
+            includePresence);
     }
 
     private static MapiNode? FindOrDefault(MapiNode node, string name)

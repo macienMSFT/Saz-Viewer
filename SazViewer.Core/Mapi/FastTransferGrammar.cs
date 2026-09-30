@@ -71,10 +71,13 @@ internal enum FastTransferProductionKind
 internal enum FastTransferProductionPhase
 {
     FolderProperties,
+    FolderInitialAfterPrefix,
     FolderWarningAmbiguous,
+    FolderAfterDelProp,
     FolderMessageReady,
     FolderMessageAfterPrefix,
     FolderMessageAfterWarning,
+    FolderAfterNewFxFolder,
     FolderSubFolders,
     FolderErrorInfo,
     MessageStart,
@@ -94,7 +97,10 @@ internal readonly record struct FastTransferProductionFrame(
     FastTransferProductionKind Kind,
     FastTransferProductionPhase Phase,
     int SyntaxDepth,
-    uint EndTag);
+    uint EndTag,
+    int FolderMessageListCount = 0,
+    bool HasFolderProperties = false,
+    bool PendingFolderDelimiterRecovery = false);
 
 internal readonly record struct FastTransferGrammarState(
     FastTransferRootKind Root,
@@ -604,7 +610,9 @@ internal static class FastTransferGrammar
                 .Any(candidate => candidate.Kind == FastTransferProductionKind.Message);
             var atMessageList = frame.Phase is
                 FastTransferProductionPhase.FolderProperties or
+                FastTransferProductionPhase.FolderInitialAfterPrefix or
                 FastTransferProductionPhase.FolderWarningAmbiguous or
+                FastTransferProductionPhase.FolderAfterDelProp or
                 FastTransferProductionPhase.FolderMessageReady or
                 FastTransferProductionPhase.FolderMessageAfterPrefix or
                 FastTransferProductionPhase.FolderMessageAfterWarning;
@@ -647,12 +655,30 @@ internal static class FastTransferGrammar
         {
             FastTransferProductionKind.Folder when frame.Phase is
                 FastTransferProductionPhase.FolderProperties or
+                FastTransferProductionPhase.FolderInitialAfterPrefix or
                 FastTransferProductionPhase.FolderWarningAmbiguous =>
-                ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderProperties }),
+                ReplaceTop(
+                    state,
+                    frame with
+                    {
+                        Phase = FastTransferProductionPhase.FolderProperties,
+                        HasFolderProperties = true,
+                    }),
 
             FastTransferProductionKind.Folder when frame.Phase == FastTransferProductionPhase.FolderErrorInfo
                 && (tag & 0xFFFF) == 0x0102 =>
-                ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderMessageReady }),
+                ReplaceTop(
+                    state,
+                    frame with
+                    {
+                        Phase = frame.PendingFolderDelimiterRecovery
+                            ? FastTransferProductionPhase.FolderAfterDelProp
+                            : state.Root == FastTransferRootKind.FolderContent
+                                && frame.FolderMessageListCount == 0
+                                    ? FastTransferProductionPhase.FolderProperties
+                                    : FastTransferProductionPhase.FolderMessageReady,
+                        PendingFolderDelimiterRecovery = false,
+                    }),
 
             FastTransferProductionKind.Message when frame.Phase is
                 FastTransferProductionPhase.MessageStart or
@@ -735,35 +761,172 @@ internal static class FastTransferGrammar
         FastTransferGrammarState state,
         FastTransferProductionFrame frame,
         uint tag,
-        long offset) =>
-        (frame.Phase, tag) switch
+        long offset)
+    {
+        if (tag == MetaTagFxDelProp)
         {
-            (FastTransferProductionPhase.FolderProperties, MetaTagDnPrefix) or
-            (FastTransferProductionPhase.FolderMessageReady, MetaTagDnPrefix) or
-            (FastTransferProductionPhase.FolderWarningAmbiguous, MetaTagDnPrefix) or
-            (FastTransferProductionPhase.FolderMessageAfterPrefix, MetaTagDnPrefix) or
-            (FastTransferProductionPhase.FolderMessageAfterWarning, MetaTagDnPrefix) =>
-                ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderMessageAfterPrefix }),
+            return AdvanceFolderDeletionMarker(state, frame, offset);
+        }
 
-            (FastTransferProductionPhase.FolderProperties, MetaTagEcWarning) =>
-                ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderWarningAmbiguous }),
+        if (tag == MetaTagDnPrefix)
+        {
+            if (frame.Phase == FastTransferProductionPhase.FolderAfterDelProp
+                && state.Root == FastTransferRootKind.FolderContent)
+            {
+                return ReplaceTop(
+                    state,
+                    frame with
+                    {
+                        Phase = FastTransferProductionPhase.FolderMessageAfterPrefix,
+                        FolderMessageListCount = frame.FolderMessageListCount + 1,
+                    });
+            }
 
-            (FastTransferProductionPhase.FolderWarningAmbiguous, MetaTagEcWarning) =>
+            if (state.Root == FastTransferRootKind.FolderContent
+                && frame.Phase == FastTransferProductionPhase.FolderProperties
+                && !frame.HasFolderProperties)
+            {
+                return ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderInitialAfterPrefix });
+            }
+
+            if (state.Root == FastTransferRootKind.TopFolder
+                && frame.Phase is
+                    FastTransferProductionPhase.FolderProperties or
+                    FastTransferProductionPhase.FolderInitialAfterPrefix or
+                    FastTransferProductionPhase.FolderWarningAmbiguous or
+                    FastTransferProductionPhase.FolderMessageReady or
+                    FastTransferProductionPhase.FolderMessageAfterPrefix or
+                    FastTransferProductionPhase.FolderMessageAfterWarning)
+            {
+                return ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderMessageAfterPrefix });
+            }
+
+            if (state.Root == FastTransferRootKind.FolderContent
+                && frame.Phase is
+                    FastTransferProductionPhase.FolderMessageReady or
+                    FastTransferProductionPhase.FolderMessageAfterPrefix or
+                    FastTransferProductionPhase.FolderMessageAfterWarning)
+            {
+                return ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderMessageAfterPrefix });
+            }
+        }
+
+        if (tag == MetaTagEcWarning)
+        {
+            if (frame.Phase == FastTransferProductionPhase.FolderAfterDelProp
+                && state.Root == FastTransferRootKind.FolderContent)
+            {
+                return ReplaceTop(
+                    state,
+                    frame with
+                    {
+                        Phase = FastTransferProductionPhase.FolderMessageAfterWarning,
+                        FolderMessageListCount = frame.FolderMessageListCount + 1,
+                    });
+            }
+
+            if (frame.Phase == FastTransferProductionPhase.FolderInitialAfterPrefix)
+            {
+                return ReplaceTop(
+                    state,
+                    frame with
+                    {
+                        Phase = FastTransferProductionPhase.FolderWarningAmbiguous,
+                        HasFolderProperties = true,
+                    });
+            }
+
+            if (frame.Phase == FastTransferProductionPhase.FolderProperties)
+            {
+                return ReplaceTop(
+                    state,
+                    frame with
+                    {
+                        Phase = FastTransferProductionPhase.FolderWarningAmbiguous,
+                        HasFolderProperties = state.Root == FastTransferRootKind.FolderContent
+                            || frame.HasFolderProperties,
+                    });
+            }
+
+            if (frame.Phase == FastTransferProductionPhase.FolderWarningAmbiguous)
+            {
+                return state;
+            }
+
+            if (frame.Phase is
+                FastTransferProductionPhase.FolderMessageReady or
+                FastTransferProductionPhase.FolderMessageAfterPrefix)
+            {
+                return ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderMessageAfterWarning });
+            }
+
+            if (frame.Phase == FastTransferProductionPhase.FolderMessageAfterWarning)
+            {
+                return state;
+            }
+        }
+
+        if (tag == MetaTagNewFxFolder
+            && frame.Phase is
+                FastTransferProductionPhase.FolderProperties or
+                FastTransferProductionPhase.FolderInitialAfterPrefix or
+                FastTransferProductionPhase.FolderWarningAmbiguous)
+        {
+            return ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderAfterNewFxFolder });
+        }
+
+        return Invalid(state, offset, MetaProperty(tag));
+    }
+
+    private static FastTransferGrammarState AdvanceFolderDeletionMarker(
+        FastTransferGrammarState state,
+        FastTransferProductionFrame frame,
+        long offset)
+    {
+        if (state.Root != FastTransferRootKind.FolderContent)
+        {
+            return Invalid(state, offset, MetaProperty(MetaTagFxDelProp));
+        }
+
+        if (frame.Phase == FastTransferProductionPhase.FolderAfterNewFxFolder)
+        {
+            return ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderSubFolders });
+        }
+
+        if (frame.Phase == FastTransferProductionPhase.FolderAfterDelProp)
+        {
+            var completedMessageLists = frame.FolderMessageListCount + 1;
+            return ReplaceTop(
                 state,
+                frame with
+                {
+                    Phase = completedMessageLists < 2
+                        ? FastTransferProductionPhase.FolderAfterDelProp
+                        : FastTransferProductionPhase.FolderSubFolders,
+                    FolderMessageListCount = completedMessageLists,
+                });
+        }
 
-            (FastTransferProductionPhase.FolderMessageReady, MetaTagEcWarning) or
-            (FastTransferProductionPhase.FolderMessageAfterPrefix, MetaTagEcWarning) =>
-                ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderMessageAfterWarning }),
+        if (frame.Phase is not (
+            FastTransferProductionPhase.FolderProperties or
+            FastTransferProductionPhase.FolderInitialAfterPrefix or
+            FastTransferProductionPhase.FolderWarningAmbiguous or
+            FastTransferProductionPhase.FolderMessageReady or
+            FastTransferProductionPhase.FolderMessageAfterPrefix or
+            FastTransferProductionPhase.FolderMessageAfterWarning))
+        {
+            return Invalid(state, offset, MetaProperty(MetaTagFxDelProp));
+        }
 
-            (FastTransferProductionPhase.FolderMessageAfterWarning, MetaTagEcWarning) =>
-                state,
-
-            (FastTransferProductionPhase.FolderProperties, MetaTagNewFxFolder) or
-            (FastTransferProductionPhase.FolderWarningAmbiguous, MetaTagNewFxFolder) =>
-                ReplaceTop(state, frame with { Phase = FastTransferProductionPhase.FolderSubFolders }),
-
-            _ => Invalid(state, offset, MetaProperty(tag)),
-        };
+        return ReplaceTop(
+            state,
+            frame with
+            {
+                Phase = frame.FolderMessageListCount < 2
+                    ? FastTransferProductionPhase.FolderAfterDelProp
+                    : FastTransferProductionPhase.FolderSubFolders,
+            });
+    }
 
     private static FastTransferGrammarState AdvanceMessageMetaProperty(
         FastTransferGrammarState state,
@@ -822,10 +985,13 @@ internal static class FastTransferGrammar
             && depthAfter == frame.SyntaxDepth - 1
             && frame.Phase is
                 FastTransferProductionPhase.FolderProperties or
+                FastTransferProductionPhase.FolderInitialAfterPrefix or
                 FastTransferProductionPhase.FolderWarningAmbiguous or
+                FastTransferProductionPhase.FolderAfterDelProp or
                 FastTransferProductionPhase.FolderMessageReady or
                 FastTransferProductionPhase.FolderMessageAfterPrefix or
                 FastTransferProductionPhase.FolderMessageAfterWarning or
+                FastTransferProductionPhase.FolderAfterNewFxFolder or
                 FastTransferProductionPhase.FolderSubFolders)
         {
             return Pop(state, FastTransferProductionKind.Folder);
@@ -833,17 +999,38 @@ internal static class FastTransferGrammar
 
         if (tag is StartMessage or StartFaiMessage
             && depthBefore == frame.SyntaxDepth
-            && depthAfter == frame.SyntaxDepth + 1
-            && frame.Phase is
-                FastTransferProductionPhase.FolderProperties or
-                FastTransferProductionPhase.FolderWarningAmbiguous or
-                FastTransferProductionPhase.FolderMessageReady or
-                FastTransferProductionPhase.FolderMessageAfterPrefix or
-                FastTransferProductionPhase.FolderMessageAfterWarning)
+            && depthAfter == frame.SyntaxDepth + 1)
         {
+            var canStartMessage = state.Root == FastTransferRootKind.FolderContent
+                ? frame.Phase is
+                    FastTransferProductionPhase.FolderAfterDelProp or
+                    FastTransferProductionPhase.FolderMessageReady or
+                    FastTransferProductionPhase.FolderMessageAfterPrefix or
+                    FastTransferProductionPhase.FolderMessageAfterWarning
+                : frame.Phase is
+                    FastTransferProductionPhase.FolderProperties or
+                    FastTransferProductionPhase.FolderInitialAfterPrefix or
+                    FastTransferProductionPhase.FolderWarningAmbiguous or
+                    FastTransferProductionPhase.FolderMessageReady or
+                    FastTransferProductionPhase.FolderMessageAfterPrefix or
+                    FastTransferProductionPhase.FolderMessageAfterWarning;
+            if (!canStartMessage)
+            {
+                return Invalid(state, offset, Marker(tag));
+            }
+
+            var messageListCount = frame.FolderMessageListCount;
+            if (frame.Phase == FastTransferProductionPhase.FolderAfterDelProp)
+            {
+                messageListCount++;
+            }
             state = ReplaceTop(
                 state,
-                frame with { Phase = FastTransferProductionPhase.FolderMessageReady });
+                frame with
+                {
+                    Phase = FastTransferProductionPhase.FolderMessageReady,
+                    FolderMessageListCount = messageListCount,
+                });
             return Push(
                 state,
                 new FastTransferProductionFrame(
@@ -855,15 +1042,26 @@ internal static class FastTransferGrammar
 
         if (tag == StartSubFolder
             && depthBefore == frame.SyntaxDepth
-            && depthAfter == frame.SyntaxDepth + 1
-            && frame.Phase is
-                FastTransferProductionPhase.FolderProperties or
-                FastTransferProductionPhase.FolderWarningAmbiguous or
-                FastTransferProductionPhase.FolderMessageReady or
-                FastTransferProductionPhase.FolderMessageAfterPrefix or
-                FastTransferProductionPhase.FolderMessageAfterWarning or
-                FastTransferProductionPhase.FolderSubFolders)
+            && depthAfter == frame.SyntaxDepth + 1)
         {
+            var canStartSubFolder = state.Root == FastTransferRootKind.FolderContent
+                ? frame.Phase is
+                    FastTransferProductionPhase.FolderAfterDelProp or
+                    FastTransferProductionPhase.FolderSubFolders
+                : frame.Phase is
+                    FastTransferProductionPhase.FolderProperties or
+                    FastTransferProductionPhase.FolderInitialAfterPrefix or
+                    FastTransferProductionPhase.FolderWarningAmbiguous or
+                    FastTransferProductionPhase.FolderMessageReady or
+                    FastTransferProductionPhase.FolderMessageAfterPrefix or
+                    FastTransferProductionPhase.FolderMessageAfterWarning or
+                    FastTransferProductionPhase.FolderAfterNewFxFolder or
+                    FastTransferProductionPhase.FolderSubFolders;
+            if (!canStartSubFolder)
+            {
+                return Invalid(state, offset, Marker(tag));
+            }
+
             state = ReplaceTop(
                 state,
                 frame with { Phase = FastTransferProductionPhase.FolderSubFolders });
@@ -1050,7 +1248,9 @@ internal static class FastTransferGrammar
             .Any(candidate => candidate.Kind == FastTransferProductionKind.Message);
         var atMessageList = folder.Phase is
             FastTransferProductionPhase.FolderProperties or
+            FastTransferProductionPhase.FolderInitialAfterPrefix or
             FastTransferProductionPhase.FolderWarningAmbiguous or
+            FastTransferProductionPhase.FolderAfterDelProp or
             FastTransferProductionPhase.FolderMessageReady or
             FastTransferProductionPhase.FolderMessageAfterPrefix or
             FastTransferProductionPhase.FolderMessageAfterWarning;
@@ -1062,7 +1262,12 @@ internal static class FastTransferGrammar
         frames = frames.RemoveRange(folderIndex + 1, frames.Length - folderIndex - 1);
         frames = frames.SetItem(
             folderIndex,
-            frames[folderIndex] with { Phase = FastTransferProductionPhase.FolderErrorInfo });
+            frames[folderIndex] with
+            {
+                Phase = FastTransferProductionPhase.FolderErrorInfo,
+                PendingFolderDelimiterRecovery =
+                    folder.Phase == FastTransferProductionPhase.FolderAfterDelProp,
+            });
         return WithFrames(state, frames);
     }
 
@@ -1131,10 +1336,13 @@ internal static class FastTransferGrammar
         frame.Phase switch
         {
             FastTransferProductionPhase.FolderProperties => FastTransferGrammarPhase.TopFolderProperties,
+            FastTransferProductionPhase.FolderInitialAfterPrefix => FastTransferGrammarPhase.TopFolderAfterPrefix,
             FastTransferProductionPhase.FolderWarningAmbiguous => FastTransferGrammarPhase.TopFolderWarningAmbiguous,
+            FastTransferProductionPhase.FolderAfterDelProp => FastTransferGrammarPhase.TopFolderMessageReady,
             FastTransferProductionPhase.FolderMessageReady => FastTransferGrammarPhase.TopFolderMessageReady,
             FastTransferProductionPhase.FolderMessageAfterPrefix => FastTransferGrammarPhase.TopFolderMessageAfterPrefix,
             FastTransferProductionPhase.FolderMessageAfterWarning => FastTransferGrammarPhase.TopFolderMessageAfterWarning,
+            FastTransferProductionPhase.FolderAfterNewFxFolder => FastTransferGrammarPhase.TopFolderSubFolders,
             FastTransferProductionPhase.FolderSubFolders => FastTransferGrammarPhase.TopFolderSubFolders,
             FastTransferProductionPhase.FolderErrorInfo => FastTransferGrammarPhase.TopFolderErrorInfo,
             FastTransferProductionPhase.MessageStart or
@@ -1173,10 +1381,13 @@ internal static class FastTransferGrammar
                 frame.Kind == FastTransferProductionKind.Folder
                 && frame.Phase is
                     FastTransferProductionPhase.FolderProperties or
+                    FastTransferProductionPhase.FolderInitialAfterPrefix or
                     FastTransferProductionPhase.FolderWarningAmbiguous or
+                    FastTransferProductionPhase.FolderAfterDelProp or
                     FastTransferProductionPhase.FolderMessageReady or
                     FastTransferProductionPhase.FolderMessageAfterPrefix or
                     FastTransferProductionPhase.FolderMessageAfterWarning or
+                    FastTransferProductionPhase.FolderAfterNewFxFolder or
                     FastTransferProductionPhase.FolderSubFolders => true,
             FastTransferRootKind.MessageContent when
                 frame.Kind == FastTransferProductionKind.Message

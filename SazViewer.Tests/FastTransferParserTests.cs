@@ -990,6 +990,28 @@ public sealed class FastTransferParserTests
     }
 
     [Fact]
+    public void RejectsTopFolderPropertyAfterMessageListDnPrefix()
+    {
+        var dn = Encoding.ASCII.GetBytes("/o=Message\0");
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                Le(0x40090003u),
+                Le(0x4008001Eu),
+                Le((uint)dn.Length),
+                dn,
+                property,
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test copy folder"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("property value", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void RejectsARecipientAfterAttachmentProcessingBegins()
     {
         var result = LexWithState(
@@ -1163,9 +1185,13 @@ public sealed class FastTransferParserTests
         var result = LexWithState(
             Concat(
                 property,
+                Le(0x40160003u),
+                Le(1u),
                 Le(0x400C0003u),
                 property,
                 Le(0x400D0003u),
+                Le(0x40160003u),
+                Le(2u),
                 Le(0x400A0003u),
                 property,
                 Le(0x400B0003u)),
@@ -1180,11 +1206,221 @@ public sealed class FastTransferParserTests
     }
 
     [Fact]
+    public void ValidatesFolderContentDeletionMarkerBeforeSubFolders()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                property,
+                Le(0x40160003u),
+                Le(1u),
+                Le(0x400C0003u),
+                property,
+                Le(0x400D0003u),
+                Le(0x40160003u),
+                Le(1u),
+                Le(0x400A0003u),
+                property,
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test CopyTo folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Contains(result.Nodes, node => node.Value == "MetaTagFXDelProp");
+        Assert.Null(result.State.CompletionIssue);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void ValidatesFolderContentDeletionMarkerAfterNewFxFolder()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var replica = FolderReplicaInfo();
+        var result = LexWithState(
+            Concat(
+                property,
+                Le(0x40110102u),
+                Le((uint)replica.Length),
+                replica,
+                Le(0x40160003u),
+                Le(1u),
+                Le(0x400A0003u),
+                property,
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test CopyTo folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Contains(result.Nodes, node => node.Value == "MetaTagNewFXFolder");
+        Assert.Contains(result.Nodes, node => node.Value == "MetaTagFXDelProp");
+        Assert.Null(result.State.CompletionIssue);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void ValidatesTwoDeletionDelimitedMessageListsAndTrailingSubFolders()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                property,
+                Le(0x40160003u),
+                Le(1u),
+                Le(0x40100003u),
+                property,
+                Le(0x400D0003u),
+                Le(0x40160003u),
+                Le(2u),
+                Le(0x400C0003u),
+                property,
+                Le(0x400D0003u),
+                Le(0x40160003u),
+                Le(3u),
+                Le(0x400A0003u),
+                property,
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test CopyTo folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Equal(3, result.Nodes.Count(node => node.Value == "MetaTagFXDelProp"));
+        Assert.Null(result.State.CompletionIssue);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void RejectsFolderContentMessageListWithoutDeletionMarker()
+    {
+        var result = LexWithState(
+            Concat(Le(0x400C0003u), Le(0x400D0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test CopyTo folder"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("StartMessage", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RejectsFolderContentSubFolderWithoutTrailingDeletionMarker()
+    {
+        var result = LexWithState(
+            Concat(Le(0x400A0003u), Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test CopyTo folder"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("StartSubFld", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidatesFolderContentInitialDnPrefixBeforeProperties()
+    {
+        var dn = Encoding.ASCII.GetBytes("/o=Folder\0");
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(Le(0x4008001Eu), Le((uint)dn.Length), dn, property),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test CopyTo folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void TreatsInitialFolderContentEcWarningAsAFolderProperty()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(Le(0x400F0003u), Le(0u), property),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test CopyTo folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void RejectsMoreThanTwoDeletionDelimitedFolderMessageLists()
+    {
+        var result = LexWithState(
+            Concat(
+                Le(0x40160003u), Le(1u),
+                Le(0x40160003u), Le(2u),
+                Le(0x40160003u), Le(3u),
+                Le(0x40160003u), Le(4u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test CopyTo folder"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("MetaTagFXDelProp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RejectsFolderContentDeletionMarkerAfterSubFoldersBegin()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                property,
+                Le(0x40160003u),
+                Le(1u),
+                Le(0x400A0003u),
+                property,
+                Le(0x400B0003u),
+                Le(0x40160003u),
+                Le(1u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test CopyTo folder"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("TopFolderSubFolders", StringComparison.Ordinal)
+            && warning.Contains("MetaTagFXDelProp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RejectsFolderDeletionMarkerForTopFolderNoDelPropsGrammar()
+    {
+        var result = LexWithState(
+            Concat(
+                Le(0x40090003u),
+                Le(0x40160003u),
+                Le(1u),
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test CopyFolder"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("MetaTagFXDelProp", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void FolderContentRecoveryUnwindsToItsMarkerlessMessageListBoundary()
     {
         var extendedErrorInfo = new byte[88];
         var result = LexWithState(
             Concat(
+                Le(0x40160003u),
+                Le(1u),
                 Le(0x400C0003u),
                 Le(0x40180003u),
                 Le((ushort)0x0102),
@@ -1199,6 +1435,108 @@ public sealed class FastTransferParserTests
         Assert.False(result.State.Desynchronized);
         Assert.Equal(0, result.State.MarkerDepth);
         Assert.Null(result.State.CompletionIssue);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void FolderPropertyRecoveryStillRequiresDeletionMarkerBeforeMessages()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var extendedErrorInfo = new byte[88];
+        var result = LexWithState(
+            Concat(
+                property,
+                Le(0x40180003u),
+                Le((ushort)0x0102),
+                Le((ushort)0x0000),
+                Le((uint)extendedErrorInfo.Length),
+                extendedErrorInfo,
+                Le(0x400C0003u),
+                Le(0x400D0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test RecoverMode CopyTo folder"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("StartMessage", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FolderMessageListRecoveryImmediatelyAfterDelimiterPreservesTheList()
+    {
+        var extendedErrorInfo = new byte[88];
+        var first = LexWithState(
+            Concat(Le(0x40160003u), Le(1u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test RecoverMode CopyTo folder"));
+        var second = LexWithState(
+            Concat(
+                Le(0x40180003u),
+                Le((ushort)0x0102),
+                Le((ushort)0x0000),
+                Le((uint)extendedErrorInfo.Length),
+                extendedErrorInfo,
+                Le(0x400C0003u),
+                Le(0x400D0003u)),
+            first.State);
+
+        Assert.Empty(first.Warnings);
+        Assert.Empty(second.Warnings);
+        Assert.False(second.State.Desynchronized);
+        Assert.True(second.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void FolderMessageListRecoveryDoesNotPermitAFourthDeletionMarker()
+    {
+        var extendedErrorInfo = new byte[88];
+        var result = LexWithState(
+            Concat(
+                Le(0x40160003u), Le(1u),
+                Le(0x400C0003u), Le(0x400D0003u),
+                Le(0x40160003u), Le(2u),
+                Le(0x40180003u),
+                Le((ushort)0x0102),
+                Le((ushort)0x0000),
+                Le((uint)extendedErrorInfo.Length),
+                extendedErrorInfo,
+                Le(0x400C0003u), Le(0x400D0003u),
+                Le(0x40160003u), Le(3u),
+                Le(0x40160003u), Le(4u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test RecoverMode CopyTo folder"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("MetaTagFXDelProp", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FolderRecoveryPreservesTrailingDelimiterForSubFolders()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var extendedErrorInfo = new byte[88];
+        var result = LexWithState(
+            Concat(
+                property,
+                Le(0x40160003u), Le(1u),
+                Le(0x40180003u),
+                Le((ushort)0x0102),
+                Le((ushort)0x0000),
+                Le((uint)extendedErrorInfo.Length),
+                extendedErrorInfo,
+                Le(0x400A0003u),
+                property,
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test RecoverMode CopyTo folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
         Assert.True(result.State.AsComplete().Grammar.IsComplete);
     }
 
@@ -1261,8 +1599,11 @@ public sealed class FastTransferParserTests
             : root == FastTransferRootKind.MessageContent
                 ? 0x40030003u
                 : 0x40010003u;
+        var openingBytes = root == FastTransferRootKind.FolderContent
+            ? Concat(Le(0x40160003u), Le(1u), Le(openingMarker))
+            : Le(openingMarker);
         var result = LexWithState(
-            Le(openingMarker),
+            openingBytes,
             FastTransferStreamState.ForRoot(root, "test object content"));
 
         Assert.False(result.State.Desynchronized);

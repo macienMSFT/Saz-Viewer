@@ -29,6 +29,19 @@ internal enum MapiWireWidthContext
 internal static class NspiPropertyParser
 {
     private const ushort MultiValue = 0x1000;
+    private static readonly ImmutableHashSet<ushort> MultiCapableBaseTypes = ImmutableHashSet.Create<ushort>(
+        0x0002,
+        0x0003,
+        0x0004,
+        0x0005,
+        0x0006,
+        0x0007,
+        0x0014,
+        0x0040,
+        0x0048,
+        0x001E,
+        0x001F,
+        0x0102);
 
     public static MapiNode ParseValueList(
         ref MapiReader reader,
@@ -188,6 +201,16 @@ internal static class NspiPropertyParser
         budget.Claim(depth);
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
+        if ((type & MultiValue) != 0)
+        {
+            var baseType = (ushort)(type & ~MultiValue);
+            if (!MultiCapableBaseTypes.Contains(baseType))
+            {
+                throw new MapiParseException(
+                    start,
+                    $"{name} has property type 0x{type:X4} with no valid Multi-value element form; its length cannot be determined safely.");
+            }
+        }
         if (includePresence && HasPresenceIndicator(type))
         {
             var presentOffset = reader.Position;
