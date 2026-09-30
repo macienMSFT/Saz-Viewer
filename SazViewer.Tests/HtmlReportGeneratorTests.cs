@@ -644,6 +644,11 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("document.createElement('mark')", html, StringComparison.Ordinal);
         Assert.Contains("function foldWebSocketSearchText(text)", html, StringComparison.Ordinal);
         Assert.Contains("for(let scan=nodeIndex;scan<nodes.length&&nodes[scan].start<end;scan++)", html, StringComparison.Ordinal);
+        Assert.Contains("function move(delta)", html, StringComparison.Ordinal);
+        Assert.Contains("event.key!=='Enter'||event.isComposing||event.keyCode===229||event.ctrlKey||event.altKey||event.metaKey", html, StringComparison.Ordinal);
+        Assert.Contains("event.preventDefault();move(event.shiftKey?-1:1);input.focus({preventScroll:true})", html, StringComparison.Ordinal);
+        Assert.Contains("previous.addEventListener('click',()=>move(-1))", html, StringComparison.Ordinal);
+        Assert.Contains("next.addEventListener('click',()=>move(1))", html, StringComparison.Ordinal);
         Assert.Contains("content.addEventListener('saz-view-change',run)", html, StringComparison.Ordinal);
         Assert.Contains("removeWebSocketSearchMarks(content)", html, StringComparison.Ordinal);
         Assert.DoesNotContain("localStorage", html, StringComparison.Ordinal);

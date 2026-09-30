@@ -750,12 +750,61 @@ public sealed class HtmlReportBrowserTests
             await page.Locator("[role=tab][data-tab=raw]").ClickAsync();
             await viewSearch.FillAsync("ID=");
             await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 2 matches");
+
+            await viewSearch.PressAsync("Enter");
+            Assert.Equal("2 of 2 matches", await viewSearchStatus.InnerTextAsync());
+            Assert.True(await viewSearch.EvaluateAsync<bool>("input=>document.activeElement===input"));
+            await viewSearch.PressAsync("Enter");
+            Assert.Equal("1 of 2 matches", await viewSearchStatus.InnerTextAsync());
+            await viewSearch.PressAsync("Shift+Enter");
+            Assert.Equal("2 of 2 matches", await viewSearchStatus.InnerTextAsync());
+            await viewSearch.PressAsync("Shift+Enter");
+            Assert.Equal("1 of 2 matches", await viewSearchStatus.InnerTextAsync());
+            Assert.True(await viewSearch.EvaluateAsync<bool>("input=>document.activeElement===input"));
+
+            var ignoredKeyResults = await viewSearch.EvaluateAsync<bool[]>(
+                """
+                input => {
+                  const options = [
+                    { key: 'Enter', isComposing: true },
+                    { key: 'Enter', ctrlKey: true },
+                    { key: 'Enter', altKey: true },
+                    { key: 'Enter', metaKey: true }
+                  ];
+                  const results = options.map(option =>
+                    input.dispatchEvent(new KeyboardEvent('keydown', {
+                      ...option, bubbles: true, cancelable: true
+                    })));
+                  const imeFallback = new KeyboardEvent('keydown', {
+                    key: 'Enter', bubbles: true, cancelable: true
+                  });
+                  Object.defineProperty(imeFallback, 'keyCode', { value: 229 });
+                  results.push(input.dispatchEvent(imeFallback));
+                  return results;
+                }
+                """);
+            Assert.All(ignoredKeyResults, Assert.True);
+            Assert.Equal("1 of 2 matches", await viewSearchStatus.InnerTextAsync());
+            Assert.True(await viewSearch.EvaluateAsync<bool>("input=>document.activeElement===input"));
+
             await page.Locator(".ws-view-search-prev").ClickAsync();
             Assert.Equal("2 of 2 matches", await viewSearchStatus.InnerTextAsync());
             await page.Locator(".ws-view-search-next").ClickAsync();
             Assert.Equal("1 of 2 matches", await viewSearchStatus.InnerTextAsync());
             await viewSearch.FillAsync("needle");
             Assert.Equal("1 of 1 matches", await viewSearchStatus.InnerTextAsync());
+            await viewSearch.PressAsync("Enter");
+            Assert.Equal("1 of 1 matches", await viewSearchStatus.InnerTextAsync());
+            await viewSearch.PressAsync("Shift+Enter");
+            Assert.Equal("1 of 1 matches", await viewSearchStatus.InnerTextAsync());
+            Assert.True(await viewSearch.EvaluateAsync<bool>("input=>document.activeElement===input"));
+            await viewSearch.FillAsync("no selected payload match");
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("0 matches");
+            await viewSearch.PressAsync("Enter");
+            await viewSearch.PressAsync("Shift+Enter");
+            Assert.Equal("0 matches", await viewSearchStatus.InnerTextAsync());
+            Assert.True(await viewSearch.EvaluateAsync<bool>("input=>document.activeElement===input"));
+            await viewSearch.FillAsync("needle");
             await page.Locator("[role=tab][data-tab=text]").ClickAsync();
             await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 1 matches");
 

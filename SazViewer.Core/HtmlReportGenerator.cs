@@ -759,9 +759,17 @@ function setupWebSocketViewSearch(content,generation){
     previous.disabled=!matches.length;next.disabled=!matches.length;
     if(matches.length)showCurrent();else status.textContent='0 matches';
   }
+  function move(delta){
+    if(!matches.length)return;
+    current=(current+delta+matches.length)%matches.length;showCurrent();
+  }
   input.addEventListener('input',run);
-  previous.addEventListener('click',()=>{if(matches.length){current=(current-1+matches.length)%matches.length;showCurrent()}});
-  next.addEventListener('click',()=>{if(matches.length){current=(current+1)%matches.length;showCurrent()}});
+  input.addEventListener('keydown',event=>{
+    if(event.defaultPrevented||event.key!=='Enter'||event.isComposing||event.keyCode===229||event.ctrlKey||event.altKey||event.metaKey)return;
+    event.preventDefault();move(event.shiftKey?-1:1);input.focus({preventScroll:true});
+  });
+  previous.addEventListener('click',()=>move(-1));
+  next.addEventListener('click',()=>move(1));
   content.addEventListener('saz-view-change',run);
   content._clearWebSocketViewSearch=()=>{runToken++;input.value='';clear()};
 }
