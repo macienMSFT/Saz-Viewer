@@ -446,7 +446,10 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("reveal:revealDetailMatches", html, StringComparison.Ordinal);
         Assert.Contains("await renderProtocolTree(host,generation)", html, StringComparison.Ordinal);
         Assert.Contains("inspectorBody._disposeHttpViewSearch?.();", html, StringComparison.Ordinal);
-        Assert.Contains("function closeInspector(){inspectorBody._clearHttpViewSearch?.();inspector.close()}", html, StringComparison.Ordinal);
+        Assert.Contains("function closeInspector(){", html, StringComparison.Ordinal);
+        Assert.Contains("host._protocolBuildToken=null;", html, StringComparison.Ordinal);
+        Assert.Contains("host._protocolPromise=null;", html, StringComparison.Ordinal);
+        Assert.Contains("inspector.close()", html, StringComparison.Ordinal);
         Assert.Contains("removeEventListener('saz-view-change',viewChangeHandler)", html, StringComparison.Ordinal);
         Assert.Contains("event.isComposing||event.keyCode===229||event.ctrlKey||event.altKey||event.metaKey", html, StringComparison.Ordinal);
         Assert.Contains("event.preventDefault();move(event.shiftKey?-1:1);input.focus({preventScroll:true})", html, StringComparison.Ordinal);
@@ -1528,8 +1531,22 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("<th class=\"http-protocol\">Protocol</th>", html, StringComparison.Ordinal);
         Assert.Contains("data-payload-type=\"mapi-protocol\"", html, StringComparison.Ordinal);
         Assert.Contains("renderProtocolTree(host,generation)", html, StringComparison.Ordinal);
-        Assert.Contains("document.createElement(hasChildren?'details':'div')", html, StringComparison.Ordinal);
-        Assert.Contains("value.textContent=String(node.value)", html, StringComparison.Ordinal);
+        Assert.Contains("tree.className='protocol-tree tree-view'", html, StringComparison.Ordinal);
+        Assert.Contains("tree.setAttribute('role','tree')", html, StringComparison.Ordinal);
+        Assert.Contains("item.setAttribute('role','treeitem')", html, StringComparison.Ordinal);
+        Assert.Contains("group.setAttribute('role','group')", html, StringComparison.Ordinal);
+        Assert.Contains("let desiredExpanded=true", html, StringComparison.Ordinal);
+        Assert.Contains("safeProtocolText(node.name)", html, StringComparison.Ordinal);
+        Assert.Contains("code===0x061C||code===0x200E||code===0x200F||code===0x2028||code===0x2029", html, StringComparison.Ordinal);
+        Assert.Contains("protocolDisplayValue(node)", html, StringComparison.Ordinal);
+        Assert.Contains("Binary (${node.length} byte", html, StringComparison.Ordinal);
+        Assert.Contains("--protocol-kind:#d2a8ff", html, StringComparison.Ordinal);
+        Assert.Contains("--protocol-kind:#6639ba", html, StringComparison.Ordinal);
+        Assert.Contains("tree._restoreActive=restoreActive", html, StringComparison.Ordinal);
+        Assert.Contains("tree._restoreActive?.(hadFocus)", html, StringComparison.Ordinal);
+        Assert.Contains(".protocol-tree .tree-group>.tree-item>.tree-row::before", html, StringComparison.Ordinal);
+        Assert.Contains(".protocol-technical{", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("details.protocol-node", html, StringComparison.Ordinal);
         Assert.DoesNotContain(attack, html, StringComparison.Ordinal);
         Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);
 

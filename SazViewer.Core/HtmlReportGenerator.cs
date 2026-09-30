@@ -70,8 +70,8 @@ public sealed class HtmlReportGenerator
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
 <title>SAZ capture</title>
 <style>
-:root{color-scheme:light dark;--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--warn:#d29922;--selected:#1f6feb55;--hover:#1f2630}
-@media(prefers-color-scheme:light){:root{--bg:#fff;--panel:#f6f8fa;--panel2:#eaeef2;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--accent:#0969da;--warn:#9a6700;--selected:#ddf4ff;--hover:#f3f4f6}}
+:root{color-scheme:light dark;--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--warn:#d29922;--protocol-kind:#d2a8ff;--protocol-binary:#ffa657;--selected:#1f6feb55;--hover:#1f2630}
+@media(prefers-color-scheme:light){:root{--bg:#fff;--panel:#f6f8fa;--panel2:#eaeef2;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--accent:#0969da;--warn:#9a6700;--protocol-kind:#6639ba;--protocol-binary:#805000;--selected:#ddf4ff;--hover:#f3f4f6}}
 *{box-sizing:border-box}html{scrollbar-gutter:stable}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
 body.inspector-open{overflow:hidden}
 body.inspector-only main{display:none}
@@ -110,11 +110,11 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .tab-strip [role=tab]:disabled{color:#4b535c;cursor:not-allowed;opacity:.5}
 .tab-strip [role=tab]:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;z-index:1}
 .tab-panels{flex:1;min-height:0;overflow:auto;border:1px solid var(--line);border-top:none;background:var(--panel);padding:10px 12px}
-.tab-panel.hidden{display:none!important}.tab-empty{color:var(--muted);padding:14px 4px}
+.tab-panel.hidden{display:none!important}.tab-panel-mapi{height:100%;min-height:340px;display:flex;flex-direction:column;overflow:hidden}.tab-panel-mapi>.copy-toolbar,.tab-panel-mapi>.protocol-meta,.tab-panel-mapi>.warning{flex:none}.tab-panel-mapi>.protocol-block{flex:1}.tab-empty{color:var(--muted);padding:14px 4px}
 .format-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 6px}.format-meta .format-status{flex:1;min-width:180px}
 .captured-bytes{margin-top:8px}.captured-bytes summary{cursor:pointer;color:var(--accent)}
 .body-view{margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:#13233a}.session-meta pre{max-height:180px}
-.protocol-meta{margin-bottom:6px}.protocol-block{margin-top:6px}.protocol-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}.protocol-tree{overflow:visible;border:1px solid var(--line);padding:6px;background:var(--panel)}.protocol-node{margin-left:14px}.protocol-node>summary{display:flex;gap:7px;align-items:baseline}.protocol-field{display:flex;gap:7px;margin-left:16px;padding:2px 0}.protocol-offset{color:var(--muted);font:12px ui-monospace,Consolas,monospace}.protocol-value{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}.protocol-kind{color:var(--accent);font-size:12px}
+.protocol-meta{margin-bottom:4px}.protocol-block{margin:0;min-height:0;display:flex;flex-direction:column}.protocol-toolbar{position:sticky;top:0;z-index:2;display:flex;gap:5px;align-items:center;min-height:30px;margin:0;padding:3px 0 4px;background:var(--panel)}.protocol-toolbar button{padding:3px 8px}.protocol-load-status{margin-left:auto;color:var(--muted);font-size:11px}.protocol-tree{flex:1;min-height:240px;overflow:auto;border:1px solid var(--line);padding:3px 4px 8px;background:var(--panel);font:12px/1.35 ui-monospace,Consolas,monospace}.protocol-tree>.tree-item{min-width:max-content}.protocol-tree .tree-item{margin:0}.protocol-tree .tree-row{position:relative;display:grid;grid-template-columns:14px minmax(240px,1fr) max-content;gap:4px;align-items:baseline;min-height:20px;padding:1px 4px 1px 0;border-radius:2px}.protocol-tree .tree-row:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}.protocol-tree .tree-group{position:relative;margin-left:7px;padding-left:13px;border-left:1px dotted var(--muted)}.protocol-tree .tree-group>.tree-item>.tree-row::before{content:"";position:absolute;left:-13px;top:10px;width:11px;border-top:1px dotted var(--muted)}.protocol-tree .tree-caret{width:13px;height:16px;border:1px solid var(--line);border-radius:2px;text-align:center;line-height:13px;background:var(--panel2);color:var(--text);font-size:11px}.protocol-tree .tree-caret-leaf{visibility:hidden}.protocol-main{white-space:pre-wrap;overflow-wrap:anywhere}.protocol-name{color:var(--accent);font-weight:700}.protocol-separator{color:var(--muted)}.protocol-value{color:var(--text)}.protocol-value-binary{color:var(--protocol-binary)}.protocol-technical{color:var(--muted);white-space:nowrap;font-size:11px}.protocol-kind{color:var(--protocol-kind)}.protocol-tree-loading{color:var(--muted);font-style:italic;padding:3px 18px}
 .syn-key{color:#79c0ff}.syn-string{color:#a5d6ff}.syn-number{color:#ffa657}.syn-literal{color:#ff7b72}.syn-punct{color:#8b949e}.syn-tag{color:#7ee787}.syn-attr{color:#d2a8ff}.syn-comment{color:#8b949e;font-style:italic}.syn-value{color:#a5d6ff}
 .tree-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 6px}.view-toggle{display:flex;gap:2px}.view-toggle button[aria-pressed=true]{border-color:var(--accent);color:var(--text)}
 .copy-toolbar{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin:0 0 6px}.copy-toolbar button{padding:4px 9px}.copy-status{min-height:1.2em;color:var(--muted);font-size:12px}.copy-toolbar button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -248,50 +248,177 @@ function payloadFailureText(error,subject,alternative){
   }
   return `${subject} could not be loaded because its compressed report payload is corrupt, unsupported, or exceeds safety limits.${alternative}`;
 }
+function safeProtocolText(value){
+  let result='';
+  for(let index=0;index<value.length;index++){
+    const code=value.charCodeAt(index);
+    if(code===0){result+='\\0';continue}
+    if(code===9){result+='\\t';continue}
+    if(code===10){result+='\\n';continue}
+    if(code===13){result+='\\r';continue}
+    if(code<32||code===127||(code>=128&&code<=159)){
+      result+=code<=255?`\\x${code.toString(16).toUpperCase().padStart(2,'0')}`:`\\u${code.toString(16).toUpperCase().padStart(4,'0')}`;
+      continue;
+    }
+    if(code===0x061C||code===0x200E||code===0x200F||code===0x2028||code===0x2029
+      ||code===0xFEFF||(code>=0x202A&&code<=0x202E)||(code>=0x2066&&code<=0x2069)
+      ||(code>=0xD800&&code<=0xDFFF&&!((code<=0xDBFF)&&index+1<value.length&&value.charCodeAt(index+1)>=0xDC00&&value.charCodeAt(index+1)<=0xDFFF))){
+      result+=`\\u${code.toString(16).toUpperCase().padStart(4,'0')}`;
+      continue;
+    }
+    result+=value[index];
+    if(code>=0xD800&&code<=0xDBFF)result+=value[++index];
+  }
+  return result;
+}
+function protocolDisplayValue(node){
+  if(node.value===null||node.value===undefined)return null;
+  const text=String(node.value);
+  if(node.kind==='Raw'){
+    const match=/^([0-9A-Fa-f]*)(?: \.\.\. \[([0-9,]+) more bytes\])?$/.exec(text);
+    if(match){
+      const pairs=match[1].match(/../g)||[];
+      const suffix=match[2]?` \u2026 (${match[2]} more bytes)`:node.length>pairs.length?` \u2026 (${node.length-pairs.length} more bytes)`:'';
+      return{value:`Binary (${node.length} byte${node.length===1?'':'s'}): ${pairs.join(' ')}${suffix}`,binary:true};
+    }
+    return{value:`Binary (${node.length} byte${node.length===1?'':'s'}): ${safeProtocolText(text)}`,binary:true};
+  }
+  const semantic=/^0x([0-9A-Fa-f]+) \(([^()]+)\)$/.exec(text);
+  return{value:semantic?`${safeProtocolText(semantic[2])} = 0x${semantic[1].toUpperCase()}`:safeProtocolText(text),binary:false};
+}
 async function renderProtocolTree(host,generation){
-  if(host._protocolData)return host._protocolData;
+  if(host._protocolData&&host._protocolRendered)return host._protocolData;
   if(host._protocolPromise)return host._protocolPromise;
   host._protocolLoading=true;
+  host._protocolRendered=false;
   const copyButton=host.closest('[role="tabpanel"]')?.querySelector('.copy-button[data-copy-kind="mapi"]');
   if(copyButton){copyButton.disabled=true;copyButton.setAttribute('aria-disabled','true');copyButton.setAttribute('aria-busy','true')}
-  host._protocolPromise=(async()=>{
+  const buildToken={};host._protocolBuildToken=buildToken;
+  const promise=(async()=>{
    try{
-    const data=await decodeCompressedPayload(host,'mapi-protocol');
-    if(generation!==renderGeneration||host.closest('.tab-panel.hidden'))return;
+    const data=host._protocolData??await decodeCompressedPayload(host,'mapi-protocol');
+    if(generation!==renderGeneration||host._protocolBuildToken!==buildToken||host.closest('.tab-panel.hidden'))return;
     host._protocolData=data;
     const toolbar=document.createElement('div');toolbar.className='protocol-toolbar';
     const expand=document.createElement('button');expand.type='button';expand.textContent='Expand all';
     const collapse=document.createElement('button');collapse.type='button';collapse.textContent='Collapse all';
-    toolbar.append(expand,collapse);
-    const tree=document.createElement('div');tree.className='protocol-tree';tree.setAttribute('role','tree');
-    function addNode(node,parent){
-      const hasChildren=Array.isArray(node.children)&&node.children.length>0;
-      const element=document.createElement(hasChildren?'details':'div');
-      element.className=hasChildren?'protocol-node':'protocol-field';
-      const line=document.createElement(hasChildren?'summary':'span');
-      const name=document.createElement('b');name.textContent=node.name;line.append(name);
-      const kind=document.createElement('span');kind.className='protocol-kind';kind.textContent=node.kind;line.append(kind);
-      const offset=document.createElement('span');offset.className='protocol-offset';offset.textContent=`@${node.offset} +${node.length}`;line.append(offset);
-      if(node.value!==null&&node.value!==undefined){const value=document.createElement('span');value.className='protocol-value';value.textContent=String(node.value);line.append(value)}
-      element.append(line);
-      if(hasChildren)node.children.forEach(child=>addNode(child,element));
-      parent.append(element);
+    const status=document.createElement('span');status.className='protocol-load-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.textContent='Loading tree\u2026';
+    toolbar.append(expand,collapse,status);
+    const tree=document.createElement('div');tree.className='protocol-tree tree-view';tree.setAttribute('role','tree');tree.setAttribute('aria-label','MAPI protocol structure');
+    const loading=document.createElement('div');loading.className='protocol-tree-loading';loading.textContent='Expanding retained protocol nodes\u2026';tree.append(loading);
+    host.replaceChildren(toolbar,tree);
+    let desiredExpanded=true,activeItem=null,rendered=0;
+    const queue=[{node:data.root,parent:tree}];
+    function isVisible(item){
+      let current=item.parentElement;
+      while(current&&current!==tree){if(current.classList.contains('tree-group')&&current.hidden)return false;current=current.parentElement}
+      return true;
     }
-    addNode(data.root,tree);host.replaceChildren(toolbar,tree);
-    expand.addEventListener('click',()=>tree.querySelectorAll('details').forEach(item=>item.open=true));
-    collapse.addEventListener('click',()=>tree.querySelectorAll('details').forEach(item=>item.open=false));
-    if(copyButton){copyButton.disabled=false;copyButton.removeAttribute('aria-disabled');copyButton.removeAttribute('aria-busy')}
+    function visibleItems(){return [...tree.querySelectorAll('.tree-item')].filter(isVisible)}
+    function ownerItem(item){const group=item.parentElement;return group?.classList.contains('tree-group')?group.parentElement:null}
+    function setActive(item,focus){
+      if(!item)return;
+      if(activeItem&&activeItem!==item)activeItem.tabIndex=-1;
+      item.tabIndex=0;activeItem=item;if(focus)item.focus();
+    }
+    function restoreActive(focus){
+      if(activeItem&&isVisible(activeItem))return;
+      let candidate=activeItem;
+      while(candidate&&!isVisible(candidate))candidate=ownerItem(candidate);
+      setActive(candidate||visibleItems()[0],focus);
+    }
+    function toggle(item,expanded){
+      const group=item.querySelector(':scope>.tree-group');if(!group)return;
+      const next=expanded??item.getAttribute('aria-expanded')!=='true';
+      item.setAttribute('aria-expanded',String(next));group.hidden=!next;
+      const caret=item.querySelector(':scope>.tree-row>.tree-caret');if(caret)caret.textContent=next?'\u2212':'+';
+    }
+    function setExpanded(expanded){
+      const hadFocus=tree.contains(document.activeElement);desiredExpanded=expanded;
+      tree.querySelectorAll('.tree-item[aria-expanded]').forEach(item=>toggle(item,expanded));
+      if(!expanded)restoreActive(hadFocus);
+    }
+    tree._setDesiredExpanded=setExpanded;tree._restoreActive=restoreActive;host._setDesiredExpanded=setExpanded;
+    function handleKey(event,item){
+      if((event.key==='Enter'||event.key===' ')&&item.hasAttribute('aria-expanded')){event.preventDefault();toggle(item);return}
+      if(event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
+      const items=visibleItems(),index=items.indexOf(item);
+      if(event.key==='ArrowDown'&&index>=0&&index<items.length-1){event.preventDefault();setActive(items[index+1],true)}
+      else if(event.key==='ArrowUp'&&index>0){event.preventDefault();setActive(items[index-1],true)}
+      else if(event.key==='Home'&&items.length){event.preventDefault();setActive(items[0],true)}
+      else if(event.key==='End'&&items.length){event.preventDefault();setActive(items[items.length-1],true)}
+      else if(event.key==='ArrowRight'&&item.hasAttribute('aria-expanded')){
+        event.preventDefault();
+        if(item.getAttribute('aria-expanded')!=='true')toggle(item,true);
+        else{const child=item.querySelector(':scope>.tree-group>.tree-item');if(child)setActive(child,true)}
+      }else if(event.key==='ArrowLeft'){
+        const owner=ownerItem(item);
+        if(item.getAttribute('aria-expanded')==='true'){event.preventDefault();toggle(item,false)}
+        else if(owner){event.preventDefault();setActive(owner,true)}
+      }
+    }
+    function appendNode(node,parent){
+      if(!node||typeof node.name!=='string'||typeof node.kind!=='string'||!Array.isArray(node.children))throw new Error('invalid protocol node');
+      const hasChildren=node.children.length>0;
+      const item=document.createElement('div');item.className='tree-item protocol-tree-item';item.setAttribute('role','treeitem');item.tabIndex=-1;
+      if(hasChildren)item.setAttribute('aria-expanded',String(desiredExpanded));
+      const row=document.createElement('div');row.className='tree-row protocol-row';
+      const caret=document.createElement('span');caret.className='tree-caret'+(hasChildren?'':' tree-caret-leaf');caret.setAttribute('aria-hidden','true');caret.textContent=hasChildren?'\u2212':'\u00b7';
+      const main=document.createElement('span');main.className='protocol-main';
+      const name=document.createElement('span');name.className='protocol-name';name.textContent=safeProtocolText(node.name);main.append(name);
+      const display=protocolDisplayValue(node);
+      if(display){
+        const separator=document.createElement('span');separator.className='protocol-separator';separator.textContent=': ';
+        const value=document.createElement('span');value.className='protocol-value'+(display.binary?' protocol-value-binary':'');value.textContent=display.value;main.append(separator,value);
+      }
+      const technical=document.createElement('span');technical.className='protocol-technical';
+      const kind=document.createElement('span');kind.className='protocol-kind';kind.textContent=node.kind;
+      const location=document.createElement('span');location.textContent=` @${node.offset} +${node.length}`;
+      technical.append(kind,location);row.append(caret,main,technical);item.append(row);
+      item.setAttribute('aria-label',`${safeProtocolText(node.name)}${display?`: ${display.value}`:''}; ${node.kind}; offset ${node.offset}; length ${node.length}`);
+      if(hasChildren){
+        const group=document.createElement('div');group.className='tree-group';group.setAttribute('role','group');group.hidden=!desiredExpanded;item.append(group);
+        node.children.forEach(child=>queue.push({node:child,parent:group}));
+      }
+      parent.append(item);rendered++;
+      if(!activeItem)setActive(item,false);
+      row.addEventListener('click',event=>{event.stopPropagation();setActive(item,true);if(hasChildren)toggle(item)});
+      item.addEventListener('keydown',event=>{if(event.target===item)handleKey(event,item)});
+    }
+    expand.addEventListener('click',()=>setExpanded(true));
+    collapse.addEventListener('click',()=>setExpanded(false));
+    await new Promise(resolve=>{
+      function step(){
+        if(generation!==renderGeneration||host._protocolBuildToken!==buildToken||host.closest('.tab-panel.hidden')){
+          host._protocolBuildToken=null;resolve();return;
+        }
+        try{
+          let processed=0;
+          while(processed<150&&queue.length){const entry=queue.shift();appendNode(entry.node,entry.parent);processed++}
+        }catch(error){
+          host._protocolBuildToken=null;host._protocolRendered=true;tree.replaceChildren();
+          const warning=document.createElement('div');warning.className='warning';warning.textContent='Protocol tree could not be rendered because its decoded structure is invalid. Regenerate the report with the current SAZ Viewer.';tree.append(warning);
+          status.textContent='Tree unavailable';resolve();return;
+        }
+        status.textContent=queue.length?`Loading\u2026 ${rendered.toLocaleString()} nodes`:`${rendered.toLocaleString()} nodes`;
+        if(queue.length)requestAnimationFrame(step);
+        else{loading.remove();host._protocolBuildToken=null;host._protocolRendered=true;resolve()}
+      }
+      requestAnimationFrame(step);
+    });
+    if(copyButton&&host._protocolRendered){copyButton.disabled=false;copyButton.removeAttribute('aria-disabled');copyButton.removeAttribute('aria-busy')}
     return data;
   }catch(error){
     host.textContent=payloadFailureText(error,'Protocol tree',' Regenerate the report with the current SAZ Viewer.');
     host.className='protocol-block warning';
     if(copyButton){copyButton.disabled=true;copyButton.setAttribute('aria-disabled','true');copyButton.removeAttribute('aria-busy')}
   }finally{
-    host._protocolLoading=false;
+    if(host._protocolPromise===promise)host._protocolLoading=false;
   }
   })();
-  try{return await host._protocolPromise}
-  finally{host._protocolPromise=null}
+  host._protocolPromise=promise;
+  try{return await promise}
+  finally{if(host._protocolPromise===promise)host._protocolPromise=null}
 }
 function appendStatus(parent,text){
   const status=document.createElement('div');status.className='tree-status';status.setAttribute('role','treeitem');status.tabIndex=-1;status.textContent=text;
@@ -684,15 +811,18 @@ function highlightActiveSearchRoots(roots,query,matchClass){
   });
   return{matches,capped};
 }
+function expandedTreeCaret(item,expanded){return item.closest('.protocol-tree')?(expanded?'\u2212':'+'):(expanded?'\u25be':'\u25b8')}
 function snapshotValueTree(tree){
   const snapshot=[...tree.querySelectorAll('.tree-item[aria-expanded]')].map(item=>({item,expanded:item.getAttribute('aria-expanded')}));
   return()=>{
+    const hadFocus=tree.contains(document.activeElement);
     snapshot.forEach(entry=>{
       if(!entry.item.isConnected)return;
       entry.item.setAttribute('aria-expanded',entry.expanded);
       const group=entry.item.querySelector(':scope>.tree-group');if(group)group.hidden=entry.expanded!=='true';
-      const caret=entry.item.querySelector(':scope>.tree-row>.tree-caret');if(caret)caret.textContent=entry.expanded==='true'?'\u25be':'\u25b8';
+      const caret=entry.item.querySelector(':scope>.tree-row>.tree-caret');if(caret)caret.textContent=expandedTreeCaret(entry.item,entry.expanded==='true');
     });
+    tree._restoreActive?.(hadFocus);
   };
 }
 function revealValueTreeMatches(matches){
@@ -702,7 +832,7 @@ function revealValueTreeMatches(matches){
       if(item.hasAttribute('aria-expanded')){
         item.setAttribute('aria-expanded','true');
         const group=item.querySelector(':scope>.tree-group');if(group)group.hidden=false;
-        const caret=item.querySelector(':scope>.tree-row>.tree-caret');if(caret)caret.textContent='\u25be';
+        const caret=item.querySelector(':scope>.tree-row>.tree-caret');if(caret)caret.textContent=expandedTreeCaret(item,true);
       }
       item=item.parentElement?.closest('.tree-item');
     }
@@ -840,9 +970,10 @@ function setupHttpViewSearch(root,generation){
         const host=panel.querySelector('.protocol-block');
         if(host&&(host.dataset.compressedPayload||host._payloadData!==undefined))await renderProtocolTree(host,generation);
         if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
-        const details=[...panel.querySelectorAll('details.protocol-node')];
-        const roots=[...panel.querySelectorAll('.protocol-meta,.warning,.protocol-node>summary,.protocol-field')];
-        return{roots,snapshot:()=>snapshotDetails(details),reveal:revealDetailMatches};
+        const tree=host?.querySelector('.protocol-tree');
+        if(!tree)return{roots:[...panel.querySelectorAll('.protocol-meta,.warning')]};
+        const roots=[...panel.querySelectorAll('.protocol-meta,.warning'),...tree.querySelectorAll('.tree-row')];
+        return{roots,snapshot:()=>snapshotValueTree(tree),reveal:revealValueTreeMatches};
       }
       if(tab.dataset.tab==='raw'){
         const details=[...panel.querySelectorAll('details')];
@@ -1450,7 +1581,17 @@ function leaveInspectorOnlyMode(){
   cleanUrl.hash='';
   try{history.replaceState(null,'',cleanUrl.href)}catch{window.location.hash=''}
 }
-function closeInspector(){inspectorBody._clearHttpViewSearch?.();inspector.close()}
+function closeInspector(){
+  inspectorBody._clearHttpViewSearch?.();
+  inspectorBody.querySelectorAll('.protocol-block').forEach(host=>{
+    if(!host._protocolBuildToken)return;
+    host._protocolBuildToken=null;
+    host._protocolRendered=false;
+    host._protocolPromise=null;
+    host._protocolLoading=false;
+  });
+  inspector.close();
+}
 inspector.addEventListener('close',()=>{
   if(inspectorOnly)leaveInspectorOnlyMode();
   document.body.classList.remove('inspector-open');
@@ -2148,7 +2289,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
     {
         html.Append("<div role=\"tabpanel\" id=\"").Append(side).Append("-panel-").Append(key)
             .Append("\" aria-labelledby=\"").Append(side).Append("-tab-").Append(key)
-            .Append("\" tabindex=\"0\" class=\"tab-panel");
+            .Append("\" tabindex=\"0\" class=\"tab-panel tab-panel-").Append(key);
         if (!selected)
         {
             html.Append(" hidden");

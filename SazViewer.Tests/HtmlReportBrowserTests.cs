@@ -51,6 +51,7 @@ public sealed class HtmlReportBrowserTests
             await VerifyCopyModelFailureStatesAsync(browser, tempDirectory);
             await VerifyStructuralPayloadFailureStatesAsync(browser, reportPath);
             await VerifyAbandonedTreeStopsAndRebuildsAsync(browser, tempDirectory);
+            await VerifyLargeMapiTreeAsync(browser, tempDirectory);
         }
         finally
         {
@@ -59,6 +60,92 @@ public sealed class HtmlReportBrowserTests
                 Directory.Delete(tempDirectory, recursive: true);
             }
         }
+    }
+
+    private static async Task VerifyLargeMapiTreeAsync(IBrowser browser, string tempDirectory)
+    {
+            const int leafCount = 5_000;
+            var leaves = Enumerable.Range(0, leafCount)
+                .Select(index => MapiNode.Leaf(
+                    $"Field[{index}]",
+                    MapiNodeKind.Field,
+                    index * 4L,
+                    4,
+                    index == leafCount - 1 ? "LargeTreeNeedle" : index.ToString()))
+                .ToImmutableArray();
+            var root = new MapiNode("LargeRoot", MapiNodeKind.Array, 0, leafCount * 4L, null, leaves);
+            var protocol = new MapiMessageParse(
+                MapiDirection.Request,
+                root,
+                ImmutableArray<string>.Empty,
+                true,
+                leafCount * 4L,
+                leafCount * 4L);
+            var session = new HttpSession
+            {
+                Id = "large",
+                ArchiveOrder = 0,
+                Method = "POST",
+                Url = "https://example.test/mapi-large",
+                StatusCode = 200,
+                Request = Message("POST /mapi-large HTTP/1.1", "application/mapi-http", "binary")
+            };
+            session.Mapi = new MapiSession(
+                "large",
+                0,
+                MapiEndpoint.Mailbox,
+                "Execute",
+                "0",
+                false,
+                protocol,
+                null,
+                ImmutableArray<string>.Empty);
+            var report = new SazReport { SourceName = "large-mapi.saz" };
+            report.Sessions.Add(session);
+            var path = Path.Combine(tempDirectory, "large-mapi.html");
+            await File.WriteAllTextAsync(path, new HtmlReportGenerator().Generate(report));
+
+            var errors = new List<string>();
+            var page = await browser.NewPageAsync(new()
+            {
+                ViewportSize = new ViewportSize { Width = 1280, Height = 800 }
+            });
+            CaptureErrors(page, errors);
+            try
+            {
+                await page.AddInitScriptAsync(
+                    "const nativeFrame=requestAnimationFrame.bind(globalThis);globalThis.requestAnimationFrame=callback=>setTimeout(()=>nativeFrame(callback),50)");
+                await page.GotoAsync(new Uri(path).AbsoluteUri);
+                await page.Locator("#httpTable tbody tr").ClickAsync();
+                await Assertions.Expect(page.Locator(".protocol-load-status")).ToContainTextAsync("Loading");
+                await page.Locator("#inspectorClose").ClickAsync();
+                await page.WaitForTimeoutAsync(200);
+                var abandonedCount = await page.Locator("#request-panel-mapi .tree-item").CountAsync();
+                await page.WaitForTimeoutAsync(200);
+                Assert.Equal(abandonedCount, await page.Locator("#request-panel-mapi .tree-item").CountAsync());
+
+                var started = DateTime.UtcNow;
+                await page.Locator("#httpTable tbody tr").ClickAsync();
+                await Assertions.Expect(page.Locator(".protocol-load-status")).ToHaveTextAsync("5,001 nodes");
+                Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(15));
+                Assert.Equal(5_001, await page.Locator("#request-panel-mapi .tree-item").CountAsync());
+                Assert.Equal("true", await page.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
+
+                var search = page.Locator(".http-view-search-input");
+                await page.Locator("#request-panel-mapi")
+                    .GetByRole(AriaRole.Button, new() { Name = "Collapse all" })
+                    .ClickAsync();
+                await search.FillAsync("LargeTreeNeedle");
+                await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+                Assert.Equal("true", await page.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
+                await search.FillAsync("");
+                Assert.Equal("false", await page.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
+                Assert.Empty(errors);
+            }
+            finally
+            {
+                await page.CloseAsync();
+            }
     }
 
     private static async Task VerifyHttpActiveViewSearchAsync(IBrowser browser, string reportPath)
@@ -207,18 +294,65 @@ public sealed class HtmlReportBrowserTests
             await page.Locator("#inspectorNext").ClickAsync();
             search = page.Locator(".http-view-search-input");
             status = page.Locator(".http-view-search-status");
-            var mapiRoot = page.Locator("#request-panel-mapi details.protocol-node").First;
+            var mapiRoot = page.Locator("#request-panel-mapi .protocol-tree>.tree-item[aria-expanded]").First;
+            await Assertions.Expect(mapiRoot).ToHaveAttributeAsync("aria-expanded", "true");
+            await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-technical").First)
+                .ToContainTextAsync("Operation @0 +8");
+            Assert.Equal(7, await page.Locator("#request-panel-mapi .tree-item[aria-expanded=true]").CountAsync());
+            await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-value").Filter(new() { HasText = "RopLogon = 0xFE" }))
+                .ToHaveCountAsync(1);
+            await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-value").Filter(new() { HasText = "Straße雪" }))
+                .ToHaveCountAsync(1);
+            await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-value").Filter(new() { HasText = @"line\0\x1B\r\n" }))
+                .ToHaveCountAsync(1);
+            await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-value").Filter(new() { HasText = @"\u061C\u200E\u200F\u2028\u2029\u202A\u2066" }))
+                .ToHaveCountAsync(1);
+            await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-value-binary"))
+                .ToHaveTextAsync("Binary (6 bytes): 00 FF 1B 7F … (2 more bytes)");
+            var mapiText = await page.Locator("#request-panel-mapi .protocol-tree").InnerTextAsync();
+            Assert.DoesNotContain('\0', mapiText);
+            Assert.DoesNotContain('\u001B', mapiText);
+            Assert.DoesNotContain('\uFFFD', mapiText);
+            Assert.DoesNotContain('\u061C', mapiText);
+            Assert.DoesNotContain('\u200E', mapiText);
+            Assert.DoesNotContain('\u200F', mapiText);
+            Assert.DoesNotContain('\u2028', mapiText);
+            Assert.DoesNotContain('\u2029', mapiText);
+            Assert.DoesNotContain('\u202A', mapiText);
+            Assert.DoesNotContain('\u2066', mapiText);
+            Assert.Contains("Execute; Operation; offset 0; length 8", await mapiRoot.GetAttributeAsync("aria-label"));
+            await mapiRoot.FocusAsync();
+            await page.Keyboard.PressAsync("End");
+            Assert.Contains("RawBytes", await page.Locator("#request-panel-mapi .tree-item:focus").GetAttributeAsync("aria-label"));
+            await page.Keyboard.PressAsync("Home");
+            await Assertions.Expect(mapiRoot).ToBeFocusedAsync();
+            await page.Keyboard.PressAsync(" ");
+            Assert.Equal("false", await mapiRoot.GetAttributeAsync("aria-expanded"));
+            await page.Keyboard.PressAsync("Enter");
+            Assert.Equal("true", await mapiRoot.GetAttributeAsync("aria-expanded"));
             await page.Locator("#request-panel-mapi")
                 .GetByRole(AriaRole.Button, new() { Name = "Collapse all" })
                 .ClickAsync();
-            Assert.False(await mapiRoot.EvaluateAsync<bool>("details=>details.open"));
+            Assert.Equal("false", await mapiRoot.GetAttributeAsync("aria-expanded"));
             await search.FillAsync("propertyvalue");
             await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
-            Assert.True(await mapiRoot.EvaluateAsync<bool>("details=>details.open"));
+            Assert.Equal("true", await mapiRoot.GetAttributeAsync("aria-expanded"));
+            var matchingMapiRow = page.Locator("#request-panel-mapi .protocol-row:has(.http-search-match-current)");
+            var matchingMapiItem = page.Locator("#request-panel-mapi .tree-item[aria-label^=\"PropertyValue:\"]");
+            await matchingMapiRow.ClickAsync();
+            Assert.Equal("0", await matchingMapiItem.GetAttributeAsync("tabindex"));
             await search.FillAsync("");
-            Assert.False(await mapiRoot.EvaluateAsync<bool>("details=>details.open"));
+            Assert.Equal("false", await mapiRoot.GetAttributeAsync("aria-expanded"));
+            Assert.Equal("0", await mapiRoot.GetAttributeAsync("tabindex"));
+            Assert.Equal("-1", await matchingMapiItem.GetAttributeAsync("tabindex"));
             Assert.Equal(ExpectedMapi(), await CopyAndReadAsync(page, "request-panel-mapi"));
             Assert.Equal(0, await page.Locator("#request-panel-mapi input[placeholder=\"Search protocol fields...\"]").CountAsync());
+            await page.SetViewportSizeAsync(480, 800);
+            Assert.True(await page.Locator("#request-panel-mapi .protocol-tree").EvaluateAsync<bool>(
+                "tree=>{const box=tree.getBoundingClientRect();return box.left>=0&&box.right<=innerWidth&&tree.clientWidth>0}"));
+            Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>(
+                "dialog=>dialog.scrollWidth<=dialog.clientWidth"));
+            await page.SetViewportSizeAsync(1280, 800);
 
             await page.Locator("#inspectorPrev").ClickAsync();
             await page.Locator("#inspectorPrev").ClickAsync();
@@ -682,6 +816,10 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal("2 of 2", await popup.Locator("#inspectorPosition").InnerTextAsync());
             Assert.Equal("true", await popup.Locator("#primary-tab-request").GetAttributeAsync("aria-selected"));
             Assert.Equal("true", await popup.Locator("#request-tab-mapi").GetAttributeAsync("aria-selected"));
+            await popup.Locator("#request-panel-mapi .protocol-tree").WaitForAsync();
+            Assert.Equal("true", await popup.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
+            await Assertions.Expect(popup.Locator("#request-panel-mapi .protocol-value-binary"))
+                .ToContainTextAsync("Binary (6 bytes)");
             Assert.True(await popup.Locator("#inspectorNext").IsDisabledAsync());
             await popup.Locator("#inspectorPrev").ClickAsync();
             Assert.Equal("1 of 2", await popup.Locator("#inspectorPosition").InnerTextAsync());
@@ -1631,7 +1769,17 @@ public sealed class HtmlReportBrowserTests
     private static string ExpectedMapi() =>
         "MAPI protocol (complete; 8 of 8 bytes)\n" +
         "Execute [Operation] @0 +8\n" +
-        "  PropertyValue [Property] @4 +4 = safe";
+        "  ExecuteRequestBody [Structure] @0 +8\n" +
+        "    RopBuffer [Structure] @0 +8\n" +
+        "      Buffers [Array] @0 +8\n" +
+        "        ExtendedBuffer [Structure] @0 +8\n" +
+        "          Payload [Structure] @0 +8\n" +
+        "            RopsList [Array] @0 +8\n" +
+        "              PropertyValue [Property] @4 +4 = safe\n" +
+        "              RopId [Field] @4 +1 = 0xFE (RopLogon)\n" +
+        "              UnicodeText [Field] @5 +2 = Straße雪\n" +
+        "              ControlledText [Field] @6 +2 = line\0\u001B\r\n\u061C\u200E\u200F\u2028\u2029\u202A\u2066\n" +
+        "              RawBytes [Raw] @8 +6 = 00FF1B7F ... [2 more bytes]";
 
     private static string ExpectedRequestRaw() =>
         "Original headers\n" +
@@ -1690,7 +1838,61 @@ public sealed class HtmlReportBrowserTests
             0,
             8,
             null,
-            [MapiNode.Leaf("PropertyValue", MapiNodeKind.Property, 4, 4, "safe")]);
+            [
+                new MapiNode(
+                    "ExecuteRequestBody",
+                    MapiNodeKind.Structure,
+                    0,
+                    8,
+                    null,
+                    [
+                        new MapiNode(
+                            "RopBuffer",
+                            MapiNodeKind.Structure,
+                            0,
+                            8,
+                            null,
+                            [
+                                new MapiNode(
+                                    "Buffers",
+                                    MapiNodeKind.Array,
+                                    0,
+                                    8,
+                                    null,
+                                    [
+                                        new MapiNode(
+                                            "ExtendedBuffer",
+                                            MapiNodeKind.Structure,
+                                            0,
+                                            8,
+                                            null,
+                                            [
+                                                new MapiNode(
+                                                    "Payload",
+                                                    MapiNodeKind.Structure,
+                                                    0,
+                                                    8,
+                                                    null,
+                                                    [
+                                                        new MapiNode(
+                                                            "RopsList",
+                                                            MapiNodeKind.Array,
+                                                            0,
+                                                            8,
+                                                            null,
+                                                            [
+                                                                MapiNode.Leaf("PropertyValue", MapiNodeKind.Property, 4, 4, "safe"),
+                                                                MapiNode.Leaf("RopId", MapiNodeKind.Field, 4, 1, "0xFE (RopLogon)"),
+                                                                MapiNode.Leaf("UnicodeText", MapiNodeKind.Field, 5, 2, "Straße雪"),
+                                                                MapiNode.Leaf("ControlledText", MapiNodeKind.Field, 6, 2, "line\0\u001B\r\n\u061C\u200E\u200F\u2028\u2029\u202A\u2066"),
+                                                                MapiNode.Leaf("RawBytes", MapiNodeKind.Raw, 8, 6, "00FF1B7F ... [2 more bytes]")
+                                                            ])
+                                                    ])
+                                            ])
+                                    ])
+                            ])
+                    ])
+            ]);
         var protocol = new MapiMessageParse(
             MapiDirection.Request,
             protocolRoot,
