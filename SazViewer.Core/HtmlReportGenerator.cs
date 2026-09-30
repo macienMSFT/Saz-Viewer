@@ -128,11 +128,13 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .websocket-inspector{flex:1;min-height:0;display:flex;flex-direction:column;padding:10px 14px}.ws-layout{flex:1;min-height:0;display:grid;grid-template-columns:minmax(300px,38%) minmax(0,1fr);gap:10px}
 .ws-traffic-pane,.ws-detail-pane{min-width:0;min-height:0;display:flex;flex-direction:column;border:1px solid var(--line);background:var(--panel)}.ws-pane-heading{font-size:14px;padding:8px 10px;margin:0;border-bottom:1px solid var(--line)}
+.ws-search-controls{display:flex;align-items:center;gap:8px;padding:6px;border-bottom:1px solid var(--line)}.ws-search-controls input{min-width:0;width:100%;padding:5px 8px}.ws-search-status{flex:none;color:var(--muted);font-size:12px;white-space:nowrap}
 .ws-message-scroll{flex:1;min-height:0;overflow:auto}.ws-message-tracks{display:grid;grid-template-columns:max-content max-content max-content minmax(180px,1fr);min-width:100%}
 .ws-message-header,.ws-message-list,.ws-message-row{display:grid;grid-template-columns:subgrid;grid-column:1/-1}
 .ws-message-header{position:sticky;top:0;z-index:1;background:var(--panel2);font-size:12px;font-weight:600}.ws-message-header>span{padding:3px 5px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
 .ws-message-list{min-height:0}.ws-message-row{width:auto;min-width:0;text-align:left;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:0;background:var(--bg);color:var(--text);font:12px/1.25 ui-monospace,Consolas,monospace}
 .ws-message-row>span{min-width:0;padding:3px 5px;border-right:1px solid var(--line);overflow:hidden}.ws-message-row:hover{background:var(--hover)}.ws-message-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;z-index:1}.ws-message-row[aria-selected=true]{background:var(--selected);box-shadow:inset 3px 0 var(--accent)}
+.ws-message-row.ws-filtered{height:0;min-height:0;border:0;visibility:hidden;overflow:hidden}.ws-message-empty{grid-column:1/-1;padding:14px;color:var(--muted);text-align:center}
 .ws-id,.ws-type,.ws-body{white-space:nowrap}.ws-body{text-align:right;font-variant-numeric:tabular-nums}.ws-body-truncated{color:var(--warn);font-weight:700}.ws-client .ws-arrow{color:#58a6ff}.ws-server .ws-arrow{color:#3fb950}.ws-unknown .ws-arrow{color:var(--warn)}.ws-arrow{font-size:16px;font-weight:800;line-height:1}.ws-message-preview{white-space:nowrap;text-overflow:ellipsis}
 .ws-detail-content{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 10px 10px}.ws-detail-content>.tab-panels{overflow:auto}.ws-detail-summary{padding:7px 0;color:var(--muted)}.ws-loading{padding:20px;color:var(--muted)}
 @media(max-width:900px){main{padding:2px}.ws-layout{grid-template-columns:1fr;grid-template-rows:minmax(180px,38%) minmax(0,1fr)}}
@@ -629,23 +631,60 @@ async function renderWebSocketInspector(host,generation){
     if(messages.some(message=>!message||typeof message!=='object'||typeof message.direction!=='string'||typeof message.type!=='string'||typeof message.raw!=='string'||!Array.isArray(message.frames))){
       throw new Error('WebSocket message data has an invalid format');
     }
+    const searchKeys=messages.map(message=>message.type==='Text'&&typeof message.text==='string'?message.text.toLowerCase():'');
+    const hasTruncatedSearchablePayload=messages.some((message,index)=>message.isPayloadTruncated&&searchKeys[index]);
     const layout=wsElement('div','ws-layout');
     const traffic=wsElement('section','ws-traffic-pane');traffic.setAttribute('aria-label','Chronological WebSocket traffic');
     traffic.append(wsElement('h3','ws-pane-heading','WebSocket traffic'));
     if(data.omittedMessages>0)traffic.append(wsElement('div','warning',`${data.omittedMessages} additional message(s) were omitted by the report safety limit.`));
+    const searchHelpId=`ws-search-help-${generation}`;
+    const searchHelp=wsElement('span','sr-only',hasTruncatedSearchablePayload
+      ?'Searches retained decoded text and JSON payload content only. Binary payloads and bytes omitted by safety truncation are not searched.'
+      :'Searches retained decoded text and JSON payload content only. Binary payloads are not searched.');
+    searchHelp.id=searchHelpId;
+    const search=wsElement('input','ws-payload-search');search.type='search';search.maxLength=4096;
+    search.placeholder='Search WebSocket payloads...';search.setAttribute('aria-label','Search WebSocket payloads');
+    search.setAttribute('aria-describedby',searchHelpId);search.title=searchHelp.textContent;
+    const searchStatus=wsElement('span','ws-search-status');searchStatus.setAttribute('role','status');searchStatus.setAttribute('aria-live','polite');
+    const searchControls=wsElement('div','ws-search-controls');searchControls.append(search,searchStatus,searchHelp);traffic.append(searchControls);
     const scroll=wsElement('div','ws-message-scroll');
     const grid=wsElement('div','ws-message-tracks');
     const header=wsElement('div','ws-message-header');header.setAttribute('role','row');
     ['ID','Type','Body','Preview'].forEach(label=>{const cell=wsElement('span','',label);cell.setAttribute('role','columnheader');header.append(cell)});
     const list=wsElement('div','ws-message-list');list.setAttribute('role','listbox');list.setAttribute('aria-label','WebSocket logical messages');
+    const empty=wsElement('div','ws-message-empty hidden','No WebSocket messages match this payload search.');
     const detail=wsElement('section','ws-detail-pane');detail.setAttribute('aria-label','Selected WebSocket message');
-    grid.append(header,list);scroll.append(grid);traffic.append(scroll);layout.append(traffic,detail);host.replaceChildren(layout);
+    list.append(empty);grid.append(header,list);scroll.append(grid);traffic.append(scroll);layout.append(traffic,detail);host.replaceChildren(layout);
     const rows=[];
+    let visibleIndices=[];
+    let selectedIndex=-1;
     function select(index,focus){
-      if(index<0||index>=messages.length)return;
+      if(index<0||index>=messages.length||!visibleIndices.includes(index))return;
+      selectedIndex=index;
       rows.forEach((row,rowIndex)=>{const selected=rowIndex===index;row.setAttribute('aria-selected',String(selected));row.tabIndex=selected?0:-1});
       renderWebSocketMessageDetail(detail,messages[index],generation);
       if(focus)rows[index].focus();
+    }
+    function showEmptyDetail(){
+      selectedIndex=-1;
+      rows.forEach(row=>{row.setAttribute('aria-selected','false');row.tabIndex=-1});
+      detail.replaceChildren(
+        wsElement('h3','ws-pane-heading','Selected WebSocket message'),
+        wsElement('div','warning','No WebSocket messages match this payload search.'));
+    }
+    function applySearch(){
+      const query=search.value.trim().toLowerCase();
+      visibleIndices=[];
+      rows.forEach((row,index)=>{
+        const visible=!query||searchKeys[index].includes(query);
+        row.classList.toggle('ws-filtered',!visible);
+        row.setAttribute('aria-hidden',String(!visible));
+        if(visible)visibleIndices.push(index);
+      });
+      empty.classList.toggle('hidden',visibleIndices.length!==0);
+      searchStatus.textContent=`${visibleIndices.length} of ${messages.length} messages`;
+      if(!visibleIndices.length)showEmptyDetail();
+      else if(!visibleIndices.includes(selectedIndex))select(visibleIndices[0],false);
     }
     messages.forEach((message,index)=>{
       const direction=message.direction==='Client'?'Client to server':message.direction==='Server'?'Server to client':'Unknown direction';
@@ -664,18 +703,20 @@ async function renderWebSocketInspector(host,generation){
       row.append(idCell,typeCell,bodyCell,preview);
       row.addEventListener('click',()=>select(index,false));
       row.addEventListener('keydown',event=>{
+        const position=visibleIndices.indexOf(index);
         let target=index;
-        if(event.key==='ArrowDown')target=Math.min(rows.length-1,index+1);
-        else if(event.key==='ArrowUp')target=Math.max(0,index-1);
-        else if(event.key==='Home')target=0;
-        else if(event.key==='End')target=rows.length-1;
+        if(event.key==='ArrowDown')target=visibleIndices[Math.min(visibleIndices.length-1,position+1)];
+        else if(event.key==='ArrowUp')target=visibleIndices[Math.max(0,position-1)];
+        else if(event.key==='Home')target=visibleIndices[0];
+        else if(event.key==='End')target=visibleIndices[visibleIndices.length-1];
         else if(event.key==='Enter'||event.key===' '){event.preventDefault();select(index,false);return}
         else return;
         event.preventDefault();select(target,true);
       });
       rows.push(row);list.append(row);
     });
-    if(messages.length)select(0,false);
+    search.addEventListener('input',applySearch);
+    if(messages.length)applySearch();
     else detail.append(wsElement('div','warning','No WebSocket logical messages are available for this session.'));
     host._wsRendered=true;
   }catch(error){

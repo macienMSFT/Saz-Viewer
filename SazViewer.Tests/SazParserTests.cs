@@ -226,7 +226,7 @@ public sealed class SazParserTests
     }
 
     [Fact]
-    public void TruncatedWebSocketPreviewDoesNotRejectSplitUtf8Character()
+    public void TruncatedWebSocketPayloadKeepsValidUtf8Prefix()
     {
         var text = new string('a', (1024 * 1024) - 10) + "\u20AC" + new string('b', 5_000);
         var frame = UnmaskedTextFrame(text);
@@ -237,10 +237,36 @@ public sealed class SazParserTests
 
         var message = Assert.Single(new SazParser().Parse(saz).WebSocketMessages);
 
-        Assert.StartsWith("00000000  61 61", message.Preview, StringComparison.Ordinal);
-        Assert.Null(message.Text);
+        Assert.StartsWith(new string('a', 32), message.Preview, StringComparison.Ordinal);
+        Assert.NotNull(message.Text);
+        Assert.Equal(1_048_574, message.Text.Length);
+        Assert.Contains("\u20AC", message.Text, StringComparison.Ordinal);
+        Assert.EndsWith(new string('b', 7), message.Text, StringComparison.Ordinal);
         Assert.Contains("retained payload is limited", message.Warning, StringComparison.Ordinal);
         Assert.True(message.IsPayloadTruncated);
+        Assert.DoesNotContain("not valid UTF-8", message.Warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AggregateTruncationKeepsSearchableValidUtf8Prefix()
+    {
+        var firstPayload = Bytes(new string('a', 600_000));
+        var secondPayload = Bytes(new string('b', 448_574) + "\u20AC" + "omitted");
+        using var saz = Fixture(
+            ("raw/1_c.txt", Bytes("GET /socket HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/1_w.txt", WebSocketCapture(
+                ("Response-Length", "1", "2024-05-01T12:00:00Z", ExtendedFrame(1, final: false, firstPayload)),
+                ("Response-Length", "2", "2024-05-01T12:00:01Z", ExtendedFrame(0, final: true, secondPayload)))));
+
+        var message = Assert.Single(new SazParser().Parse(saz).WebSocketMessages);
+
+        Assert.True(message.IsPayloadTruncated);
+        Assert.NotNull(message.Text);
+        Assert.Equal(1_048_574, message.Text.Length);
+        Assert.StartsWith(new string('a', 32), message.Text, StringComparison.Ordinal);
+        Assert.EndsWith(new string('b', 32), message.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\u20AC", message.Text, StringComparison.Ordinal);
+        Assert.Contains("retained for display/copy is limited", message.Warning, StringComparison.Ordinal);
         Assert.DoesNotContain("not valid UTF-8", message.Warning, StringComparison.Ordinal);
     }
 
@@ -462,6 +488,16 @@ public sealed class SazParserTests
         {
             frame[offset + index] = masked ? (byte)(payload[index] ^ key[index % key.Length]) : payload[index];
         }
+        return frame;
+    }
+
+    private static byte[] ExtendedFrame(int opcode, bool final, byte[] payload)
+    {
+        var frame = new byte[10 + payload.Length];
+        frame[0] = (byte)((final ? 0x80 : 0) | opcode);
+        frame[1] = 127;
+        BinaryPrimitives.WriteUInt64BigEndian(frame.AsSpan(2, 8), (ulong)payload.Length);
+        payload.CopyTo(frame, 10);
         return frame;
     }
 

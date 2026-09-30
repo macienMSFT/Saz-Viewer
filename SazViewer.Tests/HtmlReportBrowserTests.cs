@@ -17,7 +17,9 @@ public sealed class HtmlReportBrowserTests
         kind = "update",
         items = new[] { 1, 2 },
         safe = true,
-        detail = new string('x', 6550)
+        detail = new string('x', 6550),
+        searchTail = "NeedleBeyondPreview",
+        attack = InjectionText
     });
 
     [WindowsEdgeFact]
@@ -47,6 +49,84 @@ public sealed class HtmlReportBrowserTests
             await VerifyCopyModelFailureStatesAsync(browser, tempDirectory);
             await VerifyStructuralPayloadFailureStatesAsync(browser, reportPath);
             await VerifyAbandonedTreeStopsAndRebuildsAsync(browser, tempDirectory);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [WindowsEdgeFact]
+    public async Task WebSocketPayloadSearchHandlesFiveThousandMessagesWithinDisplayBound()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), $"saz viewer ws search {Guid.NewGuid():N}");
+        var reportPath = Path.Combine(tempDirectory, "large websocket report.html");
+        try
+        {
+            Directory.CreateDirectory(tempDirectory);
+            var report = new SazReport { SourceName = "large-websocket-search.saz" };
+            report.Sessions.Add(
+                new HttpSession
+                {
+                    Id = "1",
+                    ArchiveOrder = 0,
+                    Method = "GET",
+                    Url = "wss://example.test/large",
+                    StatusCode = 101
+                });
+            for (var index = 0; index < 5_000; index++)
+            {
+                var text = index == 4_999 ? "unique retained payload needle" : $"common payload {index}";
+                var payload = Encoding.UTF8.GetBytes(text);
+                report.WebSocketMessages.Add(
+                    new WebSocketMessage
+                    {
+                        SessionId = "1",
+                        MessageIndex = index,
+                        RecordIndex = index,
+                        Direction = index % 2 == 0 ? "Client" : "Server",
+                        Type = "Text",
+                        PayloadLength = payload.Length,
+                        Preview = text,
+                        Text = text,
+                        IsComplete = true,
+                        IsDecoded = true,
+                        Payload = payload
+                    });
+            }
+            await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(report));
+
+            using var playwright = await Playwright.CreateAsync();
+            await using var browser = await playwright.Chromium.LaunchAsync(
+                new BrowserTypeLaunchOptions { Channel = "msedge", Headless = true });
+            var page = await browser.NewPageAsync();
+            var errors = new List<string>();
+            CaptureErrors(page, errors);
+            try
+            {
+                await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+                await page.Locator("#httpTable tbody tr[data-websocket=\"true\"]").ClickAsync();
+                await page.Locator(".ws-payload-search").WaitForAsync(new() { Timeout = 10_000 });
+                Assert.Equal(5_000, await page.Locator(".ws-message-row").CountAsync());
+                Assert.Equal("5000 of 5000 messages", await page.Locator(".ws-search-status").InnerTextAsync());
+
+                await page.Locator(".ws-payload-search").FillAsync("UNIQUE RETAINED PAYLOAD NEEDLE");
+                await Assertions.Expect(page.Locator(".ws-search-status"))
+                    .ToHaveTextAsync("1 of 5000 messages", new() { Timeout = 10_000 });
+                Assert.Equal("\u2193 5000", await page.Locator(".ws-message-row:not(.ws-filtered) .ws-id").InnerTextAsync());
+
+                await page.Locator(".ws-payload-search").FillAsync("  ");
+                await Assertions.Expect(page.Locator(".ws-search-status"))
+                    .ToHaveTextAsync("5000 of 5000 messages", new() { Timeout = 10_000 });
+                Assert.Empty(errors);
+            }
+            finally
+            {
+                await page.CloseAsync();
+            }
         }
         finally
         {
@@ -366,8 +446,11 @@ public sealed class HtmlReportBrowserTests
             Assert.Contains("00 FF 10 20", await messages.Nth(2).Locator(".ws-message-preview").InnerTextAsync());
             Assert.Equal("Invalid", await messages.Nth(4).Locator(".ws-type").InnerTextAsync());
             Assert.Equal("\u2191 10", await messages.Nth(9).Locator(".ws-id").InnerTextAsync());
-            Assert.Equal("Partial", await messages.Nth(9).Locator(".ws-type").InnerTextAsync());
+            Assert.Equal("Partial", await messages.Nth(7).Locator(".ws-type").InnerTextAsync());
+            Assert.Equal("Text", await messages.Nth(9).Locator(".ws-type").InnerTextAsync());
             Assert.Equal("1,234,567*", await messages.Nth(9).Locator(".ws-body").InnerTextAsync());
+            var widthsBeforeSearch = await page.Locator(".ws-message-header>span").EvaluateAllAsync<float[]>(
+                "cells=>cells.map(cell=>cell.getBoundingClientRect().width)");
             Assert.True(await page.Locator(".ws-message-tracks").EvaluateAsync<bool>(
                 @"grid=>{
                   const header=grid.querySelector('.ws-message-header');
@@ -426,6 +509,59 @@ public sealed class HtmlReportBrowserTests
                   return contained&&scrollable;
                 }"));
 
+            var search = page.Locator(".ws-payload-search");
+            Assert.Equal("Search WebSocket payloads", await search.GetAttributeAsync("aria-label"));
+            Assert.Contains("retained decoded text and JSON payload content", await search.GetAttributeAsync("title"));
+            Assert.Contains("bytes omitted by safety truncation", await search.GetAttributeAsync("title"));
+            Assert.Equal("10 of 10 messages", await page.Locator(".ws-search-status").InnerTextAsync());
+            Assert.Equal("polite", await page.Locator(".ws-search-status").GetAttributeAsync("aria-live"));
+
+            await search.FillAsync("NEEDLEBEYONDPREVIEW");
+            Assert.Equal(1, await page.Locator(".ws-message-row:not(.ws-filtered)").CountAsync());
+            Assert.Equal("1 of 10 messages", await page.Locator(".ws-search-status").InnerTextAsync());
+            Assert.Equal("true", await messages.First.GetAttributeAsync("aria-selected"));
+            Assert.True(await search.EvaluateAsync<bool>("input=>document.activeElement===input"));
+            Assert.False(await page.EvaluateAsync<bool>("() => Boolean(globalThis.pwned)"));
+            var widthsAfterSearch = await page.Locator(".ws-message-header>span").EvaluateAllAsync<float[]>(
+                "cells=>cells.map(cell=>cell.getBoundingClientRect().width)");
+            Assert.Equal(widthsBeforeSearch.Length, widthsAfterSearch.Length);
+            for (var column = 0; column < widthsBeforeSearch.Length; column++)
+            {
+                Assert.InRange(Math.Abs(widthsBeforeSearch[column] - widthsAfterSearch[column]), 0, 0.75);
+            }
+            await search.FillAsync("ONERROR=GLOBALTHIS");
+            Assert.Equal("1 of 10 messages", await page.Locator(".ws-search-status").InnerTextAsync());
+            Assert.False(await page.EvaluateAsync<bool>("() => Boolean(globalThis.pwned)"));
+
+            await search.FillAsync("shared");
+            Assert.Equal(2, await page.Locator(".ws-message-row:not(.ws-filtered)").CountAsync());
+            Assert.Equal("2 of 10 messages", await page.Locator(".ws-search-status").InnerTextAsync());
+            Assert.Equal("true", await messages.Nth(5).GetAttributeAsync("aria-selected"));
+            await messages.Nth(5).FocusAsync();
+            await page.Keyboard.PressAsync("ArrowDown");
+            Assert.Equal("true", await messages.Nth(6).GetAttributeAsync("aria-selected"));
+            await search.FillAsync("beta");
+            Assert.Equal("true", await messages.Nth(6).GetAttributeAsync("aria-selected"));
+            Assert.True(await search.EvaluateAsync<bool>("input=>document.activeElement===input"));
+            await search.FillAsync("alpha");
+            Assert.Equal("true", await messages.Nth(5).GetAttributeAsync("aria-selected"));
+            Assert.True(await search.EvaluateAsync<bool>("input=>document.activeElement===input"));
+
+            foreach (var excludedQuery in new[] { "00 ff", "1,234,567", "invalid synthetic frame", "client to server" })
+            {
+                await search.FillAsync(excludedQuery);
+                Assert.Equal("0 of 10 messages", await page.Locator(".ws-search-status").InnerTextAsync());
+                Assert.Equal(0, await page.Locator(".ws-message-row:not(.ws-filtered)").CountAsync());
+                Assert.True(await page.Locator(".ws-message-empty").IsVisibleAsync());
+                Assert.Contains("No WebSocket messages match", await page.Locator(".ws-detail-pane").InnerTextAsync());
+                Assert.Equal(0, await page.Locator(".ws-detail-content").CountAsync());
+            }
+
+            await search.FillAsync("   ");
+            Assert.Equal("10 of 10 messages", await page.Locator(".ws-search-status").InnerTextAsync());
+            Assert.Equal(10, await page.Locator(".ws-message-row:not(.ws-filtered)").CountAsync());
+            Assert.Equal("true", await messages.First.GetAttributeAsync("aria-selected"));
+
             Assert.Equal("true", await page.Locator("[role=tab][data-tab=json]").GetAttributeAsync("aria-selected"));
             await page.Locator(".ws-detail-pane .tree-item").First.WaitForAsync();
             var expectedJson = new BodyFormatter().Format(
@@ -463,6 +599,7 @@ public sealed class HtmlReportBrowserTests
             Assert.NotNull(binaryRaw);
             Assert.Contains("00 FF 10 20", binaryRaw.Replace("  ", " ", StringComparison.Ordinal));
 
+            await search.FillAsync("shared");
             await page.Locator("#inspectorPrev").ClickAsync();
             Assert.True(await page.Locator(".primary-tab-strip").IsVisibleAsync());
             Assert.Equal("true", await page.Locator("#primary-tab-request").GetAttributeAsync("aria-selected"));
@@ -471,6 +608,8 @@ public sealed class HtmlReportBrowserTests
             await page.Locator(".ws-message-row").First.WaitForAsync();
             Assert.Equal("inspectorClose", await page.EvaluateAsync<string>(
                 "()=>document.activeElement?.id||''"));
+            Assert.Equal("", await page.Locator(".ws-payload-search").InputValueAsync());
+            Assert.Equal("10 of 10 messages", await page.Locator(".ws-search-status").InnerTextAsync());
 
             var popupTask = page.WaitForPopupAsync();
             await page.Locator("#inspectorOpenTab").ClickAsync();
@@ -482,6 +621,9 @@ public sealed class HtmlReportBrowserTests
             Assert.True(await popup.Locator("body").EvaluateAsync<bool>("body=>body.classList.contains('inspector-only')"));
             Assert.Contains("WebSocket traffic", await popup.Locator(".ws-traffic-pane").InnerTextAsync());
             Assert.Equal("4 of 4", await popup.Locator("#inspectorPosition").InnerTextAsync());
+            await popup.Locator(".ws-payload-search").FillAsync("searchtail");
+            Assert.Equal("1 of 10 messages", await popup.Locator(".ws-search-status").InnerTextAsync());
+            Assert.Equal("true", await popup.Locator(".ws-message-row").First.GetAttributeAsync("aria-selected"));
             await popup.Locator("#inspectorPrev").ClickAsync();
             Assert.True(await popup.Locator(".primary-tab-strip").IsVisibleAsync());
             await popup.Locator("#inspectorNext").ClickAsync();
@@ -492,6 +634,7 @@ public sealed class HtmlReportBrowserTests
             await page.Locator("#httpTable tbody tr[data-websocket=\"true\"]").FocusAsync();
             await page.Keyboard.PressAsync("Enter");
             await page.Locator(".ws-message-row").First.WaitForAsync();
+            Assert.Equal("", await page.Locator(".ws-payload-search").InputValueAsync());
             await page.Keyboard.PressAsync("Escape");
             Assert.Equal("http-detail-3", await page.EvaluateAsync<string>(
                 "()=>document.activeElement?.getAttribute('data-detail')||''"));
@@ -1061,29 +1204,56 @@ public sealed class HtmlReportBrowserTests
                 null,
                 complete: false,
                 warning: "Invalid synthetic frame."));
-        for (var index = 5; index < 9; index++)
-        {
-            report.WebSocketMessages.Add(
-                WebSocketMessage(
-                    index,
-                    index + 1,
-                    "Server",
-                    "Pong",
-                    new byte[] { (byte)index },
-                    null,
-                    complete: true));
-        }
+        report.WebSocketMessages.Add(
+            WebSocketMessage(
+                5,
+                6,
+                "Server",
+                "Text",
+                Encoding.UTF8.GetBytes("shared alpha payload"),
+                "shared alpha payload",
+                complete: true));
+        report.WebSocketMessages.Add(
+            WebSocketMessage(
+                6,
+                7,
+                "Client",
+                "Text",
+                Encoding.UTF8.GetBytes("shared beta payload"),
+                "shared beta payload",
+                complete: true));
+        report.WebSocketMessages.Add(
+            WebSocketMessage(
+                7,
+                8,
+                "Client",
+                "Text",
+                Encoding.UTF8.GetBytes("unfinished"),
+                null,
+                complete: false,
+                fragmented: true,
+                warning: "Synthetic fragmented message is incomplete."));
+        report.WebSocketMessages.Add(
+            WebSocketMessage(
+                8,
+                9,
+                "Server",
+                "Pong",
+                new byte[] { 8 },
+                null,
+                complete: true));
         report.WebSocketMessages.Add(
             WebSocketMessage(
                 9,
                 10,
                 "Client",
                 "Text",
-                Encoding.UTF8.GetBytes("partial"),
-                null,
-                complete: false,
+                Encoding.UTF8.GetBytes("partial retained needle"),
+                "partial retained needle",
+                complete: true,
+                fragmented: true,
                 payloadLength: 1_234_567,
-                warning: "Synthetic fragmented message is incomplete."));
+                warning: "Synthetic logical payload was truncated by the retained-payload limit."));
         return report;
     }
 
@@ -1112,6 +1282,7 @@ public sealed class HtmlReportBrowserTests
             IsDecoded = complete,
             IsComplete = complete,
             IsFragmented = fragmented,
+            IsPayloadTruncated = payloadLength.HasValue && payloadLength.Value > payload.Length,
             Text = text,
             Warning = warning,
             Payload = payload

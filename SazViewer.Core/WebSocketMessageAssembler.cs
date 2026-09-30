@@ -171,11 +171,27 @@ internal static class WebSocketMessageAssembler
             }
 
             string? text = null;
-            if (Type == "Text" && IsComplete && !payloadTruncated && Frames.All(frame => frame.IsDecoded))
+            if (Type == "Text" && IsComplete && Frames.All(frame => frame.IsDecoded))
             {
                 try
                 {
-                    text = new UTF8Encoding(false, true).GetString(retained);
+                    var encoding = new UTF8Encoding(false, true);
+                    if (payloadTruncated)
+                    {
+                        var characters = new char[encoding.GetMaxCharCount(retained.Length)];
+                        encoding.GetDecoder().Convert(
+                            retained,
+                            characters,
+                            flush: false,
+                            out _,
+                            out var charactersUsed,
+                            out _);
+                        text = new string(characters, 0, charactersUsed);
+                    }
+                    else
+                    {
+                        text = encoding.GetString(retained);
+                    }
                 }
                 catch (DecoderFallbackException)
                 {
