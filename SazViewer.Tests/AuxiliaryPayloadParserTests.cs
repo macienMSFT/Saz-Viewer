@@ -471,16 +471,14 @@ public sealed class AuxiliaryPayloadParserTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains("data-protocol=", html, StringComparison.Ordinal);
-        // The report renders the protocol tree as JSON embedded in an HTML attribute. The JSON
-        // encoder itself escapes '<'/'>' as \u003C/\u003E (defense in depth against browsers that
-        // might sniff HTML out of a script/style context), and the attribute is additionally
-        // HTML-encoded, so the raw attack string must never appear verbatim in the output and the
-        // dangerous substrings must never appear unescaped.
+        Assert.Contains("data-payload-type=\"mapi-protocol\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-payload-version=\"1\"", html, StringComparison.Ordinal);
+        // Protocol JSON is gzip-compressed and base64-encoded in a bounded payload envelope, then
+        // decoded locally and rendered through textContent. Captured markup must not appear in the
+        // generated HTML itself.
         Assert.DoesNotContain(attack, html, StringComparison.Ordinal);
         Assert.DoesNotContain("</script><img", html, StringComparison.Ordinal);
         Assert.DoesNotContain("<img src=x onerror", html, StringComparison.Ordinal);
-        Assert.Contains("\\u003C/script\\u003E\\u003Cimg src=x onerror=globalThis.pwned=true\\u003E", html, StringComparison.Ordinal);
     }
 
     // ---- Payload builders -----------------------------------------------------------------------------

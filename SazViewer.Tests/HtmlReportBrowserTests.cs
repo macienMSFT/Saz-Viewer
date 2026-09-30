@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.IO.Compression;
+using System.Text;
 using Microsoft.Playwright;
 using SazViewer.Core;
 
@@ -7,7 +9,7 @@ namespace SazViewer.Tests;
 public sealed class HtmlReportBrowserTests
 {
     private const string InjectionText = "<img src=x onerror=globalThis.pwned=true>";
-    private const string RequestBody = """{"payload":{"enabled":true},"items":[1,2]}""";
+    private const string RequestBody = """{"payload":{"enabled":true},"items":[1,2],"attack":"</script><svg onload=globalThis.pwned=true>"}""";
     private const string ResponseBody = "<root><value>safe</value></root>";
 
     [WindowsEdgeFact]
@@ -32,6 +34,8 @@ public sealed class HtmlReportBrowserTests
             await VerifyNewTabInspectorAsync(browser, reportPath);
             await VerifyInvalidInspectorStateAsync(browser, reportPath);
             await VerifyCopyModelFailureStatesAsync(browser, tempDirectory);
+            await VerifyStructuralPayloadFailureStatesAsync(browser, reportPath);
+            await VerifyAbandonedTreeStopsAndRebuildsAsync(browser, tempDirectory);
         }
         finally
         {
@@ -85,6 +89,12 @@ public sealed class HtmlReportBrowserTests
                 $"Request content did not fill the visible inspector: y={request.Y}, height={request.Height}.");
             Assert.Equal("true", await page.Locator("#primary-tab-request").GetAttributeAsync("aria-selected"));
             Assert.Contains("payload", await page.Locator("#primary-panel-request").InnerTextAsync());
+            await page.Locator("#request-panel-json .tree-item").First.WaitForAsync();
+            Assert.Null(await page.Locator("#request-panel-json .tree-subview")
+                .GetAttributeAsync("data-compressed-payload"));
+            Assert.NotNull(await page.Locator("#response-panel-xml .tree-subview")
+                .GetAttributeAsync("data-compressed-payload"));
+            Assert.Equal(0, await page.Locator("#response-panel-xml .tree-item").CountAsync());
 
             await page.Locator("#request-tab-json").ClickAsync();
             Assert.False(await page.Locator("#request-panel-json .tree-subview").EvaluateAsync<bool>(
@@ -110,6 +120,9 @@ public sealed class HtmlReportBrowserTests
             Assert.True(await page.Locator("#primary-panel-request").EvaluateAsync<bool>(
                 "panel => panel.classList.contains('hidden')"));
             Assert.Contains("safe", await page.Locator("#response-panel-xml").InnerTextAsync());
+            await page.Locator("#response-panel-xml .tree-item").First.WaitForAsync();
+            Assert.Null(await page.Locator("#response-panel-xml .tree-subview")
+                .GetAttributeAsync("data-compressed-payload"));
             Assert.Equal(ExpectedXml(), await CopyAndReadAsync(page, "response-panel-xml"));
             Assert.True(await page.Locator("#response-panel-mapi .copy-button").IsDisabledAsync());
 
@@ -349,6 +362,7 @@ public sealed class HtmlReportBrowserTests
             await Assertions.Expect(oversizedPage.Locator("#request-panel-raw .copy-status"))
                 .ToContainTextAsync("Copy source exceeds the 1 MiB safety limit.");
         }
+
         finally
         {
             await oversizedPage.CloseAsync();
@@ -365,6 +379,8 @@ public sealed class HtmlReportBrowserTests
             var standardPath = Path.Combine(tempDirectory, "capture report.html");
             await unsupportedPage.GotoAsync(new Uri(standardPath).AbsoluteUri);
             await unsupportedPage.Locator("#httpTable tbody tr").First.ClickAsync();
+            await Assertions.Expect(unsupportedPage.Locator("#request-panel-json .tree-subview"))
+                .ToContainTextAsync("Open the report in a current Microsoft Edge or Google Chrome release.");
             await unsupportedPage.Locator("#request-tab-raw").ClickAsync();
             await Assertions.Expect(unsupportedPage.Locator("#request-panel-raw .body-view"))
                 .ToContainTextAsync("Content could not be displayed because this browser could not read the compressed local report data.");
@@ -378,6 +394,170 @@ public sealed class HtmlReportBrowserTests
         finally
         {
             await unsupportedPage.CloseAsync();
+        }
+    }
+
+    private static async Task VerifyStructuralPayloadFailureStatesAsync(IBrowser browser, string reportPath)
+    {
+        var invalidJsonPayload = GzipBase64("not-json");
+        const string invalidTreeSchema = """{"kind":"object","children":[null]}""";
+        var invalidTreePayload = GzipBase64(invalidTreeSchema);
+        var expansionPayload = GzipBase64(new string('x', 1024));
+        var truncatedPayload = expansionPayload[..^4];
+        var cases = new[]
+        {
+            new PayloadMutation("invalid base64", "base64", null, null),
+            new PayloadMutation("corrupt gzip", "gzip", null, null),
+            new PayloadMutation("truncated gzip", "truncated", truncatedPayload, 1024),
+            new PayloadMutation("invalid JSON", "json", invalidJsonPayload, 8),
+            new PayloadMutation("invalid tree schema", "schema", invalidTreePayload, Encoding.UTF8.GetByteCount(invalidTreeSchema)),
+            new PayloadMutation("declared expansion limit", "expansion", expansionPayload, 8),
+            new PayloadMutation("unsupported version", "version", null, null),
+            new PayloadMutation("unsupported type", "type", null, null),
+            new PayloadMutation("encoded limit", "encoded-limit", null, null),
+            new PayloadMutation("decoded limit", "decoded-limit", null, null),
+        };
+        foreach (var testCase in cases)
+        {
+            var page = await browser.NewPageAsync();
+            var errors = new List<string>();
+            CaptureErrors(page, errors);
+            try
+            {
+                await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+                await page.EvaluateAsync(
+                    """
+                    args=>{
+                      const host=document.getElementById('http-detail-0').content.querySelector('[data-payload-type="json-tree"]');
+                      if(args.kind==='base64')host.dataset.compressedPayload='@@@@';
+                      else if(args.kind==='gzip')host.dataset.compressedPayload='AAAA';
+                      else if(args.kind==='truncated'){
+                        host.dataset.compressedPayload=args.payload;
+                        host.dataset.payloadDecodedBytes=String(args.decodedBytes);
+                      }
+                      else if(args.kind==='json'){
+                        host.dataset.compressedPayload=args.payload;
+                        host.dataset.payloadDecodedBytes=String(args.decodedBytes);
+                      }else if(args.kind==='schema'){
+                        host.dataset.compressedPayload=args.payload;
+                        host.dataset.payloadDecodedBytes=String(args.decodedBytes);
+                      }else if(args.kind==='expansion'){
+                        host.dataset.compressedPayload=args.payload;
+                        host.dataset.payloadDecodedBytes=String(args.decodedBytes);
+                      }else if(args.kind==='version')host.dataset.payloadVersion='2';
+                      else if(args.kind==='type')host.dataset.payloadType='copy-model';
+                      else if(args.kind==='encoded-limit')host.dataset.compressedPayload='A'.repeat((12*1024*1024)+4);
+                      else if(args.kind==='decoded-limit')host.dataset.payloadDecodedBytes=String((8*1024*1024)+1);
+                    }
+                    """,
+                    new { kind = testCase.Kind, payload = testCase.Payload, decodedBytes = testCase.DecodedBytes });
+                await page.Locator("#httpTable tbody tr").First.ClickAsync();
+                var tree = page.Locator("#request-panel-json .tree-subview");
+                var expected = testCase.Kind == "schema"
+                    ? "Tree view could not be rendered because its decoded structure is invalid."
+                    : "Tree view could not be loaded because its compressed report payload is corrupt, unsupported, or exceeds safety limits.";
+                await Assertions.Expect(tree).ToContainTextAsync(expected);
+                Assert.True(
+                    await tree.EvaluateAsync<bool>("element => element.classList.contains('warning')"),
+                    testCase.Name);
+                Assert.Contains("use pretty text", (await tree.InnerTextAsync()).ToLowerInvariant());
+                await page.WaitForTimeoutAsync(50);
+                Assert.Empty(errors);
+            }
+            finally
+            {
+                await page.CloseAsync();
+            }
+        }
+
+        var mapiPage = await browser.NewPageAsync();
+        var mapiErrors = new List<string>();
+        CaptureErrors(mapiPage, mapiErrors);
+        try
+        {
+            await mapiPage.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await mapiPage.EvaluateAsync(
+                """
+                () => {
+                  const host=document.getElementById('http-detail-2').content.querySelector('[data-payload-type="mapi-protocol"]');
+                  host.dataset.compressedPayload='@@@@';
+                }
+                """);
+            await mapiPage.Locator("#httpTable tbody tr[data-detail=\"http-detail-2\"]").ClickAsync();
+            await Assertions.Expect(mapiPage.Locator("#request-panel-mapi .protocol-block"))
+                .ToContainTextAsync("Protocol tree could not be loaded because its compressed report payload is corrupt, unsupported, or exceeds safety limits.");
+            var copy = mapiPage.Locator("#request-panel-mapi .copy-button");
+            Assert.True(await copy.IsDisabledAsync());
+            Assert.Null(await copy.GetAttributeAsync("aria-busy"));
+            await mapiPage.WaitForTimeoutAsync(50);
+            Assert.Empty(mapiErrors);
+        }
+        finally
+        {
+            await mapiPage.CloseAsync();
+        }
+    }
+
+    private static string GzipBase64(string value)
+    {
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionLevel.SmallestSize, leaveOpen: true))
+        {
+            gzip.Write(Encoding.UTF8.GetBytes(value));
+        }
+        return Convert.ToBase64String(output.ToArray());
+    }
+
+    private static async Task VerifyAbandonedTreeStopsAndRebuildsAsync(IBrowser browser, string tempDirectory)
+    {
+        var body = $"[{string.Join(',', Enumerable.Range(0, 1000))}]";
+        var report = new SazReport { SourceName = "lazy-tree.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "lazy",
+            ArchiveOrder = 0,
+            Request = Message("POST /lazy HTTP/1.1", "application/json", body),
+            Response = Message("HTTP/1.1 200 OK", "application/json", body),
+        });
+        var reportPath = Path.Combine(tempDirectory, "lazy tree report.html");
+        await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(report));
+        var page = await browser.NewPageAsync();
+        var errors = new List<string>();
+        CaptureErrors(page, errors);
+        try
+        {
+            await page.AddInitScriptAsync(
+                "const nativeFrame=requestAnimationFrame.bind(globalThis);globalThis.requestAnimationFrame=callback=>setTimeout(()=>nativeFrame(callback),100)");
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.Locator("#httpTable tbody tr").ClickAsync();
+            await page.Locator("#request-panel-json [data-view=\"pretty\"]").ClickAsync();
+            await page.WaitForTimeoutAsync(250);
+            Assert.True(await page.Locator("#request-panel-json .tree-item").CountAsync() < 301);
+
+            await page.Locator("#request-panel-json [data-view=\"tree\"]").ClickAsync();
+            await Assertions.Expect(page.Locator("#request-panel-json .tree-item")).ToHaveCountAsync(301);
+            Assert.Contains(
+                "[] (1000 items)",
+                await page.Locator("#request-panel-json .tree-label").First.InnerTextAsync());
+
+            await page.ReloadAsync();
+            await page.Locator("#httpTable tbody tr").ClickAsync();
+            await page.Locator("#request-tab-raw").ClickAsync();
+            await page.WaitForTimeoutAsync(250);
+            await page.Locator("#request-tab-json").ClickAsync();
+            await Assertions.Expect(page.Locator("#request-panel-json .tree-item")).ToHaveCountAsync(301);
+
+            await page.ReloadAsync();
+            await page.Locator("#httpTable tbody tr").ClickAsync();
+            await page.Locator("#primary-tab-response").ClickAsync();
+            await page.WaitForTimeoutAsync(250);
+            await page.Locator("#primary-tab-request").ClickAsync();
+            await Assertions.Expect(page.Locator("#request-panel-json .tree-item")).ToHaveCountAsync(301);
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            await page.CloseAsync();
         }
     }
 
@@ -587,6 +767,8 @@ public sealed class HtmlReportBrowserTests
         message.Headers.Add(new HttpHeader("Content-Type", "application/octet-stream"));
         return message;
     }
+
+    private sealed record PayloadMutation(string Name, string Kind, string? Payload, int? DecodedBytes);
 
     private sealed class WindowsEdgeFactAttribute : FactAttribute
     {

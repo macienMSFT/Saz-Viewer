@@ -403,8 +403,8 @@ public sealed class HtmlReportGeneratorTests
 
         // setupTabs/highlighting/tree/protocol rendering runs on every row load.
         Assert.Contains("highlightSelected(panel);", html, StringComparison.Ordinal);
-        Assert.Contains("renderProtocolTrees(inspectorBody);", html, StringComparison.Ordinal);
-        Assert.Contains("renderValueTrees(inspectorBody,generation);", html, StringComparison.Ordinal);
+        Assert.Contains("prepareLazyPayloads(inspectorBody);", html, StringComparison.Ordinal);
+        Assert.Contains("hydrateViewPayloads(targetPanel,renderGeneration);", html, StringComparison.Ordinal);
         Assert.Contains("setupTabs(inspectorBody);", html, StringComparison.Ordinal);
         Assert.Contains("setupTreeToggles(inspectorBody);", html, StringComparison.Ordinal);
     }
@@ -603,7 +603,8 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("<button type=\"button\" data-view=\"pretty\" aria-pressed=\"false\">Pretty Text</button>", html, StringComparison.Ordinal);
         Assert.Contains("<button type=\"button\" class=\"tree-expand-all\">Expand all</button>", html, StringComparison.Ordinal);
         Assert.Contains("<button type=\"button\" class=\"tree-collapse-all\">Collapse all</button>", html, StringComparison.Ordinal);
-        Assert.Contains("class=\"tree-subview\" data-json-tree=\"", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"tree-subview\" data-compressed-payload=\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-payload-type=\"json-tree\"", html, StringComparison.Ordinal);
         Assert.Contains("class=\"pretty-subview hidden\"", html, StringComparison.Ordinal);
 
         // Toggle behavior and tree accessibility semantics (tree/treeitem/group, focus-visible).
@@ -640,7 +641,7 @@ public sealed class HtmlReportGeneratorTests
         // generation token so a superseded (e.g. row-navigated-away-from) build stops scheduling
         // further batches instead of continuing to render into detached DOM.
         Assert.Contains("if(queue.length&&generation===renderGeneration)requestAnimationFrame(step);", html, StringComparison.Ordinal);
-        Assert.Contains("if(generation!==renderGeneration)return;", html, StringComparison.Ordinal);
+        Assert.Contains("if(generation!==renderGeneration||host._treeBuildToken!==buildToken)return;", html, StringComparison.Ordinal);
         Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);
     }
 
@@ -1085,9 +1086,9 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("renderGeneration++;", html, StringComparison.Ordinal);
         Assert.Contains("const generation=renderGeneration;", html, StringComparison.Ordinal);
         Assert.Contains("function buildTree(host,rootNode,kind,generation){", html, StringComparison.Ordinal);
-        Assert.Contains("function renderValueTrees(root,generation){", html, StringComparison.Ordinal);
-        Assert.Contains("buildTree(host,payload,isJson?'json':'xml',generation);", html, StringComparison.Ordinal);
-        Assert.Contains("if(generation!==renderGeneration)return;", html, StringComparison.Ordinal);
+        Assert.Contains("async function renderValueTree(host,generation){", html, StringComparison.Ordinal);
+        Assert.Contains("buildTree(host,payload,kind,generation);", html, StringComparison.Ordinal);
+        Assert.Contains("if(generation!==renderGeneration||host.classList.contains('hidden')||host.closest('.tab-panel.hidden'))return;", html, StringComparison.Ordinal);
         Assert.Contains("if(queue.length&&generation===renderGeneration)requestAnimationFrame(step);", html, StringComparison.Ordinal);
     }
 
@@ -1256,8 +1257,8 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("<option value=\"mapi\">MAPI/NSPI only</option>", html, StringComparison.Ordinal);
         Assert.Contains("data-mapi=\"true\"", html, StringComparison.Ordinal);
         Assert.Contains("<th class=\"http-protocol\">Protocol</th>", html, StringComparison.Ordinal);
-        Assert.Contains("data-protocol=", html, StringComparison.Ordinal);
-        Assert.Contains("renderProtocolTrees(inspectorBody)", html, StringComparison.Ordinal);
+        Assert.Contains("data-payload-type=\"mapi-protocol\"", html, StringComparison.Ordinal);
+        Assert.Contains("renderProtocolTree(host,generation)", html, StringComparison.Ordinal);
         Assert.Contains("document.createElement(hasChildren?'details':'div')", html, StringComparison.Ordinal);
         Assert.Contains("value.textContent=String(node.value)", html, StringComparison.Ordinal);
         Assert.DoesNotContain(attack, html, StringComparison.Ordinal);
@@ -1432,10 +1433,10 @@ public sealed class HtmlReportGeneratorTests
         var requestSection = html[requestStart..responseStart];
         var responseSection = html[responseStart..templateEnd];
 
-        Assert.Contains("REQ_ONLY_MARKER", requestSection, StringComparison.Ordinal);
-        Assert.DoesNotContain("RESP_ONLY_MARKER", requestSection, StringComparison.Ordinal);
-        Assert.Contains("RESP_ONLY_MARKER", responseSection, StringComparison.Ordinal);
-        Assert.DoesNotContain("REQ_ONLY_MARKER", responseSection, StringComparison.Ordinal);
+        Assert.Contains("REQ_ONLY_MARKER", CopyTextForPanel(html, "request-panel-json"), StringComparison.Ordinal);
+        Assert.DoesNotContain("RESP_ONLY_MARKER", CopyTextForPanel(html, "request-panel-json"), StringComparison.Ordinal);
+        Assert.Contains("RESP_ONLY_MARKER", CopyTextForPanel(html, "response-panel-xml"), StringComparison.Ordinal);
+        Assert.DoesNotContain("REQ_ONLY_MARKER", CopyTextForPanel(html, "response-panel-xml"), StringComparison.Ordinal);
 
         // Distinct, side-scoped stable IDs guarantee independent aria wiring per pane.
         Assert.Contains("id=\"request-tab-json\"", requestSection, StringComparison.Ordinal);
@@ -1526,30 +1527,39 @@ public sealed class HtmlReportGeneratorTests
         Assert.True(panelStart >= 0, $"Panel {panelId} was not found.");
         var messagePanelStart = html.LastIndexOf("<section class=\"message-panel\"", panelStart, StringComparison.Ordinal);
         Assert.True(messagePanelStart >= 0, $"Message panel for {panelId} was not found.");
-        const string marker = "data-copy-model=\"";
-        var start = html.IndexOf(marker, messagePanelStart, StringComparison.Ordinal);
-        Assert.True(start >= 0 && start < panelStart, $"Copy model for {panelId} was not found.");
-        start += marker.Length;
-        var end = html.IndexOf('"', start);
-        Assert.True(end >= start, $"Copy model for {panelId} was malformed.");
-        var compressed = Convert.FromBase64String(html[start..end]);
-        using var input = new MemoryStream(compressed);
-        using var gzip = new GZipStream(input, CompressionMode.Decompress);
-        using var document = JsonDocument.Parse(gzip);
+        using var document = ExtractCompressedPayload(
+            html,
+            "copy-model",
+            messagePanelStart,
+            panelStart);
         return document.RootElement.GetProperty(key).GetString()!;
     }
 
     private static JsonDocument ExtractTreePayload(string html, string attributeName)
     {
-        var marker = $"{attributeName}=\"";
-        var start = html.IndexOf(marker, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"Attribute {attributeName} was not found in the generated HTML.");
-        start += marker.Length;
-        var end = html.IndexOf('"', start);
-        Assert.True(end > start, $"Could not find the closing quote for {attributeName}.");
-        var encoded = html[start..end];
-        var decoded = WebUtility.HtmlDecode(encoded);
-        return JsonDocument.Parse(decoded, new JsonDocumentOptions { MaxDepth = 256 });
+        var type = attributeName.Contains("json", StringComparison.Ordinal) ? "json-tree" : "xml-tree";
+        return ExtractCompressedPayload(html, type, 0, html.Length);
+    }
+
+    private static JsonDocument ExtractCompressedPayload(
+        string html,
+        string type,
+        int searchStart,
+        int searchEnd)
+    {
+        var typeMarker = $"data-payload-type=\"{type}\"";
+        var typeIndex = html.IndexOf(typeMarker, searchStart, StringComparison.Ordinal);
+        Assert.True(typeIndex >= searchStart && typeIndex < searchEnd, $"Compressed payload {type} was not found.");
+        const string payloadMarker = "data-compressed-payload=\"";
+        var payloadStart = html.LastIndexOf(payloadMarker, typeIndex, StringComparison.Ordinal);
+        Assert.True(payloadStart >= searchStart, $"Compressed payload data for {type} was not found.");
+        payloadStart += payloadMarker.Length;
+        var payloadEnd = html.IndexOf('"', payloadStart);
+        Assert.True(payloadEnd > payloadStart && payloadEnd < searchEnd, $"Compressed payload data for {type} was malformed.");
+        var compressed = Convert.FromBase64String(html[payloadStart..payloadEnd]);
+        using var input = new MemoryStream(compressed);
+        using var gzip = new GZipStream(input, CompressionMode.Decompress);
+        return JsonDocument.Parse(gzip, new JsonDocumentOptions { MaxDepth = 256 });
     }
 
     private static HttpMessage Message(string startLine, string contentType, string body)

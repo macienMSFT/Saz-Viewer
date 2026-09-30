@@ -18,6 +18,10 @@ public sealed class HtmlReportGenerator
     private const int TreeMaxScalarLength = 300;
     private const int MaxCopyCharacters = 1024 * 1024;
     private const int MaxHydratedDisplayCharacters = 256 * 1024;
+    private const int PayloadVersion = 1;
+    private const int CopyPayloadMaxDecodedBytes = 32 * 1024 * 1024;
+    private const int ProtocolPayloadMaxDecodedBytes = 32 * 1024 * 1024;
+    private const int TreePayloadMaxDecodedBytes = 8 * 1024 * 1024;
 
     private sealed record CopySource(
         string AccessibleName,
@@ -36,6 +40,7 @@ public sealed class HtmlReportGenerator
         int BodyLength = 0,
         int CapturedStart = -1,
         int CapturedLength = 0);
+    private sealed record CompressedPayload(string Type, string Base64, int DecodedBytes);
 
     // Each tree level round-trips through two JSON.NET-serializer nesting levels (an object, then
     // its "children" array before the next object), so a TreeMaxDepth-limited document can need
@@ -151,12 +156,85 @@ const inspectorClose=document.getElementById('inspectorClose');
 const inspectorOpenStatus=document.getElementById('inspectorOpenStatus');
 const reportStatus=document.getElementById('reportStatus');
 let currentRow=null,originRow=null,renderGeneration=0,inspectorOnly=false;
-function renderProtocolTrees(root){
-  root.querySelectorAll('[data-protocol]').forEach(host=>{
+const PAYLOAD_VERSION='1';
+const PAYLOAD_LIMITS={
+  'copy-model':{encoded:48*1024*1024,decoded:32*1024*1024},
+  'mapi-protocol':{encoded:48*1024*1024,decoded:32*1024*1024},
+  'json-tree':{encoded:12*1024*1024,decoded:8*1024*1024},
+  'xml-tree':{encoded:12*1024*1024,decoded:8*1024*1024}
+};
+async function decodeCompressedPayload(host,expectedType){
+  if(host._payloadData!==undefined){
+    if(host._payloadType!==expectedType)throw new Error('cached payload type does not match the requested view');
+    return host._payloadData;
+  }
+  if(host._payloadError)throw host._payloadError;
+  if(host._payloadPromise)return host._payloadPromise;
+  host._payloadPromise=(async()=>{
+    const type=host.dataset.payloadType;
+    const version=host.dataset.payloadVersion;
+    const encoded=host.dataset.compressedPayload;
+    const declared=Number.parseInt(host.dataset.payloadDecodedBytes||'',10);
+    const limits=PAYLOAD_LIMITS[expectedType];
+    if(!limits||type!==expectedType||version!==PAYLOAD_VERSION)throw new Error('unsupported payload envelope');
+    if(!encoded||encoded.length>limits.encoded||encoded.length%4!==0||!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded))throw new Error('invalid or oversized base64 payload');
+    if(!Number.isSafeInteger(declared)||declared<0||declared>limits.decoded)throw new Error('invalid or oversized decoded length');
+    if(typeof DecompressionStream!=='function')throw new Error('gzip decompression is not supported by this browser');
+    let binary;
+    try{binary=atob(encoded)}catch{throw new Error('invalid base64 payload')}
+    const compressed=new Uint8Array(binary.length);
+    for(let index=0;index<binary.length;index++)compressed[index]=binary.charCodeAt(index);
+    let reader;
+    try{reader=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')).getReader()}
+    catch{throw new Error('compressed payload could not be opened')}
+    const chunks=[];let total=0;
+    try{
+      while(true){
+        const result=await reader.read();
+        if(result.done)break;
+        total+=result.value.byteLength;
+        if(total>limits.decoded||total>declared){await reader.cancel();throw new Error('decoded payload exceeds its declared safety limit')}
+        chunks.push(result.value);
+      }
+    }catch(error){
+      if(error instanceof Error&&error.message.includes('safety limit'))throw error;
+      throw new Error('compressed payload is corrupt or truncated');
+    }
+    if(total!==declared)throw new Error('decoded payload length does not match its envelope');
+    const bytes=new Uint8Array(total);let offset=0;
+    chunks.forEach(chunk=>{bytes.set(chunk,offset);offset+=chunk.byteLength});
+    let text;
+    try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes)}
+    catch{throw new Error('decoded payload is not valid UTF-8')}
     let data;
-    try{data=JSON.parse(host.dataset.protocol)}
-    catch{host.textContent='Protocol tree data could not be loaded.';host.className='warning';return}
-    host.removeAttribute('data-protocol');
+    try{data=JSON.parse(text)}
+    catch{throw new Error('decoded payload is not valid JSON')}
+    host.removeAttribute('data-compressed-payload');
+    host.removeAttribute('data-payload-type');
+    host.removeAttribute('data-payload-version');
+    host.removeAttribute('data-payload-decoded-bytes');
+    host._payloadType=type;
+    host._payloadData=data;
+    return data;
+  })();
+  try{return await host._payloadPromise}
+  catch(error){host._payloadError=error;throw error}
+  finally{host._payloadPromise=null}
+}
+function payloadFailureText(error,subject,alternative){
+  if(error instanceof Error&&error.message.includes('not supported by this browser')){
+    return `${subject} could not be loaded because this browser does not support local gzip decompression. Open the report in a current Microsoft Edge or Google Chrome release.`;
+  }
+  return `${subject} could not be loaded because its compressed report payload is corrupt, unsupported, or exceeds safety limits.${alternative}`;
+}
+async function renderProtocolTree(host,generation){
+  if(host._protocolData||host._protocolLoading)return;
+  host._protocolLoading=true;
+  const copyButton=host.closest('[role="tabpanel"]')?.querySelector('.copy-button[data-copy-kind="mapi"]');
+  if(copyButton){copyButton.disabled=true;copyButton.setAttribute('aria-disabled','true');copyButton.setAttribute('aria-busy','true')}
+  try{
+    const data=await decodeCompressedPayload(host,'mapi-protocol');
+    if(generation!==renderGeneration||host.closest('.tab-panel.hidden'))return;
     host._protocolData=data;
     const toolbar=document.createElement('div');toolbar.className='protocol-toolbar';
     const search=document.createElement('input');search.type='search';search.placeholder='Search protocol fields...';search.setAttribute('aria-label','Search protocol tree');
@@ -189,7 +267,14 @@ function renderProtocolTrees(root){
     search.addEventListener('input',()=>filterNode(tree.firstElementChild,search.value.trim().toLowerCase()));
     expand.addEventListener('click',()=>tree.querySelectorAll('details').forEach(item=>item.open=true));
     collapse.addEventListener('click',()=>tree.querySelectorAll('details').forEach(item=>item.open=false));
-  });
+    if(copyButton){copyButton.disabled=false;copyButton.removeAttribute('aria-disabled');copyButton.removeAttribute('aria-busy')}
+  }catch(error){
+    host.textContent=payloadFailureText(error,'Protocol tree',' Regenerate the report with the current SAZ Viewer.');
+    host.className='protocol-block warning';
+    if(copyButton){copyButton.disabled=true;copyButton.setAttribute('aria-disabled','true');copyButton.removeAttribute('aria-busy')}
+  }finally{
+    host._protocolLoading=false;
+  }
 }
 function appendStatus(parent,text){
   const status=document.createElement('div');status.className='tree-status';status.setAttribute('role','treeitem');status.tabIndex=-1;status.textContent=text;
@@ -216,6 +301,9 @@ function treeLabelText(node,kind){
   return node.kind;
 }
 function buildTree(host,rootNode,kind,generation){
+  const buildToken={};
+  host._treeBuildToken=buildToken;
+  host._treeRendered=false;
   const tree=document.createElement('div');tree.className='tree-view';tree.setAttribute('role','tree');
   tree.setAttribute('aria-label',kind==='json'?'JSON structure':'XML structure');
   host.replaceChildren(tree);
@@ -372,15 +460,29 @@ function buildTree(host,rootNode,kind,generation){
     });
   }
   function step(){
-    if(generation!==renderGeneration)return;
-    let processed=0;
-    while(processed<BATCH&&queue.length){
-      const entry=queue.shift();
-      if(entry.status)appendStatusEntry(entry.parent,entry.text);
-      else appendItem(entry.node,entry.parent,entry.depth);
-      processed++;
+    if(generation!==renderGeneration||host._treeBuildToken!==buildToken)return;
+    if(host.classList.contains('hidden')||host.closest('.tab-panel.hidden')){
+      host._treeBuildToken=null;
+      return;
+    }
+    try{
+      let processed=0;
+      while(processed<BATCH&&queue.length){
+        const entry=queue.shift();
+        if(entry.status)appendStatusEntry(entry.parent,entry.text);
+        else appendItem(entry.node,entry.parent,entry.depth);
+        processed++;
+      }
+    }catch{
+      queue.length=0;
+      host.textContent='Tree view could not be rendered because its decoded structure is invalid. Use Pretty Text or regenerate the report with the current SAZ Viewer.';
+      host.className='tree-subview warning';
+      host._treeBuildToken=null;
+      host._treeRendered=true;
+      return;
     }
     if(queue.length&&generation===renderGeneration)requestAnimationFrame(step);
+    else{host._treeBuildToken=null;host._treeRendered=true}
   }
   step();
 }
@@ -406,15 +508,38 @@ function setAllExpanded(container,expanded){
     }
   }
 }
-function renderValueTrees(root,generation){
-  root.querySelectorAll('[data-json-tree],[data-xml-tree]').forEach(host=>{
-    const isJson=host.hasAttribute('data-json-tree');
-    const raw=host.getAttribute(isJson?'data-json-tree':'data-xml-tree');
-    host.removeAttribute('data-json-tree');host.removeAttribute('data-xml-tree');
-    let payload;
-    try{payload=JSON.parse(raw)}
-    catch{host.textContent='Tree view could not be loaded; use Pretty Text.';host.className='tab-empty';return}
-    buildTree(host,payload,isJson?'json':'xml',generation);
+async function renderValueTree(host,generation){
+  if(host._treeRendered||host._treeLoading||host._treeBuildToken)return;
+  host._treeLoading=true;
+  const kind=(host._payloadType||host.dataset.payloadType)==='json-tree'?'json':'xml';
+  const controls=host.closest('.structured-body')?.querySelectorAll('.tree-expand-all,.tree-collapse-all')||[];
+  controls.forEach(control=>control.disabled=true);
+  try{
+    const payload=await decodeCompressedPayload(host,`${kind}-tree`);
+    if(generation!==renderGeneration||host.classList.contains('hidden')||host.closest('.tab-panel.hidden'))return;
+    buildTree(host,payload,kind,generation);
+    controls.forEach(control=>control.disabled=false);
+  }catch(error){
+    host.textContent=payloadFailureText(error,'Tree view',' Use Pretty Text or regenerate the report with the current SAZ Viewer.');
+    host.className='tree-subview warning';
+    host._treeRendered=true;
+  }finally{
+    host._treeLoading=false;
+  }
+}
+function hydrateViewPayloads(root,generation){
+  if(root.classList?.contains('hidden')||root.closest?.('.primary-panel.hidden'))return;
+  root.querySelectorAll('.protocol-block').forEach(host=>{
+    if((host.dataset.compressedPayload||host._payloadData!==undefined)&&!host.closest('.tab-panel.hidden'))renderProtocolTree(host,generation);
+  });
+  root.querySelectorAll('.tree-subview').forEach(host=>{
+    if((host.dataset.compressedPayload||host._payloadData!==undefined)&&!host.classList.contains('hidden')&&!host.closest('.tab-panel.hidden'))renderValueTree(host,generation);
+  });
+}
+function prepareLazyPayloads(root){
+  root.querySelectorAll('.protocol-block').forEach(host=>{
+    const button=host.closest('[role="tabpanel"]')?.querySelector('.copy-button[data-copy-kind="mapi"]');
+    if(button){button.disabled=true;button.setAttribute('aria-disabled','true')}
   });
 }
 function setupTreeToggles(root){
@@ -430,6 +555,7 @@ function setupTreeToggles(root){
         treeView.classList.toggle('hidden',!showTree);
         prettyView.classList.toggle('hidden',showTree);
         toolbar.querySelectorAll('.view-toggle button').forEach(other=>other.setAttribute('aria-pressed',String(other===btn)));
+        if(showTree)renderValueTree(treeView,renderGeneration);
       });
     });
     toolbar.querySelector('.tree-expand-all')?.addEventListener('click',()=>setAllExpanded(treeView,true));
@@ -463,10 +589,7 @@ function copySource(button){
   if(button.dataset.copyKind==='mapi'){
     const host=button.closest('[role="tabpanel"]').querySelector('.protocol-block');
     if(!host)return{error:'MAPI protocol data is unavailable.'};
-    let data=host._protocolData;
-    if(!data&&host.dataset.protocol){
-      try{data=JSON.parse(host.dataset.protocol)}catch{return{error:'MAPI protocol data could not be read.'}}
-    }
+    const data=host._protocolData;
     return data?protocolCopyText(data):{error:'MAPI protocol data is unavailable.'};
   }
   const panel=button.closest('.message-panel');
@@ -477,19 +600,13 @@ function copySource(button){
   return{text};
 }
 async function loadCopyModel(panel){
-  const encoded=panel.dataset.copyModel;
-  if(!encoded)return{};
-  if(typeof DecompressionStream!=='function')throw new Error('This browser does not support local report copy data.');
-  const binary=atob(encoded),bytes=new Uint8Array(binary.length);
-  for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
-  const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-  const text=await new Response(stream).text();
-  const model=JSON.parse(text);
+  if(panel.dataset.payloadError)throw new Error(panel.dataset.payloadError);
+  if(!panel.dataset.compressedPayload&&panel._payloadData===undefined)return{};
+  const model=await decodeCompressedPayload(panel,'copy-model');
   if(!model||typeof model!=='object'||Array.isArray(model))throw new Error('Copy data has an invalid format.');
   Object.values(model).forEach(value=>{
     if(typeof value!=='string'||value.length>MAX_COPY_CHARACTERS)throw new Error('Copy data exceeds the 1 MiB safety limit.');
   });
-  panel.removeAttribute('data-copy-model');
   return model;
 }
 function hydrateCopyModel(panel,model){
@@ -640,8 +757,10 @@ function activateTab(tablist,key,options){
   const tabs=tabsOf(tablist),target=tabs.find(tab=>tab.dataset.tab===key&&!tab.disabled);
   if(!target)return;
   const panels=tablist.parentElement.querySelectorAll(':scope>.tab-panels>.tab-panel');
+  let targetPanel=null;
   tabs.forEach(tab=>{const active=tab===target;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1});
-  panels.forEach(panel=>panel.classList.toggle('hidden',panel.id!==target.getAttribute('aria-controls')));
+  panels.forEach(panel=>{const active=panel.id===target.getAttribute('aria-controls');panel.classList.toggle('hidden',!active);if(active)targetPanel=panel});
+  if(targetPanel)hydrateViewPayloads(targetPanel,renderGeneration);
   if(options&&options.remember)preferredTab[tablist.dataset.side]=key;
   if(options&&options.focus)target.focus();
 }
@@ -778,8 +897,7 @@ function loadRow(row){
   renderGeneration++;
   const generation=renderGeneration;
   inspectorBody.replaceChildren(template.content.cloneNode(true));
-  renderProtocolTrees(inspectorBody);
-  renderValueTrees(inspectorBody,generation);
+  prepareLazyPayloads(inspectorBody);
   setupTabs(inspectorBody);
   setupTreeToggles(inspectorBody);
   setupCopyControls(inspectorBody);
@@ -1252,13 +1370,18 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             return;
         }
 
-        var serialized = JsonSerializer.SerializeToUtf8Bytes(model);
-        using var output = new MemoryStream();
-        using (var gzip = new GZipStream(output, CompressionLevel.SmallestSize, leaveOpen: true))
+        var payload = CreateCompressedPayload(
+            "copy-model",
+            JsonSerializer.SerializeToUtf8Bytes(model),
+            CopyPayloadMaxDecodedBytes);
+        if (payload is not null)
         {
-            gzip.Write(serialized);
+            AppendCompressedPayloadAttributes(html, payload);
         }
-        html.Append(" data-copy-model=\"").Append(Convert.ToBase64String(output.GetBuffer(), 0, checked((int)output.Length))).Append('"');
+        else
+        {
+            html.Append(" data-payload-error=\"Copy/display data exceeds the compressed report safety limit.\"");
+        }
 
         void Add(string key, CopySource source)
         {
@@ -1312,6 +1435,42 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         }
         var prefixLength = MaxHydratedDisplayCharacters - marker.Length - 1;
         return string.Concat(value.AsSpan(0, prefixLength), "\n", marker);
+    }
+
+    private static CompressedPayload? CreateCompressedPayload(
+        string type,
+        string json,
+        int maxDecodedBytes) =>
+        CreateCompressedPayload(type, Encoding.UTF8.GetBytes(json), maxDecodedBytes);
+
+    private static CompressedPayload? CreateCompressedPayload(
+        string type,
+        byte[] json,
+        int maxDecodedBytes)
+    {
+        if (json.Length > maxDecodedBytes)
+        {
+            return null;
+        }
+
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionLevel.SmallestSize, leaveOpen: true))
+        {
+            gzip.Write(json);
+        }
+        return new CompressedPayload(
+            type,
+            Convert.ToBase64String(output.GetBuffer(), 0, checked((int)output.Length)),
+            json.Length);
+    }
+
+    private static void AppendCompressedPayloadAttributes(StringBuilder html, CompressedPayload payload)
+    {
+        html.Append(" data-compressed-payload=\"").Append(payload.Base64)
+            .Append("\" data-payload-type=\"");
+        Attribute(html, payload.Type);
+        html.Append("\" data-payload-version=\"").Append(PayloadVersion)
+            .Append("\" data-payload-decoded-bytes=\"").Append(payload.DecodedBytes).Append('"');
     }
 
     private static CopySource CopyText(string accessibleName, string description, string? text)
@@ -1449,7 +1608,10 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
 
     private static void AppendStructuredBody(StringBuilder html, BodyPresentation body, string format)
     {
-        var treePayload = format == "json" ? BuildJsonTreePayload(body.Formatted) : BuildXmlTreePayload(body.Formatted);
+        var treeJson = format == "json" ? BuildJsonTreePayload(body.Formatted) : BuildXmlTreePayload(body.Formatted);
+        var treePayload = treeJson is null
+            ? null
+            : CreateCompressedPayload($"{format}-tree", treeJson, TreePayloadMaxDecodedBytes);
         var treeAvailable = treePayload is not null;
 
         html.Append("<div class=\"structured-body\" data-format=\"").Append(format).Append("\">");
@@ -1478,9 +1640,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         html.Append("<div class=\"tree-subview\"");
         if (treeAvailable)
         {
-            html.Append(" data-").Append(format).Append("-tree=\"");
-            Attribute(html, treePayload);
-            html.Append('"');
+            AppendCompressedPayloadAttributes(html, treePayload!);
         }
         else
         {
@@ -1585,9 +1745,18 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             warnings,
             omittedWarnings
         });
-        html.Append("<div class=\"protocol-block\" data-protocol=\"");
-        Attribute(html, payload);
-        html.Append("\"><span class=\"muted\">Protocol tree loads when this session is selected.</span></div>");
+        var compressed = CreateCompressedPayload(
+            "mapi-protocol",
+            payload,
+            ProtocolPayloadMaxDecodedBytes);
+        if (compressed is null)
+        {
+            html.Append("<div class=\"protocol-block warning\">Protocol tree exceeds the 32 MiB report safety limit and was not embedded.</div>");
+            return;
+        }
+        html.Append("<div class=\"protocol-block\"");
+        AppendCompressedPayloadAttributes(html, compressed);
+        html.Append("><span class=\"muted\">Protocol tree loads when this view is selected.</span></div>");
     }
 
     private static object ToProtocolData(MapiNode node) => new

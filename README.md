@@ -5,7 +5,7 @@ SAZ Viewer is a local command-line tool that reads Fiddler SAZ archives and writ
 ## Prerequisites
 
 - Windows with the .NET 8 SDK or newer to build
-- Any modern browser to open the generated report
+- A current Microsoft Edge or Google Chrome release to open the generated report
 
 ## Build and test
 
@@ -44,6 +44,7 @@ Use `win-arm64` instead of `win-x64` for Windows on ARM. The published executabl
 - Declared chunked transfer framing is removed before content decoding. `gzip`, zlib-wrapped `deflate` (with a raw-DEFLATE compatibility fallback), and `br` are supported, including chained and repeated `Content-Encoding` fields in HTTP decoding order.
 - Decoding is transactional and bounded: an HTTP entry is read through a 4 MiB protocol-payload limit plus bounded headers, each decoded stage is limited to at most 4 MiB and 100x expansion (with a 1 MiB floor), gzip content is capped at 128 members, displayed decoded bodies remain capped at 64 KiB, and captured encoded-byte views are capped at 16 KiB. Unsupported, corrupt, incomplete, or oversized content remains available as bounded captured hex with a warning.
 - The inspector keeps captured headers unchanged. Successfully decoded bodies are shown as decoded text in the Raw tab (with decode status and removed encodings noted), and a compact "Captured bytes" control reveals the original pre-decode bytes when available.
+- Large copy, MAPI protocol, and JSON/XML tree models are stored in versioned, bounded gzip payloads inside the self-contained report and decompressed locally only when their session/view is opened. No payload is fetched from the network. Browsers without the required local `DecompressionStream` support show an actionable panel error instead of a blank view.
 - WebSocket frames are parsed with direction, opcode/type, length, timestamp when available, and safe text or hex previews; this data is retained internally but the WebSocket section is currently omitted from generated HTML.
 - The tool does not execute captured content and does not make network requests.
 
