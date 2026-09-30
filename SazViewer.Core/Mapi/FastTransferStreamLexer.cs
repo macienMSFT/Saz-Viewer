@@ -84,8 +84,19 @@ internal static class FastTransferStreamLexer
         var reader = new MapiReader(buffer, cancellationToken, checked((int)absoluteOffset));
         var elementStart = reader;
         var syntaxStack = next.SyntaxStack;
+        var grammar = next.Grammar;
         var pendingSpecialMarker = next.PendingSpecialMarker;
         FastTransferPendingValue? pending = next.Pending;
+
+        if (grammar.IsConfigured
+            && grammar.Root == FastTransferRootKind.Unknown
+            && !grammar.AmbiguityReported)
+        {
+            warnings.Add(
+                $"FastTransfer root could not be selected uniquely from {grammar.Provenance}; lexical decoding " +
+                "continues, but root production and phase ordering are not validated.");
+            grammar = grammar with { AmbiguityReported = true };
+        }
 
         try
         {
@@ -133,6 +144,7 @@ internal static class FastTransferStreamLexer
                     ref reader,
                     elements,
                     ref syntaxStack,
+                    ref grammar,
                     ref pendingSpecialMarker,
                     out pending,
                     warnings,
@@ -178,7 +190,7 @@ internal static class FastTransferStreamLexer
                 "retained as raw and the stream is marked desynchronized.");
             return new FastTransferLexResult(
                 nodes.ToImmutable(),
-                next.WithElements(elements).WithSyntaxStack(syntaxStack).AsDesynchronized(),
+                next.WithElements(elements).WithSyntaxStack(syntaxStack).WithGrammar(grammar).AsDesynchronized(),
                 [.. warnings],
                 buffer.Length,
                 elements,
@@ -195,6 +207,7 @@ internal static class FastTransferStreamLexer
         var committed = next
             .WithElements(elements)
             .WithSyntaxStack(syntaxStack)
+            .WithGrammar(grammar)
             .WithPendingSpecialMarker(pendingSpecialMarker)
             .WithPending(pending);
         return new FastTransferLexResult(
@@ -207,6 +220,7 @@ internal static class FastTransferStreamLexer
         ref MapiReader reader,
         int index,
         ref ImmutableArray<FastTransferSyntaxFrame> syntaxStack,
+        ref FastTransferGrammarState grammar,
         ref uint? pendingSpecialMarker,
         out FastTransferPendingValue? pending,
         List<string> warnings,
@@ -221,8 +235,24 @@ internal static class FastTransferStreamLexer
 
         if (MarkerNames.TryGetValue(tag, out var markerName))
         {
-            WarnIfSpecialValueMissing(ref pendingSpecialMarker, markerName, index, warnings);
+            var isRecoveryError = tag == 0x40180003
+                && grammar.Root is FastTransferRootKind.ContentsSync or FastTransferRootKind.MessageList;
+            if (isRecoveryError)
+            {
+                pendingSpecialMarker = null;
+            }
+            else
+            {
+                WarnIfSpecialValueMissing(ref pendingSpecialMarker, markerName, index, warnings);
+            }
+            var depthBefore = syntaxStack.Length;
             var marker = LexMarker(ref reader, index, markerName, tag, ref syntaxStack, warnings, budget, depth);
+            if (isRecoveryError)
+            {
+                syntaxStack = ImmutableArray<FastTransferSyntaxFrame>.Empty;
+            }
+            grammar = FastTransferGrammar.AdvanceMarker(
+                grammar, tag, marker.Offset, depthBefore, syntaxStack.Length);
             if (tag is 0x4074000B or 0x407B0102)
             {
                 pendingSpecialMarker = tag;
@@ -233,12 +263,15 @@ internal static class FastTransferStreamLexer
         if (MetaPropertyNames.ContainsKey(tag))
         {
             WarnIfSpecialValueMissing(ref pendingSpecialMarker, MetaPropertyNames[tag], index, warnings);
-            return LexMetaProperty(ref reader, index, tag, budget, depth, warnings);
+            var meta = LexMetaProperty(ref reader, index, tag, budget, depth, warnings);
+            grammar = FastTransferGrammar.AdvanceMetaProperty(
+                grammar, tag, meta.Offset, syntaxStack.Length);
+            return meta;
         }
 
         var specialMarker = pendingSpecialMarker;
         pendingSpecialMarker = null;
-        return LexPropValue(
+        var property = LexPropValue(
             ref reader,
             index,
             tag,
@@ -248,6 +281,8 @@ internal static class FastTransferStreamLexer
             budget,
             depth,
             cancellationToken);
+        grammar = FastTransferGrammar.AdvanceProperty(grammar, tag, property.Offset);
+        return property;
     }
 
     private static void WarnIfSpecialValueMissing(

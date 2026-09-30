@@ -584,6 +584,146 @@ public sealed class RopVariableDispatcherTests
     }
 
     [Fact]
+    public void SynchronizationConfigureProvenanceSelectsAndValidatesContentsRootAfterHandleResolution()
+    {
+        const uint ownerHandle = 0x10203040;
+        const uint synchronizationHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("sync-configure", "logical-connection");
+        context.RegisterLogonCorrelationScope("sync-transfer", "logical-connection");
+
+        var configure = Concat(
+            [0x70, 0x00, 0x00, 0x01, 0x01, 0x00],
+            Le((ushort)0),
+            Le((ushort)0),
+            Le(0u),
+            Le((ushort)0));
+        RopBufferParser.Parse(
+            Frame(configure, ownerHandle, uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "sync-configure",
+            context);
+
+        var provisional = new FastTransferStreamKey("sync-configure", 1, Provisional: true);
+        Assert.Equal(
+            FastTransferRootKind.ContentsSync,
+            context.FastTransferAssembler.StateFor(provisional).Grammar.Root);
+
+        RopBufferParser.Parse(
+            Frame(Concat([0x70, 0x01], Le(0u)), ownerHandle, synchronizationHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "sync-configure",
+            context);
+        context.CompleteHttpSession("sync-configure");
+
+        var resolved = new FastTransferStreamKey("logical-connection", synchronizationHandle);
+        Assert.Equal(
+            FastTransferRootKind.ContentsSync,
+            context.FastTransferAssembler.StateFor(resolved).Grammar.Root);
+        Assert.False(context.FastTransferAssembler.Snapshot.ContainsKey(provisional));
+
+        var stream = Concat(
+            Le(0x403A0003u),
+            Le(0x403B0003u),
+            Le(0x40140003u));
+        var warnings = new List<string>();
+        RopBufferParser.Parse(
+            Frame(BuildFastTransferGetBufferResponse(0, 0x0003, stream), synchronizationHandle),
+            0,
+            MapiDirection.Response,
+            warnings,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "sync-transfer",
+            context);
+
+        Assert.Empty(warnings);
+        Assert.True(context.FastTransferAssembler.StateFor(resolved).Grammar.IsComplete);
+        Assert.True(context.FastTransferAssembler.StateFor(resolved).Complete);
+    }
+
+    [Fact]
+    public void DoneStatusReportsAnIncompleteProvenanceSelectedRoot()
+    {
+        const uint serverHandle = 0x10203040;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("incomplete", "logical-connection");
+        var key = new FastTransferStreamKey("logical-connection", serverHandle);
+        context.FastTransferAssembler.Configure(
+            key,
+            FastTransferRootKind.HierarchySync,
+            "test synchronization configure");
+
+        var warnings = new List<string>();
+        RopBufferParser.Parse(
+            Frame(
+                BuildFastTransferGetBufferResponse(0, 0x0003, Le(0x40120003u)),
+                serverHandle),
+            0,
+            MapiDirection.Response,
+            warnings,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "incomplete",
+            context);
+
+        Assert.Contains(warnings, warning =>
+            warning.Contains("HierarchySync grammar ended in phase HierarchyFolderChange", StringComparison.Ordinal));
+        Assert.True(context.FastTransferAssembler.StateFor(key).Complete);
+    }
+
+    [Fact]
+    public void ReusedOutputSlotDiscardsAmbiguousRootProvenanceInsteadOfApplyingTheLastRoot()
+    {
+        const uint ownerHandle = 0x10203040;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("duplicate-output", "logical-connection");
+        var contentsConfigure = Concat(
+            [0x70, 0x00, 0x00, 0x01, 0x01, 0x00],
+            Le((ushort)0),
+            Le((ushort)0),
+            Le(0u),
+            Le((ushort)0));
+        var hierarchyConfigure = Concat(
+            [0x70, 0x00, 0x00, 0x01, 0x02, 0x00],
+            Le((ushort)0),
+            Le((ushort)0),
+            Le(0u),
+            Le((ushort)0));
+        var warnings = new List<string>();
+
+        RopBufferParser.Parse(
+            Frame(Concat(contentsConfigure, hierarchyConfigure), ownerHandle, uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            warnings,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "duplicate-output",
+            context);
+
+        Assert.Contains(warnings, warning =>
+            warning.Contains("configured more than once", StringComparison.Ordinal)
+            && warning.Contains("discarded rather than misapplied", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            context.FastTransferAssembler.Snapshot.Keys,
+            key => key.Provisional && key.ConnectionScope == "duplicate-output");
+    }
+
+    [Fact]
     public void DiscardsUnexecutedUploadStateSoAResentBufferIsFoldedOnlyOnce()
     {
         var head = Concat(

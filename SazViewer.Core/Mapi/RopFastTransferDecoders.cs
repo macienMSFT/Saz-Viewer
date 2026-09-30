@@ -167,7 +167,8 @@ internal static class RopFastTransferDecoders
         {
             case 0x4B: // RopFastTransferSourceCopyMessages (MS-OXCROPS 2.2.12.7.1).
             {
-                ReadHandle(ref reader, children, "OutputHandleIndex", context);
+                var outputHandle = ReadHandle(ref reader, children, "OutputHandleIndex", context);
+                ConfigureRoot(context, outputHandle, FastTransferRootKind.MessageList, "RopFastTransferSourceCopyMessages");
                 var countOffset = reader.Position;
                 var count = reader.ReadCount16("MessageIdCount");
                 AddField(children, "MessageIdCount", countOffset, 2, Count(count), context);
@@ -181,13 +182,21 @@ internal static class RopFastTransferDecoders
                 break;
             }
             case 0x4C: // RopFastTransferSourceCopyFolder (MS-OXCROPS 2.2.12.6.1).
-                ReadHandle(ref reader, children, "OutputHandleIndex", context);
+            {
+                var outputHandle = ReadHandle(ref reader, children, "OutputHandleIndex", context);
+                ConfigureRoot(context, outputHandle, FastTransferRootKind.TopFolder, "RopFastTransferSourceCopyFolder");
                 ReadFlagsByte(ref reader, children, "CopyFlags", CopyFlagsCopyFolder, context);
                 ReadFlagsByte(ref reader, children, "SendOptions", SendOptions, context);
                 break;
+            }
             case 0x4D: // RopFastTransferSourceCopyTo (MS-OXCROPS 2.2.12.8.1).
             {
-                ReadHandle(ref reader, children, "OutputHandleIndex", context);
+                var outputHandle = ReadHandle(ref reader, children, "OutputHandleIndex", context);
+                ConfigureRoot(
+                    context,
+                    outputHandle,
+                    FastTransferRootKind.Unknown,
+                    "RopFastTransferSourceCopyTo without a recovered Folder/Message/Attachment object type");
                 ReadByteField(ref reader, children, "Level", context);
                 var flagsOffset = reader.Position;
                 var copyFlags = reader.ReadUInt32("CopyFlags");
@@ -197,12 +206,19 @@ internal static class RopFastTransferDecoders
                 break;
             }
             case 0x69: // RopFastTransferSourceCopyProperties (MS-OXCROPS 2.2.12.9.1).
-                ReadHandle(ref reader, children, "OutputHandleIndex", context);
+            {
+                var outputHandle = ReadHandle(ref reader, children, "OutputHandleIndex", context);
+                ConfigureRoot(
+                    context,
+                    outputHandle,
+                    FastTransferRootKind.Unknown,
+                    "RopFastTransferSourceCopyProperties without a recovered Folder/Message/Attachment object type");
                 ReadByteField(ref reader, children, "Level", context);
                 ReadFlagsByte(ref reader, children, "CopyFlags", CopyFlagsCopyProperties, context);
                 ReadFlagsByte(ref reader, children, "SendOptions", SendOptions, context);
                 ReadPropertyTags(ref reader, children, context);
                 break;
+            }
             case 0x4E: // RopFastTransferSourceGetBuffer (MS-OXCROPS 2.2.12.4.1).
             {
                 var sizeOffset = reader.Position;
@@ -223,10 +239,25 @@ internal static class RopFastTransferDecoders
                 break;
             }
             case 0x53: // RopFastTransferDestinationConfigure (MS-OXCROPS 2.2.12.1.1).
-                ReadHandle(ref reader, children, "OutputHandleIndex", context);
-                ReadEnumByte(ref reader, children, "SourceOperation", SourceOperations, context);
+            {
+                var outputHandle = ReadHandle(ref reader, children, "OutputHandleIndex", context);
+                var sourceOperation = ReadEnumByte(ref reader, children, "SourceOperation", SourceOperations, context);
+                var root = sourceOperation switch
+                {
+                    0x03 => FastTransferRootKind.MessageList,
+                    0x04 => FastTransferRootKind.TopFolder,
+                    _ => FastTransferRootKind.Unknown,
+                };
+                ConfigureRoot(
+                    context,
+                    outputHandle,
+                    root,
+                    root == FastTransferRootKind.Unknown
+                        ? $"RopFastTransferDestinationConfigure SourceOperation 0x{sourceOperation:X2} without a recovered Folder/Message/Attachment object type"
+                        : $"RopFastTransferDestinationConfigure SourceOperation 0x{sourceOperation:X2}");
                 ReadFlagsByte(ref reader, children, "CopyFlags", CopyFlagsDestinationConfigure, context);
                 break;
+            }
             case 0x54: // RopFastTransferDestinationPutBuffer (MS-OXCROPS 2.2.12.2.1).
             case 0x9D: // RopFastTransferDestinationPutBufferExtended (MS-OXCROPS 2.2.12.3.1).
             {
@@ -239,8 +270,19 @@ internal static class RopFastTransferDecoders
             }
             case 0x70: // RopSynchronizationConfigure (MS-OXCROPS 2.2.13.1.1).
             {
-                ReadHandle(ref reader, children, "OutputHandleIndex", context);
-                ReadEnumByte(ref reader, children, "SynchronizationType", SynchronizationTypes, context);
+                var outputHandle = ReadHandle(ref reader, children, "OutputHandleIndex", context);
+                var synchronizationType = ReadEnumByte(
+                    ref reader, children, "SynchronizationType", SynchronizationTypes, context);
+                ConfigureRoot(
+                    context,
+                    outputHandle,
+                    synchronizationType switch
+                    {
+                        0x01 => FastTransferRootKind.ContentsSync,
+                        0x02 => FastTransferRootKind.HierarchySync,
+                        _ => FastTransferRootKind.Unknown,
+                    },
+                    $"RopSynchronizationConfigure SynchronizationType 0x{synchronizationType:X2}");
                 ReadFlagsByte(ref reader, children, "SendOptions", SendOptions, context);
                 var syncFlagsOffset = reader.Position;
                 var syncFlags = reader.ReadUInt16("SynchronizationFlags");
@@ -400,6 +442,13 @@ internal static class RopFastTransferDecoders
                                 context,
                                 "RopFastTransferSourceGetBuffer reported Done while the reconstructed stream " +
                                 "still has an incomplete value or unclosed syntactical markers.");
+                        }
+                        if (completedState.CompletionIssue is { } completionIssue)
+                        {
+                            Warn(
+                                context,
+                                "RopFastTransferSourceGetBuffer reported Done before the provenance-selected " +
+                                $"{completionIssue} completed.");
                         }
                         context.Assembler!.Complete(completedKey);
                     }
@@ -611,6 +660,18 @@ internal static class RopFastTransferDecoders
                 handleIndex,
                 allowProvisional: context.Direction == MapiDirection.Request,
                 out key);
+    }
+
+    private static void ConfigureRoot(
+        FastTransferParseContext context,
+        byte outputHandleIndex,
+        FastTransferRootKind root,
+        string provenance)
+    {
+        WarnIfPresent(
+            context,
+            context.CaptureContext?.ConfigureFastTransferRoot(
+                context.CaptureScope, outputHandleIndex, root, provenance));
     }
 
     private static MapiNode ParseCompletedIcsState(
@@ -1071,7 +1132,7 @@ internal static class RopFastTransferDecoders
         AddField(children, name, offset, 1, Flags(value, table, 2), context);
     }
 
-    private static void ReadEnumByte(
+    private static byte ReadEnumByte(
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder children,
         string name,
@@ -1081,6 +1142,7 @@ internal static class RopFastTransferDecoders
         var offset = reader.Position;
         var value = reader.ReadByte(name);
         AddField(children, name, offset, 1, Enumerated(value, table, 2), context);
+        return value;
     }
 
     private static ushort ReadEnumUInt16(

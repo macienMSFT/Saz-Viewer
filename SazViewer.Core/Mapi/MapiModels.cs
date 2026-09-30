@@ -109,6 +109,7 @@ internal sealed class MapiCaptureContext
         string,
         Queue<(uint HandleIndex, (string Scope, uint Handle)? RequestHandle)>> pendingResetTables = [];
     private readonly Dictionary<string, Queue<PendingFastTransferUpload>> pendingFastTransferUploads = [];
+    private readonly Dictionary<string, HashSet<uint>> configuredFastTransferOutputSlots = [];
     private readonly Dictionary<string, Queue<PendingIcsStateOperation>> pendingIcsStateOperations = [];
     private readonly Dictionary<IcsStateStreamKey, ActiveIcsStateUpload> activeIcsStateUploads = [];
 
@@ -383,6 +384,7 @@ internal sealed class MapiCaptureContext
         propertySpecificTags.Remove(captureScope);
         requestRopLists.Remove(captureScope);
         pendingFastTransferUploads.Remove(captureScope);
+        configuredFastTransferOutputSlots.Remove(captureScope);
         if (pendingIcsStateOperations.Remove(captureScope, out var abandonedStateOperations))
         {
             foreach (var operation in abandonedStateOperations)
@@ -445,6 +447,47 @@ internal sealed class MapiCaptureContext
         }
 
         return false;
+    }
+
+    public string? ConfigureFastTransferRoot(
+        string? captureScope,
+        uint outputHandleIndex,
+        FastTransferRootKind root,
+        string provenance)
+    {
+        if (captureScope is null)
+        {
+            return null;
+        }
+
+        if (!configuredFastTransferOutputSlots.TryGetValue(captureScope, out var configuredSlots))
+        {
+            if (configuredFastTransferOutputSlots.Count >= MapiParseLimits.MaxStateEntries)
+            {
+                return "FastTransfer root provenance was not retained because the capture-local state limit was reached.";
+            }
+            configuredSlots = [];
+            configuredFastTransferOutputSlots[captureScope] = configuredSlots;
+        }
+
+        var key = new FastTransferStreamKey(captureScope, outputHandleIndex, Provisional: true);
+        if (!configuredSlots.Add(outputHandleIndex))
+        {
+            FastTransferAssembler.Forget(key);
+            if (pendingFastTransferUploads.TryGetValue(captureScope, out var pendingUploads))
+            {
+                foreach (var upload in pendingUploads.Where(upload => upload.Key == key))
+                {
+                    upload.Invalidated = true;
+                }
+            }
+            return $"FastTransfer output handle slot {outputHandleIndex} is configured more than once in the same " +
+                "HTTP session; intermediate server handles are not recoverable from the final handle table, so " +
+                "root provenance and staged upload state for that slot were discarded rather than misapplied.";
+        }
+
+        FastTransferAssembler.Configure(key, root, provenance);
+        return null;
     }
 
     public void InvalidateHandleState(string? captureScope, uint handleIndex)

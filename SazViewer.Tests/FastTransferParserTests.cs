@@ -680,6 +680,141 @@ public sealed class FastTransferParserTests
     }
 
     [Fact]
+    public void ValidatesACompleteContentsSynchronizationProductionAcrossBuffers()
+    {
+        var state = FastTransferStreamState.ForRoot(
+            FastTransferRootKind.ContentsSync,
+            "test synchronization configure");
+        var first = LexWithState(
+            Concat(Le(0x40120003u), Le(0x40150003u)),
+            state);
+
+        Assert.False(first.State.Desynchronized);
+        Assert.Equal(FastTransferGrammarPhase.ContentsMessageBody, first.State.Grammar.Phase);
+
+        var second = LexWithState(
+            Concat(Le(0x403A0003u), Le(0x403B0003u), Le(0x40140003u)),
+            first.State);
+
+        Assert.Empty(second.Warnings);
+        Assert.False(second.State.Desynchronized);
+        Assert.True(second.State.Grammar.IsComplete);
+        Assert.Null(second.State.CompletionIssue);
+    }
+
+    [Fact]
+    public void ValidatesHierarchyChangesDeletionsAndRequiredFinalStateInOrder()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                Le(0x40120003u),
+                property,
+                Le(0x40130003u),
+                property,
+                Le(0x403A0003u),
+                property,
+                Le(0x403B0003u),
+                Le(0x40140003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.HierarchySync,
+                "test synchronization configure"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.True(result.State.Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void RejectsOutOfOrderContentsSynchronizationPhasesWithoutResynchronizing()
+    {
+        var result = LexWithState(
+            Concat(Le(0x402F0003u), Le(0x40130003u), Le(0x403A0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.ContentsSync,
+                "test synchronization configure"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(
+            result.Warnings,
+            warning => warning.Contains("ContentsReadState", StringComparison.Ordinal)
+                && warning.Contains("IncrSyncDel", StringComparison.Ordinal));
+        Assert.Equal("Unlexed stream remainder", result.Nodes[^1].Name);
+    }
+
+    [Fact]
+    public void ValidatesStandaloneStateRootAndRejectsAnExtraSynchronizationEnd()
+    {
+        var complete = LexWithState(
+            Concat(Le(0x403A0003u), Le(0x403B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.State,
+                "test get transfer state"));
+
+        Assert.True(complete.State.Grammar.IsComplete);
+        var extra = LexWithState(Le(0x40140003u), complete.State);
+        Assert.True(extra.State.Desynchronized);
+        Assert.Contains(extra.Warnings, warning =>
+            warning.Contains("phase Complete", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RecoverModeErrorInfoUnwindsToContentsSyncAndRequiresOneBinaryProperty()
+    {
+        var extendedErrorInfo = new byte[88];
+        var errorProperty = Concat(
+            Le((ushort)0x0102),
+            Le((ushort)0x0000),
+            Le((uint)extendedErrorInfo.Length),
+            extendedErrorInfo);
+        var result = LexWithState(
+            Concat(
+                Le(0x40120003u),
+                Le(0x40150003u),
+                Le(0x40030003u),
+                Le(0x40180003u),
+                errorProperty,
+                Le(0x403A0003u),
+                Le(0x403B0003u),
+                Le(0x40140003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.ContentsSync,
+                "test RecoverMode synchronization"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Equal(0, result.State.MarkerDepth);
+        Assert.True(result.State.Grammar.IsComplete);
+
+        var replacesRequiredProgressProperty = LexWithState(
+            Concat(
+                Le(0x4075000Bu),
+                Le(0x40180003u),
+                errorProperty,
+                Le(0x403A0003u),
+                Le(0x403B0003u),
+                Le(0x40140003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.ContentsSync,
+                "test RecoverMode synchronization"));
+        Assert.Empty(replacesRequiredProgressProperty.Warnings);
+        Assert.True(replacesRequiredProgressProperty.State.Grammar.IsComplete);
+
+        var nonBinaryError = LexWithState(
+            Concat(
+                Le(0x40180003u),
+                Le((ushort)0x0003),
+                Le((ushort)0x3001),
+                Le(1u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.ContentsSync,
+                "test RecoverMode synchronization"));
+        Assert.True(nonBinaryError.State.Desynchronized);
+        Assert.Contains(nonBinaryError.Warnings, warning =>
+            warning.Contains("ContentsErrorInfo", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void DecodesPublishedProgressInformationSpecialProperty()
     {
         var payload = Concat(
@@ -1446,6 +1581,10 @@ public sealed class FastTransferParserTests
     private static FastTransferLexResult Lex(byte[] bytes) =>
         FastTransferStreamLexer.Lex(
             bytes, 0, FastTransferStreamState.Initial, new MapiNodeBudget(), 0, CancellationToken.None);
+
+    private static FastTransferLexResult LexWithState(byte[] bytes, FastTransferStreamState state) =>
+        FastTransferStreamLexer.Lex(
+            bytes, 0, state, new MapiNodeBudget(), 0, CancellationToken.None);
 
     private static byte[] FolderReplicaInfo()
     {

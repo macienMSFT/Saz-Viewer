@@ -92,6 +92,12 @@ internal sealed record FastTransferStreamState
     /// <summary>The varSizeValue tail a previous buffer ended inside, if any.</summary>
     public FastTransferPendingValue? Pending { get; init; }
 
+    /// <summary>
+    /// Provenance-bound syntactical root and online phase. Unconfigured standalone lexing deliberately
+    /// remains root-agnostic; capture parsing configures this before the first transfer buffer.
+    /// </summary>
+    public FastTransferGrammarState Grammar { get; init; } = FastTransferGrammarState.Unconfigured;
+
     /// <summary>Open deterministic syntactical productions carried across transfer buffers.</summary>
     public ImmutableArray<FastTransferSyntaxFrame> SyntaxStack { get; init; } =
         ImmutableArray<FastTransferSyntaxFrame>.Empty;
@@ -135,6 +141,11 @@ internal sealed record FastTransferStreamState
         Pending = pending,
     };
 
+    public FastTransferStreamState WithGrammar(FastTransferGrammarState grammar) => this with
+    {
+        Grammar = grammar,
+    };
+
     public FastTransferStreamState WithSyntaxStack(ImmutableArray<FastTransferSyntaxFrame> stack) => this with
     {
         SyntaxStack = stack,
@@ -153,6 +164,14 @@ internal sealed record FastTransferStreamState
     };
 
     public FastTransferStreamState AsComplete() => this with { Complete = true };
+
+    public string? CompletionIssue =>
+        Grammar.IsValidated && !Grammar.IsComplete
+            ? $"{Grammar.Root} grammar ended in phase {Grammar.Phase}"
+            : null;
+
+    public static FastTransferStreamState ForRoot(FastTransferRootKind root, string provenance) =>
+        new() { Grammar = FastTransferGrammarState.ForRoot(root, provenance) };
 }
 
 /// <summary>
@@ -214,6 +233,17 @@ internal sealed class FastTransferStreamAssembler
         if (states.ContainsKey(key) || !AtCapacity)
         {
             states = states.SetItem(key, state);
+        }
+    }
+
+    public void Configure(
+        FastTransferStreamKey key,
+        FastTransferRootKind root,
+        string provenance)
+    {
+        if (states.ContainsKey(key) || !AtCapacity)
+        {
+            states = states.SetItem(key, FastTransferStreamState.ForRoot(root, provenance));
         }
     }
 

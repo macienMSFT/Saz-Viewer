@@ -195,6 +195,21 @@ internal static class RopSemanticParser
                 var newReferences = handleReferences
                     .Where(reference => reference.OperationIndex == index - 1)
                     .ToArray();
+                if (direction == MapiDirection.Request && ropId == 0x82)
+                {
+                    foreach (var output in newReferences.Where(reference => reference.FieldName == "OutputHandleIndex"))
+                    {
+                        var provenanceWarning = context?.ConfigureFastTransferRoot(
+                            captureScope,
+                            output.Index,
+                            FastTransferRootKind.State,
+                            "RopSynchronizationGetTransferState");
+                        if (provenanceWarning is not null)
+                        {
+                            warnings.Add(provenanceWarning);
+                        }
+                    }
+                }
                 if (direction == MapiDirection.Response
                     && ropList.Length - opStartLocal >= 6
                     && BinaryPrimitives.ReadUInt32LittleEndian(ropList[(opStartLocal + 2)..]) == 0)
