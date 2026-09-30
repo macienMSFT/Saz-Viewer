@@ -633,6 +633,20 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("const query=search.value.trim().toLowerCase()", html, StringComparison.Ordinal);
         Assert.Contains("if(!visibleIndices.includes(selectedIndex))select(visibleIndices[0],false)", html, StringComparison.Ordinal);
         Assert.Contains("No WebSocket messages match this payload search.", html, StringComparison.Ordinal);
+        Assert.Contains("role','separator'", html, StringComparison.Ordinal);
+        Assert.Contains("Resize WebSocket traffic and payload panes", html, StringComparison.Ordinal);
+        Assert.Contains("let webSocketSplitRatio=.38", html, StringComparison.Ordinal);
+        Assert.Contains("splitter.setPointerCapture(event.pointerId)", html, StringComparison.Ordinal);
+        Assert.Contains("aria-valuetext',`Left pane ${now} percent; right pane ${100-now} percent`", html, StringComparison.Ordinal);
+        Assert.Contains("Search selected payload view...", html, StringComparison.Ordinal);
+        Assert.Contains("highlightWebSocketSearchRoots", html, StringComparison.Ordinal);
+        Assert.Contains("MAX_MATCHES=5000", html, StringComparison.Ordinal);
+        Assert.Contains("document.createElement('mark')", html, StringComparison.Ordinal);
+        Assert.Contains("function foldWebSocketSearchText(text)", html, StringComparison.Ordinal);
+        Assert.Contains("for(let scan=nodeIndex;scan<nodes.length&&nodes[scan].start<end;scan++)", html, StringComparison.Ordinal);
+        Assert.Contains("content.addEventListener('saz-view-change',run)", html, StringComparison.Ordinal);
+        Assert.Contains("removeWebSocketSearchMarks(content)", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("localStorage", html, StringComparison.Ordinal);
         Assert.Contains("const logicalId=index+1", html, StringComparison.Ordinal);
         Assert.DoesNotContain("const meta=wsElement('span','ws-message-meta'", html, StringComparison.Ordinal);
         Assert.Contains("`${message.payloadLengthText}${limited?'*':''}`", html, StringComparison.Ordinal);
@@ -763,10 +777,8 @@ public sealed class HtmlReportGeneratorTests
         Assert.DoesNotContain("detail-resizer", html, StringComparison.Ordinal);
         Assert.DoesNotContain(".detail-pane{", html, StringComparison.Ordinal);
         Assert.DoesNotContain("--detail-height", html, StringComparison.Ordinal);
-        Assert.DoesNotContain("pointerdown", html, StringComparison.Ordinal);
         Assert.DoesNotContain("resizeTo(", html, StringComparison.Ordinal);
         Assert.DoesNotContain("updateResizeAria", html, StringComparison.Ordinal);
-        Assert.DoesNotContain("aria-valuenow", html, StringComparison.Ordinal);
         Assert.DoesNotContain("message-grid", html, StringComparison.Ordinal);
         Assert.DoesNotContain("session-heading", html, StringComparison.Ordinal);
     }
@@ -782,9 +794,9 @@ public sealed class HtmlReportGeneratorTests
 
         // HTTP remains a single visible side. WebSocket traffic intentionally uses a bounded
         // two-column inspector that stacks at the existing narrow breakpoint.
-        Assert.Contains(".ws-layout{flex:1;min-height:0;display:grid;grid-template-columns:", html, StringComparison.Ordinal);
+        Assert.Contains(".ws-layout{flex:1;min-height:0;display:flex;gap:6px;overflow:hidden}", html, StringComparison.Ordinal);
         Assert.Contains("dialog#httpInspector{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh", html, StringComparison.Ordinal);
-        Assert.Contains("@media(max-width:900px){main{padding:2px}.ws-layout{grid-template-columns:1fr;grid-template-rows:", html, StringComparison.Ordinal);
+        Assert.Contains("@media(max-width:900px){main{padding:2px}.ws-layout{display:grid;grid-template-columns:1fr;grid-template-rows:", html, StringComparison.Ordinal);
         Assert.Contains(".primary-panel{flex:1;min-height:0;display:flex;flex-direction:column", html, StringComparison.Ordinal);
     }
 

@@ -19,6 +19,7 @@ public sealed class HtmlReportBrowserTests
         safe = true,
         detail = new string('x', 6550),
         searchTail = "NeedleBeyondPreview",
+        unicode = "Straße雪",
         attack = InjectionText
     });
 
@@ -77,6 +78,15 @@ public sealed class HtmlReportBrowserTests
                     Url = "wss://example.test/large",
                     StatusCode = 101
                 });
+            report.Sessions.Add(
+                new HttpSession
+                {
+                    Id = "2",
+                    ArchiveOrder = 1,
+                    Method = "GET",
+                    Url = "wss://example.test/second",
+                    StatusCode = 101
+                });
             for (var index = 0; index < 5_000; index++)
             {
                 var text = index == 4_999 ? "unique retained payload needle" : $"common payload {index}";
@@ -97,6 +107,21 @@ public sealed class HtmlReportBrowserTests
                         Payload = payload
                     });
             }
+            report.WebSocketMessages.Add(
+                new WebSocketMessage
+                {
+                    SessionId = "2",
+                    MessageIndex = 0,
+                    RecordIndex = 0,
+                    Direction = "Server",
+                    Type = "Text",
+                    PayloadLength = 14,
+                    Preview = "second session",
+                    Text = "second session",
+                    IsComplete = true,
+                    IsDecoded = true,
+                    Payload = Encoding.UTF8.GetBytes("second session")
+                });
             await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(report));
 
             using var playwright = await Playwright.CreateAsync();
@@ -108,7 +133,7 @@ public sealed class HtmlReportBrowserTests
             try
             {
                 await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
-                await page.Locator("#httpTable tbody tr[data-websocket=\"true\"]").ClickAsync();
+                await page.Locator("#httpTable tbody tr[data-websocket=\"true\"]").First.ClickAsync();
                 await page.Locator(".ws-payload-search").WaitForAsync(new() { Timeout = 10_000 });
                 Assert.Equal(5_000, await page.Locator(".ws-message-row").CountAsync());
                 Assert.Equal("5000 of 5000 messages", await page.Locator(".ws-search-status").InnerTextAsync());
@@ -121,6 +146,35 @@ public sealed class HtmlReportBrowserTests
                 await page.Locator(".ws-payload-search").FillAsync("  ");
                 await Assertions.Expect(page.Locator(".ws-search-status"))
                     .ToHaveTextAsync("5000 of 5000 messages", new() { Timeout = 10_000 });
+
+                var splitter = page.Locator(".ws-splitter");
+                await splitter.FocusAsync();
+                await page.Keyboard.PressAsync("End");
+                var firstTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                var firstDetail = await page.Locator(".ws-detail-pane").BoundingBoxAsync();
+                Assert.NotNull(firstTraffic);
+                Assert.NotNull(firstDetail);
+                var rememberedRatio = firstTraffic.Width / (firstTraffic.Width + firstDetail.Width);
+                await page.Locator(".ws-view-search-input").FillAsync("common payload");
+                await page.Locator("#inspectorNext").ClickAsync();
+                await Assertions.Expect(page.Locator(".ws-search-status")).ToHaveTextAsync("1 of 1 messages");
+                Assert.Equal("", await page.Locator(".ws-view-search-input").InputValueAsync());
+                var secondTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                var secondDetail = await page.Locator(".ws-detail-pane").BoundingBoxAsync();
+                Assert.NotNull(secondTraffic);
+                Assert.NotNull(secondDetail);
+                var secondRatio = secondTraffic.Width / (secondTraffic.Width + secondDetail.Width);
+                Assert.InRange(Math.Abs(secondRatio - rememberedRatio), 0, .02);
+
+                await page.Keyboard.PressAsync("Escape");
+                await page.Locator("#httpTable tbody tr[data-detail=\"http-detail-0\"]").ClickAsync();
+                await Assertions.Expect(page.Locator(".ws-search-status")).ToHaveTextAsync("5000 of 5000 messages");
+                var reopenedTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                var reopenedDetail = await page.Locator(".ws-detail-pane").BoundingBoxAsync();
+                Assert.NotNull(reopenedTraffic);
+                Assert.NotNull(reopenedDetail);
+                var reopenedRatio = reopenedTraffic.Width / (reopenedTraffic.Width + reopenedDetail.Width);
+                Assert.InRange(Math.Abs(reopenedRatio - rememberedRatio), 0, .02);
                 Assert.Empty(errors);
             }
             finally
@@ -410,13 +464,95 @@ public sealed class HtmlReportBrowserTests
             Assert.NotNull(traffic);
             Assert.NotNull(detail);
             Assert.True(dialog.Width >= width - 1 && dialog.Height >= 899);
+            double? rememberedSplitRatio = null;
             if (width > 900)
             {
                 Assert.True(detail.X > traffic.X + traffic.Width - 2);
+                var initialPreview = await page.Locator(".ws-message-row").First.Locator(".ws-message-preview").BoundingBoxAsync();
+                Assert.NotNull(initialPreview);
+                var splitter = page.Locator(".ws-splitter");
+                Assert.True(await splitter.IsVisibleAsync());
+                Assert.Equal("separator", await splitter.GetAttributeAsync("role"));
+                Assert.Equal("vertical", await splitter.GetAttributeAsync("aria-orientation"));
+                Assert.NotNull(await splitter.GetAttributeAsync("aria-valuemin"));
+                Assert.NotNull(await splitter.GetAttributeAsync("aria-valuemax"));
+                Assert.NotNull(await splitter.GetAttributeAsync("aria-valuenow"));
+                Assert.Contains("Left pane", await splitter.GetAttributeAsync("aria-valuetext"));
+
+                await splitter.FocusAsync();
+                await page.Keyboard.PressAsync("Home");
+                var homeTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                var homeDetail = await page.Locator(".ws-detail-pane").BoundingBoxAsync();
+                Assert.NotNull(homeTraffic);
+                Assert.NotNull(homeDetail);
+                Assert.InRange(homeTraffic.Width, 278, 282);
+                Assert.True(homeDetail.Width > homeTraffic.Width);
+
+                await page.Keyboard.PressAsync("ArrowRight");
+                var arrowTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                Assert.NotNull(arrowTraffic);
+                Assert.True(arrowTraffic.Width >= homeTraffic.Width + 10);
+                await page.Keyboard.PressAsync("Shift+ArrowRight");
+                var shiftedTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                Assert.NotNull(shiftedTraffic);
+                Assert.True(shiftedTraffic.Width >= arrowTraffic.Width + 38);
+
+                await page.Keyboard.PressAsync("End");
+                var endTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                var endDetail = await page.Locator(".ws-detail-pane").BoundingBoxAsync();
+                Assert.NotNull(endTraffic);
+                Assert.NotNull(endDetail);
+                Assert.InRange(endDetail.Width, 318, 322);
+                Assert.True(endTraffic.Width > endDetail.Width);
+
+                await page.Keyboard.PressAsync("Home");
+                var splitterBox = await splitter.BoundingBoxAsync();
+                var layoutBox = await page.Locator(".ws-layout").BoundingBoxAsync();
+                Assert.NotNull(splitterBox);
+                Assert.NotNull(layoutBox);
+                await page.Mouse.MoveAsync(splitterBox.X + (splitterBox.Width / 2), splitterBox.Y + 20);
+                await page.Mouse.DownAsync();
+                await page.Mouse.MoveAsync(layoutBox.X + (layoutBox.Width * .34f), splitterBox.Y + 20, new() { Steps = 4 });
+                await page.Mouse.MoveAsync(layoutBox.X + (layoutBox.Width * .56f), splitterBox.Y + 20, new() { Steps = 4 });
+                await page.Mouse.MoveAsync(layoutBox.X + (layoutBox.Width * .44f), splitterBox.Y + 20, new() { Steps = 4 });
+                await page.Mouse.MoveAsync(layoutBox.X + (layoutBox.Width * .56f), splitterBox.Y + 20, new() { Steps = 4 });
+                await page.Mouse.UpAsync();
+                var draggedTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                var draggedDetail = await page.Locator(".ws-detail-pane").BoundingBoxAsync();
+                Assert.NotNull(draggedTraffic);
+                Assert.NotNull(draggedDetail);
+                rememberedSplitRatio = draggedTraffic.Width / (draggedTraffic.Width + draggedDetail.Width);
+                Assert.InRange(rememberedSplitRatio.Value, .53, .59);
+                var draggedPreview = await page.Locator(".ws-message-row").First.Locator(".ws-message-preview").BoundingBoxAsync();
+                Assert.NotNull(draggedPreview);
+                Assert.True(draggedPreview.Width > initialPreview.Width);
+                Assert.False(await page.Locator("body").EvaluateAsync<bool>("body=>body.classList.contains('ws-resizing')"));
+
+                await page.SetViewportSizeAsync(700, 900);
+                await page.WaitForTimeoutAsync(50);
+                Assert.False(await splitter.IsVisibleAsync());
+                var narrowTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                var narrowDetail = await page.Locator(".ws-detail-pane").BoundingBoxAsync();
+                Assert.NotNull(narrowTraffic);
+                Assert.NotNull(narrowDetail);
+                Assert.True(narrowDetail.Y > narrowTraffic.Y + narrowTraffic.Height - 2);
+                Assert.True(await page.EvaluateAsync<bool>("() => document.documentElement.scrollWidth <= innerWidth"));
+
+                await page.SetViewportSizeAsync(width, 900);
+                await page.WaitForTimeoutAsync(50);
+                Assert.True(await splitter.IsVisibleAsync());
+                var restoredTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                var restoredDetail = await page.Locator(".ws-detail-pane").BoundingBoxAsync();
+                Assert.NotNull(restoredTraffic);
+                Assert.NotNull(restoredDetail);
+                var restoredRatio = restoredTraffic.Width / (restoredTraffic.Width + restoredDetail.Width);
+                Assert.InRange(Math.Abs(restoredRatio - rememberedSplitRatio.Value), 0, .02);
             }
             else
             {
                 Assert.True(detail.Y > traffic.Y + traffic.Height - 2);
+                Assert.False(await page.Locator(".ws-splitter").IsVisibleAsync());
+                Assert.True(await page.EvaluateAsync<bool>("() => document.documentElement.scrollWidth <= innerWidth"));
             }
 
             var messages = page.Locator(".ws-message-row");
@@ -572,18 +708,79 @@ public sealed class HtmlReportBrowserTests
                     Preview = WebSocketJson
                 },
                 null).Formatted;
-            Assert.Equal(expectedJson, await CopyAndReadAsync(page, "ws-json-panel-0"));
-            await page.Locator("[role=tab][data-tab=text]").ClickAsync();
-            Assert.Equal(WebSocketJson, await CopyAndReadAsync(page, "ws-text-panel-0"));
-            await page.Locator("[role=tab][data-tab=json]").ClickAsync();
+            var viewSearch = page.Locator(".ws-view-search-input");
+            var viewSearchStatus = page.Locator(".ws-view-search-status");
+            Assert.Equal("Search selected WebSocket payload view", await viewSearch.GetAttributeAsync("aria-label"));
+            Assert.Equal("polite", await viewSearchStatus.GetAttributeAsync("aria-live"));
+            await page.Locator(".ws-detail-pane .tree-collapse-all").ClickAsync();
+            var treeRoot = page.Locator(".ws-detail-pane .tree-view>.tree-item[aria-expanded]").First;
+            Assert.Equal("false", await treeRoot.GetAttributeAsync("aria-expanded"));
+            await viewSearch.FillAsync("needlebeyondpreview");
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 1 matches");
+            Assert.Equal(1, await page.Locator(".ws-search-match").CountAsync());
+            Assert.Equal(1, await page.Locator(".ws-search-match-current").CountAsync());
+            Assert.Equal("true", await treeRoot.GetAttributeAsync("aria-expanded"));
+            Assert.True(await viewSearch.EvaluateAsync<bool>("input=>document.activeElement===input"));
+            await page.Locator(".ws-detail-pane [data-view=pretty]").ClickAsync();
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 1 matches");
+            await page.Locator(".ws-detail-pane [data-view=tree]").ClickAsync();
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 1 matches");
+            await viewSearch.FillAsync("   ");
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("0 matches");
+            Assert.Equal(0, await page.Locator(".ws-search-match").CountAsync());
+            Assert.Equal("false", await treeRoot.GetAttributeAsync("aria-expanded"));
+
             await page.Locator(".ws-detail-pane [data-view=pretty]").ClickAsync();
             Assert.Contains("\"kind\"", await page.Locator(".ws-detail-pane .pretty-subview").InnerTextAsync());
+            await viewSearch.FillAsync("x");
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 5000+ matches (capped)");
+            Assert.Equal(5_000, await page.Locator(".ws-search-match").CountAsync());
+            Assert.Equal(expectedJson, await CopyAndReadAsync(page, "ws-json-panel-0"));
+            await viewSearch.FillAsync("ONERROR=GLOBALTHIS");
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 1 matches");
+            Assert.False(await page.EvaluateAsync<bool>("() => Boolean(globalThis.pwned)"));
+
+            await page.Locator("[role=tab][data-tab=text]").ClickAsync();
+            await viewSearch.FillAsync("needlebeyondpreview");
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 1 matches");
+            Assert.Equal(WebSocketJson, await CopyAndReadAsync(page, "ws-text-panel-0"));
+            await viewSearch.FillAsync("Copy");
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("0 matches");
+
+            await page.Locator("[role=tab][data-tab=raw]").ClickAsync();
+            await viewSearch.FillAsync("ID=");
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 2 matches");
+            await page.Locator(".ws-view-search-prev").ClickAsync();
+            Assert.Equal("2 of 2 matches", await viewSearchStatus.InnerTextAsync());
+            await page.Locator(".ws-view-search-next").ClickAsync();
+            Assert.Equal("1 of 2 matches", await viewSearchStatus.InnerTextAsync());
+            await viewSearch.FillAsync("needle");
+            Assert.Equal("1 of 1 matches", await viewSearchStatus.InnerTextAsync());
+            await page.Locator("[role=tab][data-tab=text]").ClickAsync();
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 1 matches");
+
+            await page.Locator("[role=tab][data-tab=json]").ClickAsync();
             await page.Locator(".ws-detail-pane [data-view=tree]").ClickAsync();
             await page.Locator(".ws-detail-pane .tree-collapse-all").ClickAsync();
             Assert.Equal("false", await page.Locator(".ws-detail-pane .tree-item[aria-expanded]").First
                 .GetAttributeAsync("aria-expanded"));
+            await viewSearch.FillAsync("searchtail");
+            await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 1 matches");
 
+            await viewSearch.EvaluateAsync(
+                "input=>{input.value='needle';input.dispatchEvent(new Event('input',{bubbles:true}))}");
+            await messages.Nth(5).ClickAsync();
+            Assert.Equal(0, await page.Locator(".ws-search-match").CountAsync());
+            await page.Locator(".ws-view-search-input").FillAsync("STRAßE雪");
+            await Assertions.Expect(page.Locator(".ws-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+            await page.Locator(".ws-view-search-input").FillAsync("X");
+            await Assertions.Expect(page.Locator(".ws-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+            Assert.Equal("x", await page.Locator(".ws-search-match").InnerTextAsync());
+            await page.Locator(".ws-view-search-input").FillAsync("aa");
+            await Assertions.Expect(page.Locator(".ws-view-search-status")).ToHaveTextAsync("1 of 2 matches");
             await messages.Nth(1).ClickAsync();
+            Assert.Equal("", await page.Locator(".ws-view-search-input").InputValueAsync());
+            Assert.Equal(0, await page.Locator(".ws-search-match").CountAsync());
             Assert.Contains("Ping", await page.Locator(".ws-detail-pane").InnerTextAsync());
             Assert.True(await page.Locator("[role=tab][data-tab=json]").IsDisabledAsync());
             Assert.True(await page.Locator("[role=tab][data-tab=text]").IsDisabledAsync());
@@ -609,7 +806,17 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal("inspectorClose", await page.EvaluateAsync<string>(
                 "()=>document.activeElement?.id||''"));
             Assert.Equal("", await page.Locator(".ws-payload-search").InputValueAsync());
+            Assert.Equal("", await page.Locator(".ws-view-search-input").InputValueAsync());
             Assert.Equal("10 of 10 messages", await page.Locator(".ws-search-status").InnerTextAsync());
+            if (rememberedSplitRatio.HasValue)
+            {
+                var reopenedTraffic = await page.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                var reopenedDetail = await page.Locator(".ws-detail-pane").BoundingBoxAsync();
+                Assert.NotNull(reopenedTraffic);
+                Assert.NotNull(reopenedDetail);
+                var reopenedRatio = reopenedTraffic.Width / (reopenedTraffic.Width + reopenedDetail.Width);
+                Assert.InRange(Math.Abs(reopenedRatio - rememberedSplitRatio.Value), 0, .02);
+            }
 
             var popupTask = page.WaitForPopupAsync();
             await page.Locator("#inspectorOpenTab").ClickAsync();
@@ -621,9 +828,21 @@ public sealed class HtmlReportBrowserTests
             Assert.True(await popup.Locator("body").EvaluateAsync<bool>("body=>body.classList.contains('inspector-only')"));
             Assert.Contains("WebSocket traffic", await popup.Locator(".ws-traffic-pane").InnerTextAsync());
             Assert.Equal("4 of 4", await popup.Locator("#inspectorPosition").InnerTextAsync());
+            if (rememberedSplitRatio.HasValue)
+            {
+                var popupTraffic = await popup.Locator(".ws-traffic-pane").BoundingBoxAsync();
+                var popupDetail = await popup.Locator(".ws-detail-pane").BoundingBoxAsync();
+                Assert.NotNull(popupTraffic);
+                Assert.NotNull(popupDetail);
+                var popupRatio = popupTraffic.Width / (popupTraffic.Width + popupDetail.Width);
+                Assert.InRange(popupRatio, .35, .41);
+                Assert.True(Math.Abs(popupRatio - rememberedSplitRatio.Value) > .1);
+            }
             await popup.Locator(".ws-payload-search").FillAsync("searchtail");
             Assert.Equal("1 of 10 messages", await popup.Locator(".ws-search-status").InnerTextAsync());
             Assert.Equal("true", await popup.Locator(".ws-message-row").First.GetAttributeAsync("aria-selected"));
+            await popup.Locator(".ws-view-search-input").FillAsync("needlebeyondpreview");
+            await Assertions.Expect(popup.Locator(".ws-view-search-status")).ToHaveTextAsync("1 of 1 matches");
             await popup.Locator("#inspectorPrev").ClickAsync();
             Assert.True(await popup.Locator(".primary-tab-strip").IsVisibleAsync());
             await popup.Locator("#inspectorNext").ClickAsync();
@@ -1210,8 +1429,8 @@ public sealed class HtmlReportBrowserTests
                 6,
                 "Server",
                 "Text",
-                Encoding.UTF8.GetBytes("shared alpha payload"),
-                "shared alpha payload",
+                Encoding.UTF8.GetBytes("aaaa shared alpha payload Straße雪 İx"),
+                "aaaa shared alpha payload Straße雪 İx",
                 complete: true));
         report.WebSocketMessages.Add(
             WebSocketMessage(
