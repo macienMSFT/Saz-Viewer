@@ -102,7 +102,7 @@ internal static class MapiCaptureParser
             ["Envelope", "NSPI properties/restrictions", "Rule actions", "Auxiliary payloads", "Extended buffers", "ROP framing and fixed schemas"],
             [
                 "Semantic decoding for the remaining 78 request and 79 response ROP dispatcher cases",
-                "Move/copy/reply rule-action EntryID semantic fields and FastTransfer lexical coverage",
+                "FastTransfer lexical and syntactical coverage",
                 "Cross-session FastTransfer reconstruction"
             ]);
         return new MapiCapture(

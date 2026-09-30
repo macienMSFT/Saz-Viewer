@@ -116,15 +116,9 @@
       "of": 11
     },
     "ruleActionPayloadSemanticDispatch": {
-      "count": 7,
+      "count": 11,
       "of": 11,
-      "partial": [
-        "OP_MOVE",
-        "OP_COPY",
-        "OP_REPLY",
-        "OP_OOF_REPLY"
-      ],
-      "note": "Partial action types decode their complete bounded envelopes but retain nested folder/message EntryID semantic fields as raw nodes with warnings."
+      "note": "Extended move/copy/reply EntryIDs are decoded semantically; the unused StoreEID and protocol-defined opaque deferred-action bytes remain bounded raw fields."
     },
     "restrictionSemanticDispatch": {
       "count": 12,
@@ -151,7 +145,6 @@
   },
   "remainingSemanticAreas": [
     "Remaining 78 request and 79 response individual ROP dispatcher cases",
-    "Nested EntryID semantic fields for OP_MOVE, OP_COPY, OP_REPLY, and OP_OOF_REPLY rule actions",
     "FastTransfer and ICS lexical/syntactical grammars and partial-stream reconstruction",
     "Capture-local logon, table-column, notification, and handle correlation beyond framing"
   ],

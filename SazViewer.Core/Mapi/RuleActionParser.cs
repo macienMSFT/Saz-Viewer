@@ -180,8 +180,8 @@ internal static class RuleActionParser
         MapiNodeBudget budget,
         List<string>? warnings)
     {
-        ParseSizedBytes(ref reader, nodes, "StoreEID", expectedOpaque: true, budget, warnings);
-        ParseSizedBytes(ref reader, nodes, "FolderEID", expectedOpaque: false, budget, warnings);
+        ParseSizedBytes(ref reader, nodes, "StoreEID", EntryIdKind.Opaque, budget, warnings);
+        ParseSizedBytes(ref reader, nodes, "FolderEID", EntryIdKind.Folder, budget, warnings);
     }
 
     private static void ParseReply(
@@ -190,7 +190,7 @@ internal static class RuleActionParser
         MapiNodeBudget budget,
         List<string>? warnings)
     {
-        ParseSizedBytes(ref reader, nodes, "ReplyTemplateMessageEID", expectedOpaque: false, budget, warnings);
+        ParseSizedBytes(ref reader, nodes, "ReplyTemplateMessageEID", EntryIdKind.Message, budget, warnings);
         var guidOffset = reader.Position;
         var guid = reader.ReadGuid("ReplyTemplateGUID");
         ExtendedBufferParser.AddField(nodes, "ReplyTemplateGUID", guidOffset, 16, guid.ToString(), budget);
@@ -271,7 +271,7 @@ internal static class RuleActionParser
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder nodes,
         string name,
-        bool expectedOpaque,
+        EntryIdKind kind,
         MapiNodeBudget budget,
         List<string>? warnings)
     {
@@ -286,15 +286,31 @@ internal static class RuleActionParser
             budget);
         var valueOffset = reader.Position;
         var value = reader.ReadBytes(size, name);
-        if (expectedOpaque)
+        if (kind == EntryIdKind.Opaque)
         {
             AddOpaqueField(nodes, name, value, valueOffset, budget);
         }
         else
         {
-            nodes.Add(ExtendedBufferParser.RawNode(name, value, valueOffset, budget));
-            warnings?.Add($"{name} semantic fields are retained as {value.Length:N0} raw bytes.");
+            try
+            {
+                nodes.Add(kind == EntryIdKind.Folder
+                    ? MapiEntryIdParser.ParseFolderEntryId(value, valueOffset, budget, warnings)
+                    : MapiEntryIdParser.ParseMessageEntryId(value, valueOffset, budget, warnings));
+            }
+            catch (MapiParseException ex)
+            {
+                nodes.Add(ExtendedBufferParser.RawNode(name, value, valueOffset, budget));
+                warnings?.Add($"{name} semantic fields are retained as {value.Length:N0} raw bytes: {ex.Message}");
+            }
         }
+    }
+
+    private enum EntryIdKind
+    {
+        Opaque,
+        Folder,
+        Message
     }
 
     private static void AddOpaqueField(
