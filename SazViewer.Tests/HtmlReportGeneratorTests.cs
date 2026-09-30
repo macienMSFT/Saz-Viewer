@@ -621,7 +621,10 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains(".ws-client .ws-arrow{color:#58a6ff}", html, StringComparison.Ordinal);
         Assert.Contains(".ws-server .ws-arrow{color:#3fb950}", html, StringComparison.Ordinal);
         Assert.Contains("['ID','Type','Body','Preview'].forEach", html, StringComparison.Ordinal);
-        Assert.Contains("grid-template-columns:62px 74px 86px minmax(220px,1fr)", html, StringComparison.Ordinal);
+        Assert.Contains(".ws-message-tracks{display:grid;grid-template-columns:max-content max-content max-content minmax(180px,1fr);min-width:100%}", html, StringComparison.Ordinal);
+        Assert.Contains(".ws-message-header,.ws-message-list,.ws-message-row{display:grid;grid-template-columns:subgrid;grid-column:1/-1}", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("grid-template-columns:62px 74px 86px", html, StringComparison.Ordinal);
+        Assert.Contains("grid.append(header,list);scroll.append(grid)", html, StringComparison.Ordinal);
         Assert.Contains("const logicalId=index+1", html, StringComparison.Ordinal);
         Assert.DoesNotContain("const meta=wsElement('span','ws-message-meta'", html, StringComparison.Ordinal);
         Assert.Contains("`${message.payloadLengthText}${limited?'*':''}`", html, StringComparison.Ordinal);

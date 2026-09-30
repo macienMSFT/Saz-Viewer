@@ -40,7 +40,7 @@ public sealed class HtmlReportBrowserTests
             await VerifyInspectorAsync(browser, reportPath, 1440, exerciseAllControls: true);
             await VerifyInspectorAsync(browser, reportPath, 480, exerciseAllControls: false);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 1440);
-            await VerifyWebSocketInspectorAsync(browser, reportPath, 400);
+            await VerifyWebSocketInspectorAsync(browser, reportPath, 320);
             await VerifyNewTabInspectorAsync(browser, reportPath);
             await VerifyBlockedNewTabKeepsInspectorAsync(browser, reportPath);
             await VerifyInvalidInspectorStateAsync(browser, reportPath);
@@ -340,7 +340,7 @@ public sealed class HtmlReportBrowserTests
             }
 
             var messages = page.Locator(".ws-message-row");
-            Assert.Equal(4, await messages.CountAsync());
+            Assert.Equal(10, await messages.CountAsync());
             Assert.Equal(
                 ["ID", "Type", "Body", "Preview"],
                 await page.Locator(".ws-message-header>span").AllInnerTextsAsync());
@@ -364,6 +364,48 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal("Ping", await messages.Nth(1).Locator(".ws-type").InnerTextAsync());
             Assert.Contains("Ping control", await messages.Nth(1).Locator(".ws-message-preview").InnerTextAsync());
             Assert.Contains("00 FF 10 20", await messages.Nth(2).Locator(".ws-message-preview").InnerTextAsync());
+            Assert.Equal("Invalid", await messages.Nth(4).Locator(".ws-type").InnerTextAsync());
+            Assert.Equal("\u2191 10", await messages.Nth(9).Locator(".ws-id").InnerTextAsync());
+            Assert.Equal("Partial", await messages.Nth(9).Locator(".ws-type").InnerTextAsync());
+            Assert.Equal("1,234,567*", await messages.Nth(9).Locator(".ws-body").InnerTextAsync());
+            Assert.True(await page.Locator(".ws-message-tracks").EvaluateAsync<bool>(
+                @"grid=>{
+                  const header=grid.querySelector('.ws-message-header');
+                  const rows=[...grid.querySelectorAll('.ws-message-row')];
+                  if(!header||rows.length<2) return false;
+                  const contentWidth=cell=>{
+                    const range=document.createRange();
+                    range.selectNodeContents(cell);
+                    const style=getComputedStyle(cell);
+                    return range.getBoundingClientRect().width
+                      +parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)
+                      +parseFloat(style.borderLeftWidth)+parseFloat(style.borderRightWidth);
+                  };
+                  for(let column=0;column<3;column++){
+                    const cells=[header.children[column],...rows.map(row=>row.children[column])];
+                    const widths=cells.map(cell=>cell.getBoundingClientRect().width);
+                    if(Math.max(...widths)-Math.min(...widths)>0.75) return false;
+                    const needed=cells.map(contentWidth);
+                    const longest=Math.max(...needed);
+                    if(Math.abs(widths[0]-longest)>1.5) return false;
+                    if(!needed.some(width=>width<longest-1)) return false;
+                  }
+                  const firstRow=rows[0];
+                  const firstThree=[0,1,2].reduce((total,index)=>total+firstRow.children[index].getBoundingClientRect().width,0);
+                  const rowWidth=firstRow.getBoundingClientRect().width;
+                  const preview=firstRow.children[3];
+                  const previewWidth=preview.getBoundingClientRect().width;
+                  const previewStyle=getComputedStyle(preview);
+                  const previewRange=document.createRange();
+                  previewRange.selectNodeContents(preview);
+                  const previewIsBounded=previewStyle.minWidth==='0px'
+                    &&previewStyle.overflow==='hidden'
+                    &&previewStyle.whiteSpace==='nowrap'
+                    &&previewStyle.textOverflow==='ellipsis'
+                    &&previewRange.getBoundingClientRect().width>previewWidth;
+                  if(!previewIsBounded||Math.abs(previewWidth-(rowWidth-firstThree))>1.5) return false;
+                  return innerWidth>900 ? previewWidth>180 : previewWidth>=179;
+                }"));
             Assert.True(await page.Locator(".ws-message-scroll").EvaluateAsync<bool>(
                 @"element=>{
                   const pane=element.closest('.ws-traffic-pane');
@@ -1008,6 +1050,40 @@ public sealed class HtmlReportBrowserTests
         var close = WebSocketMessage(3, 4, "Server", "Close", closeBytes, null, complete: true);
         close.Frames.Add(WebSocketFrame(4, 5, "Server", 8, "Close", final: true, masked: false, closeBytes));
         report.WebSocketMessages.Add(close);
+
+        report.WebSocketMessages.Add(
+            WebSocketMessage(
+                4,
+                5,
+                "Client",
+                "Undecoded",
+                new byte[] { 0xFF },
+                null,
+                complete: false,
+                warning: "Invalid synthetic frame."));
+        for (var index = 5; index < 9; index++)
+        {
+            report.WebSocketMessages.Add(
+                WebSocketMessage(
+                    index,
+                    index + 1,
+                    "Server",
+                    "Pong",
+                    new byte[] { (byte)index },
+                    null,
+                    complete: true));
+        }
+        report.WebSocketMessages.Add(
+            WebSocketMessage(
+                9,
+                10,
+                "Client",
+                "Text",
+                Encoding.UTF8.GetBytes("partial"),
+                null,
+                complete: false,
+                payloadLength: 1_234_567,
+                warning: "Synthetic fragmented message is incomplete."));
         return report;
     }
 
@@ -1019,7 +1095,9 @@ public sealed class HtmlReportBrowserTests
         byte[] payload,
         string? text,
         bool complete,
-        bool fragmented = false) =>
+        bool fragmented = false,
+        long? payloadLength = null,
+        string? warning = null) =>
         new()
         {
             SessionId = "4",
@@ -1028,13 +1106,14 @@ public sealed class HtmlReportBrowserTests
             Timestamp = DateTimeOffset.Parse("2024-05-01T12:00:00Z").AddSeconds(recordIndex),
             Direction = direction,
             Type = type,
-            PayloadLength = payload.Length,
+            PayloadLength = payloadLength ?? payload.Length,
             Preview = text ?? Convert.ToHexString(payload),
             IsBinary = type != "Text",
             IsDecoded = complete,
             IsComplete = complete,
             IsFragmented = fragmented,
             Text = text,
+            Warning = warning,
             Payload = payload
         };
 
