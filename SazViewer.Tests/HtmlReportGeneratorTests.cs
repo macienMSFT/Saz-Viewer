@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Text;
@@ -617,8 +618,13 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("<option value=\"websocket\">WebSocket only</option>", html, StringComparison.Ordinal);
         Assert.Contains("class=\"websocket-inspector\"", html, StringComparison.Ordinal);
         Assert.Contains("data-payload-type=\"websocket-session\"", html, StringComparison.Ordinal);
-        Assert.Contains(".ws-client .ws-direction{color:#58a6ff}", html, StringComparison.Ordinal);
-        Assert.Contains(".ws-server .ws-direction{color:#3fb950}", html, StringComparison.Ordinal);
+        Assert.Contains(".ws-client .ws-arrow{color:#58a6ff}", html, StringComparison.Ordinal);
+        Assert.Contains(".ws-server .ws-arrow{color:#3fb950}", html, StringComparison.Ordinal);
+        Assert.Contains("['ID','Type','Body','Preview'].forEach", html, StringComparison.Ordinal);
+        Assert.Contains("grid-template-columns:62px 74px 86px minmax(220px,1fr)", html, StringComparison.Ordinal);
+        Assert.Contains("const logicalId=index+1", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("const meta=wsElement('span','ws-message-meta'", html, StringComparison.Ordinal);
+        Assert.Contains("`${message.payloadLengthText}${limited?'*':''}`", html, StringComparison.Ordinal);
         Assert.Contains("tablist.setAttribute('aria-label','WebSocket message views')", html, StringComparison.Ordinal);
         Assert.Contains("wsTab('json','JSON'", html, StringComparison.Ordinal);
         Assert.Contains("wsTab('text','Text'", html, StringComparison.Ordinal);
@@ -627,10 +633,109 @@ public sealed class HtmlReportGeneratorTests
         Assert.DoesNotContain(hostile, html, StringComparison.Ordinal);
         Assert.DoesNotContain("<h2>WebSocket messages</h2>", html, StringComparison.Ordinal);
         Assert.Equal(hostile, first.GetProperty("text").GetString());
+        Assert.Equal("Text", first.GetProperty("listType").GetString());
+        Assert.Equal(message.PayloadLength.ToString("N0", CultureInfo.InvariantCulture), first.GetProperty("payloadLengthText").GetString());
+        Assert.DoesNotContain('\n', first.GetProperty("listPreview").GetString()!);
         Assert.Contains("\n  \"attack\":", first.GetProperty("jsonPretty").GetString(), StringComparison.Ordinal);
         Assert.Contains("\"kind\":\"object\"", first.GetProperty("jsonTree").GetString(), StringComparison.Ordinal);
         Assert.Contains("Frame 0 ID=11 BitFlags=0", first.GetProperty("raw").GetString(), StringComparison.Ordinal);
         Assert.Equal(2, first.GetProperty("frames").GetArrayLength());
+    }
+
+    [Fact]
+    public void WebSocketTrafficColumnsUseLogicalLengthsTypesAndSingleLinePreviews()
+    {
+        var report = new SazReport { SourceName = "websocket-list.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "GET",
+            Url = "wss://example.test/socket",
+            StatusCode = 101
+        });
+        report.WebSocketMessages.Add(new WebSocketMessage
+        {
+            SessionId = "1",
+            MessageIndex = 0,
+            RecordIndex = 0,
+            Direction = "Client",
+            Type = "Text",
+            PayloadLength = 6603,
+            Preview = "unused",
+            Text = " first\r\n\tsecond   third " + new string('x', 220),
+            IsComplete = true,
+            IsDecoded = true
+        });
+        report.WebSocketMessages.Add(new WebSocketMessage
+        {
+            SessionId = "1",
+            MessageIndex = 1,
+            RecordIndex = 1,
+            Direction = "Server",
+            Type = "Binary",
+            PayloadLength = 20,
+            Preview = "unused",
+            IsBinary = true,
+            IsComplete = true,
+            IsDecoded = true,
+            Payload = Enumerable.Range(0, 20).Select(value => (byte)value).ToArray()
+        });
+        report.WebSocketMessages.Add(new WebSocketMessage
+        {
+            SessionId = "1",
+            MessageIndex = 2,
+            RecordIndex = 2,
+            Direction = "Server",
+            Type = "Ping",
+            PayloadLength = 1,
+            Preview = "unused",
+            IsBinary = true,
+            IsComplete = true,
+            IsDecoded = true,
+            Payload = new byte[] { 0x7E }
+        });
+        report.WebSocketMessages.Add(new WebSocketMessage
+        {
+            SessionId = "1",
+            MessageIndex = 3,
+            RecordIndex = 3,
+            Direction = "Unknown",
+            Type = "Undecoded",
+            PayloadLength = 22908,
+            Preview = "unused",
+            IsBinary = true,
+            Warning = "bad\r\n\tframe   data"
+        });
+        report.WebSocketMessages.Add(new WebSocketMessage
+        {
+            SessionId = "1",
+            MessageIndex = 4,
+            RecordIndex = 4,
+            Direction = "Client",
+            Type = "Text",
+            PayloadLength = 387,
+            Preview = "unused",
+            Warning = "capture ended",
+            IsFragmented = true
+        });
+
+        var html = new HtmlReportGenerator().Generate(report);
+        using var payload = ExtractCompressedPayload(html, "websocket-session", 0, html.Length);
+        var messages = payload.RootElement.GetProperty("messages");
+
+        Assert.Equal("6,603", messages[0].GetProperty("payloadLengthText").GetString());
+        Assert.Equal("Text", messages[0].GetProperty("listType").GetString());
+        Assert.Equal("first second third " + new string('x', 160) + "\u2026", messages[0].GetProperty("listPreview").GetString());
+        Assert.DoesNotContain('\n', messages[0].GetProperty("listPreview").GetString()!);
+        Assert.Equal(
+            "Binary (20 bytes): 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F \u2026",
+            messages[1].GetProperty("listPreview").GetString());
+        Assert.Equal("Ping control (1 byte): 7E", messages[2].GetProperty("listPreview").GetString());
+        Assert.Equal("Invalid", messages[3].GetProperty("listType").GetString());
+        Assert.Equal("Invalid/partial: bad frame data", messages[3].GetProperty("listPreview").GetString());
+        Assert.Equal("Partial", messages[4].GetProperty("listType").GetString());
+        Assert.Equal("22,908", messages[3].GetProperty("payloadLengthText").GetString());
     }
 
     [Fact]

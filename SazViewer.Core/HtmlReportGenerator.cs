@@ -70,7 +70,8 @@ public sealed class HtmlReportGenerator
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
 <title>SAZ capture</title>
 <style>
-:root{color-scheme:light dark;--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--warn:#d29922;--selected:#1f6feb55}
+:root{color-scheme:light dark;--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--warn:#d29922;--selected:#1f6feb55;--hover:#1f2630}
+@media(prefers-color-scheme:light){:root{--bg:#fff;--panel:#f6f8fa;--panel2:#eaeef2;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--accent:#0969da;--warn:#9a6700;--selected:#ddf4ff;--hover:#f3f4f6}}
 *{box-sizing:border-box}html{scrollbar-gutter:stable}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
 body.inspector-open{overflow:hidden}
 body.inspector-only main{display:none}
@@ -126,11 +127,13 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .tree-truncated{color:var(--warn);font-size:11px}.tree-status{color:var(--muted);font-style:italic;padding:2px 4px}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .websocket-inspector{flex:1;min-height:0;display:flex;flex-direction:column;padding:10px 14px}.ws-layout{flex:1;min-height:0;display:grid;grid-template-columns:minmax(300px,38%) minmax(0,1fr);gap:10px}
-.ws-traffic-pane,.ws-detail-pane{min-height:0;display:flex;flex-direction:column;border:1px solid var(--line);background:var(--panel)}.ws-pane-heading{font-size:14px;padding:8px 10px;margin:0;border-bottom:1px solid var(--line)}
-.ws-message-list{overflow:auto;min-height:0;padding:4px;display:flex;flex-direction:column;gap:3px}.ws-message-row{display:grid;grid-template-columns:auto minmax(0,1fr);gap:2px 8px;text-align:left;border-radius:4px;padding:7px 8px;background:var(--bg)}
-.ws-message-row:hover{background:#1f2630}.ws-message-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.ws-message-row[aria-selected=true]{background:var(--selected);box-shadow:inset 4px 0 var(--accent)}
-.ws-direction{font-weight:700;white-space:nowrap}.ws-client .ws-direction{color:#58a6ff}.ws-server .ws-direction{color:#3fb950}.ws-unknown .ws-direction{color:var(--warn)}.ws-arrow{font-size:18px;line-height:1}
-.ws-message-meta{color:var(--muted);font-size:12px}.ws-message-preview{grid-column:1/-1;white-space:pre-wrap;overflow-wrap:anywhere;max-height:4.2em;overflow:hidden}.ws-detail-content{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 10px 10px}.ws-detail-content>.tab-panels{overflow:auto}.ws-detail-summary{padding:7px 0;color:var(--muted)}.ws-loading{padding:20px;color:var(--muted)}
+.ws-traffic-pane,.ws-detail-pane{min-width:0;min-height:0;display:flex;flex-direction:column;border:1px solid var(--line);background:var(--panel)}.ws-pane-heading{font-size:14px;padding:8px 10px;margin:0;border-bottom:1px solid var(--line)}
+.ws-message-scroll{flex:1;min-height:0;overflow:auto}.ws-message-header,.ws-message-row{display:grid;grid-template-columns:62px 74px 86px minmax(220px,1fr);min-width:442px}
+.ws-message-header{position:sticky;top:0;z-index:1;background:var(--panel2);font-size:12px;font-weight:600}.ws-message-header>span{padding:3px 5px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.ws-message-list{min-height:0}.ws-message-row{width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:0;background:var(--bg);color:var(--text);font:12px/1.25 ui-monospace,Consolas,monospace}
+.ws-message-row>span{min-width:0;padding:3px 5px;border-right:1px solid var(--line);overflow:hidden}.ws-message-row:hover{background:var(--hover)}.ws-message-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;z-index:1}.ws-message-row[aria-selected=true]{background:var(--selected);box-shadow:inset 3px 0 var(--accent)}
+.ws-id,.ws-type,.ws-body{white-space:nowrap}.ws-body{text-align:right;font-variant-numeric:tabular-nums}.ws-body-truncated{color:var(--warn);font-weight:700}.ws-client .ws-arrow{color:#58a6ff}.ws-server .ws-arrow{color:#3fb950}.ws-unknown .ws-arrow{color:var(--warn)}.ws-arrow{font-size:16px;font-weight:800;line-height:1}.ws-message-preview{white-space:nowrap;text-overflow:ellipsis}
+.ws-detail-content{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 10px 10px}.ws-detail-content>.tab-panels{overflow:auto}.ws-detail-summary{padding:7px 0;color:var(--muted)}.ws-loading{padding:20px;color:var(--muted)}
 @media(max-width:900px){main{padding:2px}.ws-layout{grid-template-columns:1fr;grid-template-rows:minmax(180px,38%) minmax(0,1fr)}}
 </style>
 </head>
@@ -629,9 +632,12 @@ async function renderWebSocketInspector(host,generation){
     const traffic=wsElement('section','ws-traffic-pane');traffic.setAttribute('aria-label','Chronological WebSocket traffic');
     traffic.append(wsElement('h3','ws-pane-heading','WebSocket traffic'));
     if(data.omittedMessages>0)traffic.append(wsElement('div','warning',`${data.omittedMessages} additional message(s) were omitted by the report safety limit.`));
+    const scroll=wsElement('div','ws-message-scroll');
+    const header=wsElement('div','ws-message-header');header.setAttribute('role','row');
+    ['ID','Type','Body','Preview'].forEach(label=>{const cell=wsElement('span','',label);cell.setAttribute('role','columnheader');header.append(cell)});
     const list=wsElement('div','ws-message-list');list.setAttribute('role','listbox');list.setAttribute('aria-label','WebSocket logical messages');
     const detail=wsElement('section','ws-detail-pane');detail.setAttribute('aria-label','Selected WebSocket message');
-    traffic.append(list);layout.append(traffic,detail);host.replaceChildren(layout);
+    scroll.append(header,list);traffic.append(scroll);layout.append(traffic,detail);host.replaceChildren(layout);
     const rows=[];
     function select(index,focus){
       if(index<0||index>=messages.length)return;
@@ -642,14 +648,18 @@ async function renderWebSocketInspector(host,generation){
     messages.forEach((message,index)=>{
       const direction=message.direction==='Client'?'Client to server':message.direction==='Server'?'Server to client':'Unknown direction';
       const row=wsElement('button',`ws-message-row ws-${message.direction.toLowerCase()}`);row.type='button';row.setAttribute('role','option');
-      row.setAttribute('aria-label',`${direction}, ${message.type}, ${message.payloadLength} bytes, ${message.frameCount} frames, ${message.timestamp}`);
+      const logicalId=index+1;
+      const limited=message.isPayloadTruncated||!message.isComplete;
+      row.setAttribute('aria-label',`${direction}, logical message ${logicalId}, ${message.listType}, ${message.payloadLengthText} bytes${limited?', retained content is limited or partial':''}, ${message.listPreview}`);
       row.title=direction;row.tabIndex=index===0?0:-1;
-      const directionCell=wsElement('span','ws-direction');
-      directionCell.append(wsElement('span','ws-arrow',message.direction==='Client'?'\u2191':message.direction==='Server'?'\u2193':'\u2194'));
-      directionCell.append(document.createTextNode(` ${direction}`));
-      const meta=wsElement('span','ws-message-meta',`${message.timestamp} \u2022 ${message.type} \u2022 ${message.payloadLength} B \u2022 ${message.frameCount} frame${message.frameCount===1?'':'s'}${message.isFragmented?' \u2022 fragmented':''}${message.isComplete?'':' \u2022 incomplete'}`);
-      const preview=wsElement('span','ws-message-preview',message.preview);
-      row.append(directionCell,meta,preview);
+      const idCell=wsElement('span','ws-id');idCell.title=direction;idCell.setAttribute('aria-label',`${direction}, logical message ${logicalId}`);
+      const arrow=wsElement('span','ws-arrow',message.direction==='Client'?'\u2191':message.direction==='Server'?'\u2193':'\u2194');arrow.setAttribute('aria-hidden','true');
+      idCell.append(arrow,document.createTextNode(` ${logicalId}`));
+      const typeCell=wsElement('span','ws-type',message.listType);
+      const bodyCell=wsElement('span',`ws-body${limited?' ws-body-truncated':''}`,`${message.payloadLengthText}${limited?'*':''}`);
+      bodyCell.title=limited?'Original declared logical payload bytes; retained content is truncated or the message is incomplete.':'Logical payload bytes.';
+      const preview=wsElement('span','ws-message-preview',message.listPreview);preview.title=message.listPreview;
+      row.append(idCell,typeCell,bodyCell,preview);
       row.addEventListener('click',()=>select(index,false));
       row.addEventListener('keydown',event=>{
         let target=index;
@@ -1390,12 +1400,15 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             FormatWebSocketTimestamp(message.Timestamp),
             message.Direction,
             message.Type,
+            BuildWebSocketListType(message),
             message.PayloadLength,
+            message.PayloadLength.ToString("N0", CultureInfo.InvariantCulture),
             message.Frames.Count,
             message.IsComplete,
             message.IsFragmented,
             message.IsPayloadTruncated,
             message.Preview,
+            BuildWebSocketListPreview(message),
             message.Warning,
             message.Text,
             json?.Formatted,
@@ -1416,6 +1429,89 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
                 frame.IsDecoded,
                 frame.IsPayloadTruncated,
                 frame.Warning)).ToArray());
+    }
+
+    private static string BuildWebSocketListPreview(WebSocketMessage message)
+    {
+        const int maxCharacters = 180;
+        string preview;
+        if (message.Text is not null)
+        {
+            preview = CompactWebSocketWhitespace(message.Text);
+            if (preview.Length == 0) preview = "(empty text message)";
+        }
+
+        else if (message.Type is "Binary")
+        {
+            preview = CompactWebSocketHex(message.Payload.Span, "Binary");
+        }
+        else if (message.Type is "Ping" or "Pong" or "Close")
+        {
+            preview = CompactWebSocketHex(message.Payload.Span, $"{message.Type} control");
+        }
+        else if (!string.IsNullOrWhiteSpace(message.Warning))
+        {
+            preview = $"Invalid/partial: {CompactWebSocketWhitespace(message.Warning)}";
+        }
+        else
+        {
+            preview = "Invalid or partial WebSocket message";
+        }
+
+        return preview.Length <= maxCharacters
+            ? preview
+            : string.Concat(preview.AsSpan(0, maxCharacters - 1), "\u2026");
+    }
+
+    private static string BuildWebSocketListType(WebSocketMessage message)
+    {
+        if (message.Type is not ("Text" or "Binary" or "Ping" or "Pong" or "Close"))
+        {
+            return "Invalid";
+        }
+        return message.IsComplete ? message.Type : "Partial";
+    }
+
+    private static string CompactWebSocketWhitespace(string value)
+    {
+        var output = new StringBuilder(Math.Min(value.Length, 256));
+        var whitespace = false;
+        foreach (var character in value)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                whitespace = output.Length > 0;
+                continue;
+            }
+            if (whitespace)
+            {
+                output.Append(' ');
+                whitespace = false;
+            }
+            output.Append(character);
+            if (output.Length > 512) break;
+        }
+        return output.ToString().Trim();
+    }
+
+    private static string CompactWebSocketHex(ReadOnlySpan<byte> payload, string label)
+    {
+        const int maxBytes = 16;
+        var shown = Math.Min(payload.Length, maxBytes);
+        var output = new StringBuilder(label).Append(" (")
+            .Append(payload.Length.ToString("N0", CultureInfo.InvariantCulture))
+            .Append(payload.Length == 1 ? " byte)" : " bytes)");
+        if (shown > 0)
+        {
+            output.Append(": ");
+            for (var index = 0; index < shown; index++)
+            {
+                if (index > 0) output.Append(' ');
+                output.Append(payload[index].ToString("X2", CultureInfo.InvariantCulture));
+            }
+            if (shown < payload.Length) output.Append(" \u2026");
+        }
+        return output.ToString();
     }
 
     private static string BuildWebSocketRaw(WebSocketMessage message)
@@ -1512,12 +1608,15 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         string Timestamp,
         string Direction,
         string Type,
+        string ListType,
         long PayloadLength,
+        string PayloadLengthText,
         int FrameCount,
         bool IsComplete,
         bool IsFragmented,
         bool IsPayloadTruncated,
         string Preview,
+        string ListPreview,
         string? Warning,
         string? Text,
         string? JsonPretty,

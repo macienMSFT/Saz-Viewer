@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Playwright;
 using SazViewer.Core;
 
@@ -11,7 +12,13 @@ public sealed class HtmlReportBrowserTests
     private const string InjectionText = "<img src=x onerror=globalThis.pwned=true>";
     private const string RequestBody = """{"payload":{"enabled":true},"items":[1,2],"attack":"</script><svg onload=globalThis.pwned=true>"}""";
     private const string ResponseBody = "<root><value>safe</value></root>";
-    private const string WebSocketJson = """{"kind":"update","items":[1,2],"safe":true}""";
+    private static readonly string WebSocketJson = JsonSerializer.Serialize(new
+    {
+        kind = "update",
+        items = new[] { 1, 2 },
+        safe = true,
+        detail = new string('x', 6550)
+    });
 
     [WindowsEdgeFact]
     public async Task GeneratedReportInspectorIsVisibleAndInteractiveAtDesktopAndNarrowWidths()
@@ -33,7 +40,7 @@ public sealed class HtmlReportBrowserTests
             await VerifyInspectorAsync(browser, reportPath, 1440, exerciseAllControls: true);
             await VerifyInspectorAsync(browser, reportPath, 480, exerciseAllControls: false);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 1440);
-            await VerifyWebSocketInspectorAsync(browser, reportPath, 480);
+            await VerifyWebSocketInspectorAsync(browser, reportPath, 400);
             await VerifyNewTabInspectorAsync(browser, reportPath);
             await VerifyBlockedNewTabKeepsInspectorAsync(browser, reportPath);
             await VerifyInvalidInspectorStateAsync(browser, reportPath);
@@ -334,12 +341,48 @@ public sealed class HtmlReportBrowserTests
 
             var messages = page.Locator(".ws-message-row");
             Assert.Equal(4, await messages.CountAsync());
+            Assert.Equal(
+                ["ID", "Type", "Body", "Preview"],
+                await page.Locator(".ws-message-header>span").AllInnerTextsAsync());
             Assert.Equal("true", await messages.First.GetAttributeAsync("aria-selected"));
-            Assert.Contains("Client to server", await messages.First.InnerTextAsync());
-            Assert.Equal("rgb(88, 166, 255)", await messages.First.Locator(".ws-direction")
+            Assert.Contains("Client to server", await messages.First.GetAttributeAsync("aria-label"));
+            Assert.Equal("\u2191 1", await messages.First.Locator(".ws-id").InnerTextAsync());
+            Assert.Equal("Text", await messages.First.Locator(".ws-type").InnerTextAsync());
+            Assert.Equal(
+                Encoding.UTF8.GetByteCount(WebSocketJson).ToString("N0", System.Globalization.CultureInfo.InvariantCulture),
+                await messages.First.Locator(".ws-body").InnerTextAsync());
+            var listPreview = await messages.First.Locator(".ws-message-preview").InnerTextAsync();
+            Assert.DoesNotContain('\n', listPreview);
+            Assert.EndsWith("\u2026", listPreview, StringComparison.Ordinal);
+            Assert.DoesNotContain("2024-", await messages.First.InnerTextAsync(), StringComparison.Ordinal);
+            Assert.DoesNotContain("frame", await messages.First.InnerTextAsync(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("rgb(88, 166, 255)", await messages.First.Locator(".ws-arrow")
                 .EvaluateAsync<string>("element=>getComputedStyle(element).color"));
-            Assert.Equal("rgb(63, 185, 80)", await messages.Nth(1).Locator(".ws-direction")
+            Assert.Equal("rgb(63, 185, 80)", await messages.Nth(1).Locator(".ws-arrow")
                 .EvaluateAsync<string>("element=>getComputedStyle(element).color"));
+            Assert.Equal("\u2193 2", await messages.Nth(1).Locator(".ws-id").InnerTextAsync());
+            Assert.Equal("Ping", await messages.Nth(1).Locator(".ws-type").InnerTextAsync());
+            Assert.Contains("Ping control", await messages.Nth(1).Locator(".ws-message-preview").InnerTextAsync());
+            Assert.Contains("00 FF 10 20", await messages.Nth(2).Locator(".ws-message-preview").InnerTextAsync());
+            Assert.True(await page.Locator(".ws-message-scroll").EvaluateAsync<bool>(
+                @"element=>{
+                  const pane=element.closest('.ws-traffic-pane');
+                  const inspector=element.closest('#httpInspector');
+                  if(!pane||!inspector) return false;
+                  const elementBounds=element.getBoundingClientRect();
+                  const paneBounds=pane.getBoundingClientRect();
+                  const inspectorBounds=inspector.getBoundingClientRect();
+                  const contained=elementBounds.left>=paneBounds.left-1
+                    &&elementBounds.right<=paneBounds.right+1
+                    &&paneBounds.left>=inspectorBounds.left-1
+                    &&paneBounds.right<=inspectorBounds.right+1;
+                  if(innerWidth>900) return contained;
+                  const original=element.scrollLeft;
+                  element.scrollLeft=element.scrollWidth;
+                  const scrollable=element.scrollWidth>element.clientWidth&&element.scrollLeft>original;
+                  element.scrollLeft=original;
+                  return contained&&scrollable;
+                }"));
 
             Assert.Equal("true", await page.Locator("[role=tab][data-tab=json]").GetAttributeAsync("aria-selected"));
             await page.Locator(".ws-detail-pane .tree-item").First.WaitForAsync();
