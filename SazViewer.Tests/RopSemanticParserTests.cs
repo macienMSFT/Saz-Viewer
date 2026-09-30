@@ -358,10 +358,10 @@ public sealed class RopSemanticParserTests
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
-    public void ImplementsExactlyFiftyOneRequestAndFiftyThreeResponseRopSchemas()
+    public void ImplementsExactlyFortyNineRequestAndFiftyResponseRopSchemas()
     {
-        Assert.Equal(51, RopSemanticParser.RequestSchemas.Count);
-        Assert.Equal(53, RopSemanticParser.ResponseSchemas.Count);
+        Assert.Equal(49, RopSemanticParser.RequestSchemas.Count);
+        Assert.Equal(50, RopSemanticParser.ResponseSchemas.Count);
 
         // No RopId is accidentally implemented for both directions under a different assumption, and
         // no two entries in the same direction resolve to the same ROP name (a transcription guard).

@@ -31,6 +31,8 @@ internal static class FastTransferLimits
 
     public const int MaxSpecialStructureBytes = 64 * 1024;
 
+    public const int MaxStateStreamChunks = 4_096;
+
     /// <summary>Maximum distinct streams a single capture-local assembler will track.</summary>
     public const int MaxTrackedStreams = 4_096;
 

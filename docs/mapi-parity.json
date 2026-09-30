@@ -94,14 +94,14 @@
       "request": {
         "count": 128,
         "of": 128,
-        "fixedWidthSchemas": 51,
-        "variableFamilyDispatch": 77
+        "fixedWidthSchemas": 49,
+        "variableFamilyDispatch": 79
       },
       "response": {
         "count": 131,
         "of": 131,
-        "fixedWidthSchemas": 53,
-        "variableFamilyDispatch": 78
+        "fixedWidthSchemas": 50,
+        "variableFamilyDispatch": 81
       }
     },
     "variableRopFamilyDispatch": {
@@ -109,11 +109,11 @@
         "MS-OXCFOLD/MS-OXCTABL (RopFolderTableDecoders)": { "request": 19, "response": 27 },
         "MS-OXCPRPT/MS-OXCSTOR (RopPropertyStoreDecoders)": { "request": 27, "response": 31 },
         "MS-OXCMSG/MS-OXORULE/MS-OXCPERM/MS-OXCNOTIF (RopMessageRulesDecoders)": { "request": 15, "response": 13 },
-        "MS-OXCFXICS (RopFastTransferDecoders)": { "request": 16, "response": 7 }
+        "MS-OXCFXICS (RopFastTransferDecoders)": { "request": 18, "response": 10 }
       },
-      "totalRequest": 77,
-      "totalResponse": 78,
-      "note": "Each family exposes disjoint Supports/Parse ROP-id-and-direction sets, verified pairwise and against the fixed-width schema catalog with no overlap; routed centrally by RopVariableDispatcher, which is invoked per-operation from RopSemanticParser.ParseOperations with capture-local FastTransfer reassembly state and an optional capture-local MapiCaptureContext for deterministic, bounded, transactional correlation. Same-round-trip state is keyed by HTTP session; logon privacy is keyed by logical MAPI connection plus LogonId; table columns are keyed by logical connection plus server object handle and committed only after successful RopSetColumns. Failure, RopRelease, RopResetTable, reuse, or conflicting observations invalidate state and force raw fallback rather than guessing."
+      "totalRequest": 79,
+      "totalResponse": 81,
+      "note": "Each family exposes disjoint Supports/Parse ROP-id-and-direction sets, verified pairwise and against the fixed-width schema catalog with no overlap; routed centrally by RopVariableDispatcher, which is invoked per-operation from RopSemanticParser.ParseOperations with capture-local FastTransfer reassembly state and an optional capture-local MapiCaptureContext for deterministic, bounded, transactional correlation. Same-round-trip state is keyed by HTTP session; logon privacy is keyed by logical MAPI connection plus LogonId; table columns and FastTransfer/ICS streams are keyed by logical connection plus server object handle. UploadStateStream Begin/Continue/End state commits only after matching successful responses and finalizes as bounded REPLGUID IDSET/CNSET data. Failure, missing or mismatched responses, RopRelease, RopResetTable, reuse, or conflicting observations invalidate affected state and force raw fallback rather than guessing."
     },
     "auxiliaryPayloadSemanticDispatch": {
       "count": 40,

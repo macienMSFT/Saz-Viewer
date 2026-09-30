@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Immutable;
 using System.Text;
 using SazViewer.Core;
 
@@ -103,7 +104,7 @@ public sealed class RopVariableDispatcherTests
     {
         // Pinned totals cross-checked by hand against each family's own SupportedRequestRopIds /
         // SupportedResponseRopIds (or RequestRopIds / ResponseRopIds) sets at integration time:
-        // Folder 19/27, PropertyStore 27/31, MessageRules 15/13, FastTransfer 16/7 = 77/78.
+        // Folder 19/27, PropertyStore 27/31, MessageRules 15/13, FastTransfer 18/10 = 79/81.
         // (PropertyStore's response set grew from 25 to 28 when RopSetProperties (0x0A),
         // RopDeleteProperties (0x0B), and RopGetReceiveFolderTable (0x68) responses were added as
         // deterministic, non-state-dependent semantic decoders; it then grew from 28 to 31, and its
@@ -119,8 +120,8 @@ public sealed class RopVariableDispatcherTests
         // remaining, genuinely state-dependent-and-out-of-scope gaps.
         var requestCount = Enumerable.Range(0, 256).Count(v => RopVariableDispatcher.Supports(MapiDirection.Request, (byte)v));
         var responseCount = Enumerable.Range(0, 256).Count(v => RopVariableDispatcher.Supports(MapiDirection.Response, (byte)v));
-        Assert.Equal(77, requestCount);
-        Assert.Equal(78, responseCount);
+        Assert.Equal(79, requestCount);
+        Assert.Equal(81, responseCount);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -700,6 +701,228 @@ public sealed class RopVariableDispatcherTests
             warning.Contains("BufferUsedSize is not reliable on failure", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void ReassemblesAndDecodesIcsStateStreamAcrossHttpRoundTrips()
+    {
+        var replicaGuid = Guid.Parse("00112233-4455-6677-8899-aabbccddeeff");
+        var stateData = Concat(replicaGuid.ToByteArray(), [0x00]);
+        const uint syncHandle = 0x0A0B0C0D;
+        var context = new MapiCaptureContext();
+        foreach (var scope in new[] { "state-begin", "state-continue-1", "state-continue-2", "state-end" })
+        {
+            context.RegisterLogonCorrelationScope(scope, "logical-connection");
+        }
+
+        ParseIcsStateRoundTrip(
+            context,
+            "state-begin",
+            Frame(
+                Concat(
+                    [0x75, 0x00, 0x00],
+                    Le((ushort)0x0102),
+                    Le((ushort)0x6796),
+                    Le((uint)stateData.Length)),
+                syncHandle),
+            Frame(Concat([0x75, 0x00], Le(0u)), syncHandle));
+        ParseIcsStateRoundTrip(
+            context,
+            "state-continue-1",
+            Frame(
+                Concat([0x76, 0x00, 0x00], Le(8u), stateData[..8]),
+                syncHandle),
+            Frame(Concat([0x76, 0x00], Le(0u)), syncHandle));
+        ParseIcsStateRoundTrip(
+            context,
+            "state-continue-2",
+            Frame(
+                Concat([0x76, 0x00, 0x00], Le((uint)(stateData.Length - 8)), stateData[8..]),
+                syncHandle),
+            Frame(Concat([0x76, 0x00], Le(0u)), syncHandle));
+
+        var endResponse = ParseIcsStateRoundTrip(
+            context,
+            "state-end",
+            Frame([0x77, 0x00, 0x00], syncHandle),
+            Frame(Concat([0x77, 0x00], Le(0u)), syncHandle));
+
+        var completed = Find(Find(endResponse, "ROP list").Children[0].Children, "CompletedStateStream");
+        Assert.Contains("MetaTagCnsetSeen", completed.Value);
+        Assert.Contains("17 byte(s) in 2 chunk(s)", completed.Value);
+        Assert.Equal(replicaGuid.ToString(), Find(completed.Children, "REPLGUID").Value);
+        Assert.Equal(2, completed.Offset);
+    }
+
+    [Fact]
+    public void FinalizesZeroLengthIcsStateAndReportsDeclaredSizeMismatch()
+    {
+        var context = new MapiCaptureContext();
+
+        context.StageIcsStateBegin("empty", 0, 0x40170102, 0);
+        Assert.Null(context.CompleteIcsStateOperation("empty", 0x75, 0, true, out var beginWarning));
+        Assert.Null(beginWarning);
+        context.StageIcsStateEnd("empty", 0);
+        var empty = context.CompleteIcsStateOperation("empty", 0x77, 0, true, out var endWarning);
+
+        Assert.Null(endWarning);
+        Assert.NotNull(empty);
+        Assert.Empty(empty.Data);
+        Assert.Null(empty.Warning);
+
+        context.StageIcsStateBegin("mismatch", 0, 0x67960102, 3);
+        context.CompleteIcsStateOperation("mismatch", 0x75, 0, true, out _);
+        context.StageIcsStateContinue("mismatch", 0, [0x01, 0x02]);
+        context.CompleteIcsStateOperation("mismatch", 0x76, 0, true, out _);
+        context.StageIcsStateEnd("mismatch", 0);
+        var mismatch = context.CompleteIcsStateOperation("mismatch", 0x77, 0, true, out _);
+
+        Assert.NotNull(mismatch);
+        Assert.Equal(2, mismatch.Data.Length);
+        Assert.Contains("declared 3", mismatch.Warning);
+    }
+
+    [Fact]
+    public void FailedIcsStateContinueInvalidatesTheWholeProperty()
+    {
+        var context = new MapiCaptureContext();
+        context.StageIcsStateBegin("failure", 0, 0x67960102, 1);
+        context.CompleteIcsStateOperation("failure", 0x75, 0, true, out _);
+        context.StageIcsStateContinue("failure", 0, [0x00]);
+
+        Assert.Null(context.CompleteIcsStateOperation("failure", 0x76, 0, false, out var failureWarning));
+        Assert.Contains("failed", failureWarning);
+
+        context.StageIcsStateEnd("failure", 0);
+        Assert.Null(context.CompleteIcsStateOperation("failure", 0x77, 0, true, out var endWarning));
+        Assert.Contains("no successful Begin", endWarning);
+    }
+
+    [Fact]
+    public void IcsStateContinueWithoutBeginIsRejected()
+    {
+        var context = new MapiCaptureContext();
+        context.StageIcsStateContinue("orphan", 0, [0x01]);
+
+        Assert.Null(context.CompleteIcsStateOperation("orphan", 0x76, 0, true, out var warning));
+        Assert.Contains("no successful Begin", warning);
+    }
+
+    [Fact]
+    public void UnresolvableIcsStateDoesNotSurviveItsHttpSession()
+    {
+        var context = new MapiCaptureContext();
+        context.StageIcsStateBegin("provisional", 0, 0x67960102, 0);
+        context.CompleteIcsStateOperation("provisional", 0x75, 0, true, out _);
+
+        context.CompleteHttpSession("provisional");
+        context.StageIcsStateEnd("provisional", 0);
+        context.CompleteIcsStateOperation("provisional", 0x77, 0, true, out var warning);
+
+        Assert.Contains("no successful Begin", warning);
+    }
+
+    [Fact]
+    public void MismatchedIcsStateResponseDiscardsTheResolvedAccumulator()
+    {
+        const uint syncHandle = 0x10203040;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("mismatch", "logical-connection");
+        context.StageIcsStateBegin("mismatch", 0, 0x67960102, 1);
+        context.RecordSessionHandles("mismatch", [syncHandle]);
+        context.CompleteIcsStateOperation("mismatch", 0x75, 0, true, out _);
+        context.StageIcsStateContinue("mismatch", 0, [0x00]);
+
+        Assert.Null(context.CompleteIcsStateOperation("mismatch", 0x77, 0, true, out var mismatchWarning));
+        Assert.Contains("does not match", mismatchWarning);
+
+        context.StageIcsStateContinue("mismatch", 0, [0x00]);
+        context.CompleteIcsStateOperation("mismatch", 0x76, 0, true, out var continueWarning);
+        Assert.Contains("no successful Begin", continueWarning);
+    }
+
+    [Fact]
+    public void ReleaseAndMissingResponsesInvalidateIcsState()
+    {
+        const uint syncHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        foreach (var scope in new[] { "begin", "release", "begin-2", "missing", "end" })
+        {
+            context.RegisterLogonCorrelationScope(scope, "logical-connection");
+            context.RecordSessionHandles(scope, [syncHandle]);
+        }
+
+        context.StageIcsStateBegin("begin", 0, 0x67960102, 1);
+        context.CompleteIcsStateOperation("begin", 0x75, 0, true, out _);
+        context.InvalidateHandleState("release", 0);
+        context.StageIcsStateEnd("end", 0);
+        context.CompleteIcsStateOperation("end", 0x77, 0, true, out var releaseWarning);
+        Assert.Contains("no successful Begin", releaseWarning);
+
+        context.StageIcsStateBegin("begin-2", 0, 0x67960102, 1);
+        context.CompleteIcsStateOperation("begin-2", 0x75, 0, true, out _);
+        context.StageIcsStateContinue("missing", 0, [0x00]);
+        context.CompleteHttpSession("missing");
+        context.StageIcsStateEnd("end", 0);
+        context.CompleteIcsStateOperation("end", 0x77, 0, true, out var missingWarning);
+        Assert.Contains("no successful Begin", missingWarning);
+    }
+
+    [Fact]
+    public void IllegalIcsStatePropertyIsNamedAndWarnedWithoutFailingTheRequest()
+    {
+        var warnings = new List<string>();
+        var context = new MapiCaptureContext();
+        var nodes = RopBufferParser.Parse(
+            Frame(Concat([0x75, 0x00, 0x00], Le((ushort)0x0102), Le((ushort)0x1234), Le(0u)), 0),
+            0,
+            MapiDirection.Request,
+            warnings,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "illegal-property",
+            context);
+
+        Assert.Contains(warnings, warning => warning.Contains("not one of the four ICS state properties"));
+        Assert.Contains("0x12340102", Find(Find(nodes, "ROP list").Children[0].Children, "StateProperty").Value);
+        context.CompleteHttpSession("illegal-property");
+    }
+
+    [Fact]
+    public void MalformedCompletedIcsStateFallsBackToBoundedRawData()
+    {
+        const uint syncHandle = 0x0A0B0C0D;
+        var context = new MapiCaptureContext();
+        foreach (var scope in new[] { "malformed-begin", "malformed-continue", "malformed-end" })
+        {
+            context.RegisterLogonCorrelationScope(scope, "logical-connection");
+        }
+
+        ParseIcsStateRoundTrip(
+            context,
+            "malformed-begin",
+            Frame(Concat([0x75, 0x00, 0x00], Le((ushort)0x0102), Le((ushort)0x6796), Le(1u)), syncHandle),
+            Frame(Concat([0x75, 0x00], Le(0u)), syncHandle));
+        ParseIcsStateRoundTrip(
+            context,
+            "malformed-continue",
+            Frame(Concat([0x76, 0x00, 0x00], Le(1u), [0xFF]), syncHandle),
+            Frame(Concat([0x76, 0x00], Le(0u)), syncHandle));
+        var warnings = new List<string>();
+        var end = ParseIcsStateRoundTrip(
+            context,
+            "malformed-end",
+            Frame([0x77, 0x00, 0x00], syncHandle),
+            Frame(Concat([0x77, 0x00], Le(0u)), syncHandle),
+            warnings);
+
+        var completed = Find(Find(end, "ROP list").Children[0].Children, "CompletedStateStream");
+        var stateData = Find(completed.Children, "StateData");
+        Assert.Equal("FF", stateData.Value);
+        Assert.Equal(completed.Offset, stateData.Offset);
+        Assert.Equal(0, stateData.Length);
+        Assert.Contains(warnings, warning => warning.Contains("retained as raw", StringComparison.Ordinal));
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------------------------
@@ -714,6 +937,37 @@ public sealed class RopVariableDispatcherTests
             [0x00],      // Reserved
             Le((ushort)transferBuffer.Length), // TransferBufferSize
             transferBuffer);
+
+    private static ImmutableArray<MapiNode> ParseIcsStateRoundTrip(
+        MapiCaptureContext context,
+        string scope,
+        byte[] request,
+        byte[] response,
+        List<string>? responseWarnings = null)
+    {
+        RopBufferParser.Parse(
+            request,
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            scope,
+            context);
+        var result = RopBufferParser.Parse(
+            response,
+            0,
+            MapiDirection.Response,
+            responseWarnings ?? [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            scope,
+            context);
+        context.CompleteHttpSession(scope);
+        return result;
+    }
 
     private static byte[] Le(ushort value)
     {

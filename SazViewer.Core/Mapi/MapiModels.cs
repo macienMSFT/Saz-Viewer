@@ -109,6 +109,8 @@ internal sealed class MapiCaptureContext
         string,
         Queue<(uint HandleIndex, (string Scope, uint Handle)? RequestHandle)>> pendingResetTables = [];
     private readonly Dictionary<string, Queue<PendingFastTransferUpload>> pendingFastTransferUploads = [];
+    private readonly Dictionary<string, Queue<PendingIcsStateOperation>> pendingIcsStateOperations = [];
+    private readonly Dictionary<IcsStateStreamKey, ActiveIcsStateUpload> activeIcsStateUploads = [];
 
     // RopGetPropertiesSpecific's request PropertyTags, queued per (HTTP session, handle index) so the
     // matching response - always in the very same Execute round-trip - can look up the tag list its
@@ -144,6 +146,33 @@ internal sealed class MapiCaptureContext
         public required long AbsoluteOffset { get; init; }
         public bool Invalidated { get; set; }
     }
+
+    private readonly record struct IcsStateStreamKey(string Scope, uint Handle, bool Provisional = false);
+
+    private sealed class PendingIcsStateOperation
+    {
+        public required byte RopId { get; init; }
+        public required uint HandleIndex { get; init; }
+        public required IcsStateStreamKey Key { get; set; }
+        public uint StateProperty { get; init; }
+        public uint DeclaredSize { get; init; }
+        public byte[] Data { get; init; } = [];
+    }
+
+    private sealed class ActiveIcsStateUpload
+    {
+        public required uint StateProperty { get; init; }
+        public required uint DeclaredSize { get; init; }
+        public List<byte> Data { get; } = [];
+        public int ChunkCount { get; set; }
+    }
+
+    internal sealed record IcsStateCompletion(
+        uint StateProperty,
+        uint DeclaredSize,
+        ImmutableArray<byte> Data,
+        int ChunkCount,
+        string? Warning);
 
     public void SetLogon(uint id, string value)
     {
@@ -354,6 +383,19 @@ internal sealed class MapiCaptureContext
         propertySpecificTags.Remove(captureScope);
         requestRopLists.Remove(captureScope);
         pendingFastTransferUploads.Remove(captureScope);
+        if (pendingIcsStateOperations.Remove(captureScope, out var abandonedStateOperations))
+        {
+            foreach (var operation in abandonedStateOperations)
+            {
+                activeIcsStateUploads.Remove(operation.Key);
+            }
+        }
+        foreach (var key in activeIcsStateUploads.Keys
+                     .Where(key => key.Provisional && key.Scope == captureScope)
+                     .ToArray())
+        {
+            activeIcsStateUploads.Remove(key);
+        }
         FastTransferAssembler.ForgetProvisional(captureScope);
         sessionHandles.Remove(captureScope);
         logonCorrelationScopes.Remove(captureScope);
@@ -413,10 +455,12 @@ internal sealed class MapiCaptureContext
         }
 
         FastTransferAssembler.Forget(new FastTransferStreamKey(captureScope, handleIndex, Provisional: true));
+        activeIcsStateUploads.Remove(new IcsStateStreamKey(captureScope, handleIndex, Provisional: true));
         if (TryResolveServerHandle(captureScope, handleIndex, out var handle))
         {
             tableColumns.Remove(handle);
             FastTransferAssembler.Forget(new FastTransferStreamKey(handle.Scope, handle.Handle));
+            activeIcsStateUploads.Remove(new IcsStateStreamKey(handle.Scope, handle.Handle));
         }
     }
 
@@ -444,6 +488,19 @@ internal sealed class MapiCaptureContext
                 if (upload.Key == provisional)
                 {
                     upload.Key = resolved;
+                }
+            }
+        }
+        var provisionalIcs = new IcsStateStreamKey(captureScope, handleIndex, Provisional: true);
+        var resolvedIcs = new IcsStateStreamKey(handle.Scope, handle.Handle);
+        activeIcsStateUploads.Remove(resolvedIcs);
+        if (pendingIcsStateOperations.TryGetValue(captureScope, out var pendingIcs))
+        {
+            foreach (var operation in pendingIcs)
+            {
+                if (operation.Key == provisionalIcs)
+                {
+                    operation.Key = resolvedIcs;
                 }
             }
         }
@@ -558,6 +615,209 @@ internal sealed class MapiCaptureContext
         foreach (var later in queue.Where(upload => upload.Key == key))
         {
             later.Invalidated = true;
+        }
+    }
+
+    public void StageIcsStateBegin(
+        string? captureScope,
+        uint handleIndex,
+        uint stateProperty,
+        uint declaredSize)
+    {
+        if (TryCreateIcsStateKey(captureScope, handleIndex, out var key))
+        {
+            EnqueueIcsStateOperation(
+                captureScope!,
+                new PendingIcsStateOperation
+                {
+                    RopId = 0x75,
+                    HandleIndex = handleIndex,
+                    Key = key,
+                    StateProperty = stateProperty,
+                    DeclaredSize = declaredSize,
+                });
+        }
+    }
+
+    public void StageIcsStateContinue(
+        string? captureScope,
+        uint handleIndex,
+        ReadOnlySpan<byte> data)
+    {
+        if (TryCreateIcsStateKey(captureScope, handleIndex, out var key))
+        {
+            EnqueueIcsStateOperation(
+                captureScope!,
+                new PendingIcsStateOperation
+                {
+                    RopId = 0x76,
+                    HandleIndex = handleIndex,
+                    Key = key,
+                    Data = data.ToArray(),
+                });
+        }
+    }
+
+    public void StageIcsStateEnd(string? captureScope, uint handleIndex)
+    {
+        if (TryCreateIcsStateKey(captureScope, handleIndex, out var key))
+        {
+            EnqueueIcsStateOperation(
+                captureScope!,
+                new PendingIcsStateOperation
+                {
+                    RopId = 0x77,
+                    HandleIndex = handleIndex,
+                    Key = key,
+                });
+        }
+    }
+
+    public IcsStateCompletion? CompleteIcsStateOperation(
+        string? captureScope,
+        byte ropId,
+        uint handleIndex,
+        bool success,
+        out string? warning)
+    {
+        warning = null;
+        if (captureScope is null
+            || !pendingIcsStateOperations.TryGetValue(captureScope, out var queue)
+            || queue.Count == 0)
+        {
+            warning = $"RopSynchronization state-stream response 0x{ropId:X2} has no staged request.";
+            return null;
+        }
+
+        var pending = queue.Dequeue();
+        var key = ResolveIcsStateKey(captureScope, handleIndex, pending.Key);
+        if (pending.RopId != ropId || pending.HandleIndex != handleIndex)
+        {
+            activeIcsStateUploads.Remove(key);
+            activeIcsStateUploads.Remove(pending.Key);
+            warning =
+                $"RopSynchronization state-stream response 0x{ropId:X2}/handle {handleIndex} does not match " +
+                $"the staged 0x{pending.RopId:X2}/handle {pending.HandleIndex}; state was discarded.";
+            return null;
+        }
+
+        if (!success)
+        {
+            activeIcsStateUploads.Remove(key);
+            warning = $"RopSynchronization state-stream operation 0x{ropId:X2} failed; in-progress state was discarded.";
+            return null;
+        }
+
+        switch (ropId)
+        {
+            case 0x75:
+            {
+                if (pending.DeclaredSize > MapiParseLimits.MaxPayloadBytes)
+                {
+                    warning =
+                        $"ICS state stream declares {pending.DeclaredSize:N0} bytes, exceeding the " +
+                        $"{MapiParseLimits.MaxPayloadBytes:N0}-byte limit; it will not be accumulated.";
+                    activeIcsStateUploads.Remove(key);
+                    return null;
+                }
+                var replaced = activeIcsStateUploads.ContainsKey(key);
+                if (!replaced && activeIcsStateUploads.Count >= MapiParseLimits.MaxStateEntries)
+                {
+                    warning = "ICS state-stream tracking has reached its safe entry limit.";
+                    return null;
+                }
+                activeIcsStateUploads[key] = new ActiveIcsStateUpload
+                {
+                    StateProperty = pending.StateProperty,
+                    DeclaredSize = pending.DeclaredSize,
+                };
+                if (replaced)
+                {
+                    warning = "A new ICS state property upload began before the prior property ended; prior state was discarded.";
+                }
+                return null;
+            }
+            case 0x76:
+            {
+                if (!activeIcsStateUploads.TryGetValue(key, out var active))
+                {
+                    warning = "ICS state-stream Continue has no successful Begin; its bytes were not accumulated.";
+                    return null;
+                }
+                if (active.ChunkCount >= FastTransferLimits.MaxStateStreamChunks
+                    || active.Data.Count + (long)pending.Data.Length > MapiParseLimits.MaxPayloadBytes
+                    || active.Data.Count + (long)pending.Data.Length > active.DeclaredSize)
+                {
+                    activeIcsStateUploads.Remove(key);
+                    warning = "ICS state-stream chunks exceed the declared size or safe accumulation limit; state was discarded.";
+                    return null;
+                }
+                active.Data.AddRange(pending.Data);
+                active.ChunkCount++;
+                return null;
+            }
+            case 0x77:
+            {
+                if (!activeIcsStateUploads.Remove(key, out var active))
+                {
+                    warning = "ICS state-stream End has no successful Begin; no state was finalized.";
+                    return null;
+                }
+                var mismatch = active.Data.Count != active.DeclaredSize
+                    ? $"Observed {active.Data.Count:N0} byte(s), but Begin declared {active.DeclaredSize:N0}."
+                    : null;
+                return new IcsStateCompletion(
+                    active.StateProperty,
+                    active.DeclaredSize,
+                    [.. active.Data],
+                    active.ChunkCount,
+                    mismatch);
+            }
+            default:
+                warning = $"ROP 0x{ropId:X2} is not an ICS state-stream operation.";
+                return null;
+        }
+    }
+
+    private bool TryCreateIcsStateKey(
+        string? captureScope,
+        uint handleIndex,
+        out IcsStateStreamKey key)
+    {
+        key = default;
+        if (captureScope is null)
+        {
+            return false;
+        }
+        if (TryResolveServerHandle(captureScope, handleIndex, out var resolved))
+        {
+            key = new IcsStateStreamKey(resolved.Scope, resolved.Handle);
+        }
+        else
+        {
+            key = new IcsStateStreamKey(captureScope, handleIndex, Provisional: true);
+        }
+        return true;
+    }
+
+    private IcsStateStreamKey ResolveIcsStateKey(
+        string captureScope,
+        uint handleIndex,
+        IcsStateStreamKey staged) =>
+        TryResolveServerHandle(captureScope, handleIndex, out var resolved)
+            ? new IcsStateStreamKey(resolved.Scope, resolved.Handle)
+            : staged;
+
+    private void EnqueueIcsStateOperation(string captureScope, PendingIcsStateOperation operation)
+    {
+        if (!pendingIcsStateOperations.TryGetValue(captureScope, out var queue))
+        {
+            queue = [];
+            pendingIcsStateOperations[captureScope] = queue;
+        }
+        if (queue.Count < MapiParseLimits.MaxStateEntries)
+        {
+            queue.Enqueue(operation);
         }
     }
 

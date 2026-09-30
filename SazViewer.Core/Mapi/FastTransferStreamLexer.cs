@@ -1656,22 +1656,28 @@ internal static class FastTransferStreamLexer
                         children.ToImmutable());
                 case >= 0x01 and <= 0x06:
                 {
-                    if (prefixLength + command > 6)
+                    var completedLength = prefixLength + command;
+                    if (completedLength > 6)
                     {
                         throw new MapiParseException(
                             commandOffset,
                             $"GLOBSET push of {command} byte(s) would exceed the six-byte common prefix.");
                     }
                     var bytes = reader.ReadBytes(command, "GLOBSET.CommonBytes");
+                    var completesGlobcnt = completedLength == 6;
                     ExtendedBufferParser.AddField(
                         children,
                         $"[{commands - 1}] Push",
                         commandOffset,
                         1 + command,
-                        $"{command} byte(s): {Convert.ToHexString(bytes)}",
+                        $"{command} byte(s): {Convert.ToHexString(bytes)}" +
+                        (completesGlobcnt ? "; completes one GLOBCNT" : string.Empty),
                         budget);
-                    stack.Add(command);
-                    prefixLength += command;
+                    if (!completesGlobcnt)
+                    {
+                        stack.Add(command);
+                        prefixLength = completedLength;
+                    }
                     break;
                 }
                 case 0x42:
@@ -1743,6 +1749,11 @@ internal static class FastTransferStreamLexer
     internal static MapiNode ParseLongTermIdValue(
         ref MapiReader reader, string name, MapiNodeBudget budget, int depth) =>
         ParseLongTermId(ref reader, name, budget, depth);
+
+    /// <summary>Decodes a persisted ICS-state IDSET/CNSET in REPLGUID form.</summary>
+    internal static MapiNode ParseIdsetReplGuidValue(
+        ref MapiReader reader, MapiNodeBudget budget, int depth) =>
+        ParseIdsetList(ref reader, replicaGuid: true, budget, depth);
 
     // ---- Shared helpers --------------------------------------------------------------------------
 

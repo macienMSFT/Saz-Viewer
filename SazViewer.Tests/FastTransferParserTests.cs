@@ -19,10 +19,10 @@ public sealed class FastTransferParserTests
     // =============================================================================================
 
     [Fact]
-    public void SupportsExactlySixteenRequestAndSevenResponseRops()
+    public void SupportsExactlyEighteenRequestAndTenResponseRops()
     {
-        Assert.Equal(16, RopFastTransferDecoders.SupportedRequestRopIds.Length);
-        Assert.Equal(7, RopFastTransferDecoders.SupportedResponseRopIds.Length);
+        Assert.Equal(18, RopFastTransferDecoders.SupportedRequestRopIds.Length);
+        Assert.Equal(10, RopFastTransferDecoders.SupportedResponseRopIds.Length);
         Assert.Equal(
             RopFastTransferDecoders.SupportedRequestRopIds.Distinct().Count(),
             RopFastTransferDecoders.SupportedRequestRopIds.Length);
@@ -373,6 +373,24 @@ public sealed class FastTransferParserTests
     }
 
     [Fact]
+    public void ParsesAndNamesSynchronizationUploadStateStreamBeginAndEnd()
+    {
+        var begin = Concat(
+            [0x75, 0x00, 0x01],
+            Le((ushort)0x0102),
+            Le((ushort)0x6796),
+            Le(17u));
+        var (beginNode, beginWarnings, _) = ParseRequest(begin);
+        Assert.Empty(beginWarnings);
+        Assert.Contains("MetaTagCnsetSeen", Find(beginNode.Children, "StateProperty").Value);
+        Assert.Equal("17", Find(beginNode.Children, "TransferBufferSize").Value);
+
+        var (endNode, endWarnings, _) = ParseRequest([0x77, 0x00, 0x01]);
+        Assert.Empty(endWarnings);
+        Assert.Equal(3, endNode.Length);
+    }
+
+    [Fact]
     public void ParsesSynchronizationImportMessageMoveRequestIncludingPredecessorChangeList()
     {
         var guid = Guid.Parse("11112222-3333-4444-5555-666677778888");
@@ -564,6 +582,10 @@ public sealed class FastTransferParserTests
         Assert.Empty(warnings);
         Assert.EndsWith("7-777777777777", Find(node.Children, fieldName).Value);
         Assert.Equal(14, node.Length);
+        if (ropId == 0x72)
+        {
+            Assert.Equal("OutputHandleIndex", Find(node.Children, "OutputHandleIndex").Name);
+        }
 
         var failure = Concat([ropId, 0x01], Le(0x80040115u));
         var (failureNode, _, _) = ParseResponse(failure);
@@ -1074,6 +1096,33 @@ public sealed class FastTransferParserTests
         Assert.Equal("4 command(s)", Find(guidEntry.Children, "GLOBSET").Value);
         Assert.Contains("REPLID", result.Nodes[1].Value);
         Assert.Equal("2 command(s)", Find(result.Nodes[1].Children, "GLOBSET").Value);
+    }
+
+    [Fact]
+    public void GlobsetPushCompletingSixBytesEmitsSingletonWithoutExtendingPrefix()
+    {
+        var guid = Guid.Parse("aaaabbbb-cccc-dddd-eeee-ffff00001111");
+        var globset = new byte[]
+        {
+            0x02, 0xAA, 0xBB,
+            0x04, 0x01, 0x02, 0x03, 0x04,
+            0x01, 0xCC,
+            0x52, 0x10, 0x11, 0x12, 0x20, 0x21, 0x22,
+            0x50,
+            0x50,
+            0x00,
+        };
+        var cnset = Concat(guid.ToByteArray(), globset);
+        var stream = Concat(Le((ushort)0x0102), Le((ushort)0x6796), Le((uint)cnset.Length), cnset);
+
+        var result = Lex(stream);
+
+        Assert.Empty(result.Warnings);
+        var parsed = Find(Find(result.Nodes[0].Children, "IDSET_REPLGUID[0]").Children, "GLOBSET");
+        Assert.Equal("7 command(s)", parsed.Value);
+        Assert.Contains(
+            parsed.Children,
+            node => node.Name == "[1] Push" && node.Value!.Contains("completes one GLOBCNT", StringComparison.Ordinal));
     }
 
     [Fact]

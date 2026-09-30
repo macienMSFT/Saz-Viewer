@@ -471,7 +471,6 @@ internal static class RopSemanticParser
         Add(S(0x5E, Header())); // RopGetStreamSize
         Add(S(0x68, Header())); // RopGetReceiveFolderTable
         Add(S(0x6D, Header())); // RopGetTransportFolder
-        Add(S(0x77, Header())); // RopSynchronizationUploadStateStreamEnd
         Add(S(0x7B, Header())); // RopGetStoreState
         Add(S(0x81, Header())); // RopResetTable
 
@@ -516,7 +515,6 @@ internal static class RopSemanticParser
         Add(S(0x3E, Header(RopField.Of("OutputHandleIndex", RopFieldKind.HandleIndex), RopField.Of("TableFlags", RopFieldKind.Byte)))); // RopGetPermissionsTable
         Add(S(0x1A, Header(RopField.Of("Numerator", RopFieldKind.UInt32), RopField.Of("Denominator", RopFieldKind.UInt32)))); // RopSeekRowFractional
         Add(S(0x7E, Header(RopField.Of("OutputHandleIndex", RopFieldKind.HandleIndex), RopField.Of("IsContentsCollector", RopFieldKind.Bool)))); // RopSynchronizationOpenCollector
-        Add(S(0x75, Header(PropertyTagField("StateProperty"), RopField.Of("TransferBufferSize", RopFieldKind.UInt32)))); // RopSynchronizationUploadStateStreamBegin
         Add(S(0x6B, Header(RopField.Of("RowId", RopFieldKind.Int64), RopField.Of("RowInstanceNumber", RopFieldKind.UInt32)))); // RopGetCollapseState
         Add(S(0x59, Header(RopField.Of("MaxRowCount", RopFieldKind.UInt16), RopField.Of("CategoryId", RopFieldKind.Int64)))); // RopExpandRow
         Add(S(0x48, Header(FolderOrMessageId("MessageId"), RopField.Of("LockState", RopFieldKind.Byte)))); // RopSpoolerLockMessage
@@ -597,9 +595,6 @@ internal static class RopSemanticParser
         Add(Fixed6(0x69, "OutputHandleIndex")); // RopFastTransferSourceCopyProperties
         Add(Fixed6(0x70, "OutputHandleIndex")); // RopSynchronizationConfigure
         Add(Fixed6(0x74, "InputHandleIndex")); // RopSynchronizationImportDeletes
-        Add(Fixed6(0x75, "InputHandleIndex")); // RopSynchronizationUploadStateStreamBegin
-        Add(Fixed6(0x76, "InputHandleIndex")); // RopSynchronizationUploadStateStreamContinue
-        Add(Fixed6(0x77, "InputHandleIndex")); // RopSynchronizationUploadStateStreamEnd
         Add(Fixed6(0x7E, "OutputHandleIndex")); // RopSynchronizationOpenCollector
         Add(Fixed6(0x80, "InputHandleIndex")); // RopSynchronizationImportReadStateChanges
         Add(Fixed6(0x81, "InputHandleIndex")); // RopResetTable

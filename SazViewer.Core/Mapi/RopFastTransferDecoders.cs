@@ -57,13 +57,13 @@ internal static class RopFastTransferDecoders
     /// <summary>The request ROPs this family decodes, in ascending RopId order.</summary>
     internal static readonly ImmutableArray<byte> SupportedRequestRopIds =
     [
-        0x4B, 0x4C, 0x4D, 0x4E, 0x53, 0x54, 0x69, 0x70, 0x72, 0x73, 0x74, 0x76, 0x78, 0x80, 0x93, 0x9D,
+        0x4B, 0x4C, 0x4D, 0x4E, 0x53, 0x54, 0x69, 0x70, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x80, 0x93, 0x9D,
     ];
 
     /// <summary>The response ROPs this family decodes, in ascending RopId order.</summary>
     internal static readonly ImmutableArray<byte> SupportedResponseRopIds =
     [
-        0x4E, 0x54, 0x72, 0x73, 0x78, 0x7F, 0x9D,
+        0x4E, 0x54, 0x72, 0x73, 0x75, 0x76, 0x77, 0x78, 0x7F, 0x9D,
     ];
 
     private static readonly ImmutableHashSet<byte> RequestSet = [.. SupportedRequestRopIds];
@@ -273,6 +273,41 @@ internal static class RopFastTransferDecoders
                 ReadFlagsByte(ref reader, children, "ImportDeleteFlags", ImportDeleteFlags, context);
                 ReadTaggedValues(ref reader, children, "PropertyValueCount", "PropertyValues", context);
                 break;
+            case 0x75: // RopSynchronizationUploadStateStreamBegin (MS-OXCROPS 2.2.13.9.1).
+            {
+                var tagOffset = reader.Position;
+                var propertyType = reader.ReadUInt16("StateProperty.PropertyType");
+                var propertyId = reader.ReadUInt16("StateProperty.PropertyId");
+                var stateProperty = ((uint)propertyId << 16) | propertyType;
+                AddField(
+                    children,
+                    "StateProperty",
+                    tagOffset,
+                    4,
+                    IcsStatePropertyName(stateProperty),
+                    context);
+                if (!IsLegalIcsStateProperty(stateProperty))
+                {
+                    Warn(
+                        context,
+                        $"StateProperty 0x{stateProperty:X8} is not one of the four ICS state properties.");
+                }
+                var sizeOffset = reader.Position;
+                var transferBufferSize = reader.ReadUInt32("TransferBufferSize");
+                AddField(
+                    children,
+                    "TransferBufferSize",
+                    sizeOffset,
+                    4,
+                    transferBufferSize.ToString(CultureInfo.InvariantCulture),
+                    context);
+                context.CaptureContext?.StageIcsStateBegin(
+                    context.CaptureScope,
+                    inputHandle,
+                    stateProperty,
+                    transferBufferSize);
+                break;
+            }
             case 0x76: // RopSynchronizationUploadStateStreamContinue (MS-OXCROPS 2.2.13.10.1).
             {
                 var sizeOffset = reader.Position;
@@ -285,12 +320,13 @@ internal static class RopFastTransferDecoders
                 AddField(children, "StreamDataSize", sizeOffset, 4, Count((int)size), context);
                 var dataOffset = reader.Position;
                 var data = reader.ReadBytes((int)size, "StreamData");
-                // The state stream's property tag was declared by a preceding
-                // RopSynchronizationUploadStateStreamBegin, so its content is not self-contained here
-                // and is deliberately retained as bounded raw bytes.
                 children.Add(ExtendedBufferParser.RawNode("StreamData", data, dataOffset, context.Budget));
+                context.CaptureContext?.StageIcsStateContinue(context.CaptureScope, inputHandle, data);
                 break;
             }
+            case 0x77: // RopSynchronizationUploadStateStreamEnd (MS-OXCROPS 2.2.13.11.1).
+                context.CaptureContext?.StageIcsStateEnd(context.CaptureScope, inputHandle);
+                break;
             case 0x78: // RopSynchronizationImportMessageMove (MS-OXCROPS 2.2.13.5.1).
                 ReadSizedBinary(ref reader, children, "SourceFolderId", context);
                 ReadSizedBinary(ref reader, children, "SourceMessageId", context);
@@ -330,10 +366,13 @@ internal static class RopFastTransferDecoders
         ImmutableArray<MapiNode>.Builder children,
         FastTransferParseContext context)
     {
+        var operationOffset = reader.Position;
         ReadRopId(ref reader, children, context);
-        // MS-OXCROPS names the echoed handle slot InputHandleIndex for every ROP in this family,
-        // including the ones whose request carries a separate OutputHandleIndex.
-        var handleIndex = ReadHandle(ref reader, children, "InputHandleIndex", context);
+        var handleIndex = ReadHandle(
+            ref reader,
+            children,
+            ropId == 0x72 ? "OutputHandleIndex" : "InputHandleIndex",
+            context);
         var returnValue = ReadReturnValue(ref reader, children, context);
 
         switch (ropId)
@@ -427,6 +466,40 @@ internal static class RopFastTransferDecoders
                     children.Add(ReadMessageOrFolderId(ref reader, "FolderId", "FolderID", context, 0));
                 }
                 break;
+            case 0x75: // RopSynchronizationUploadStateStreamBegin (MS-OXCROPS 2.2.13.9.2).
+            case 0x76: // RopSynchronizationUploadStateStreamContinue (MS-OXCROPS 2.2.13.10.2).
+            {
+                if (context.CaptureContext is { } captureContext)
+                {
+                    captureContext.CompleteIcsStateOperation(
+                        context.CaptureScope,
+                        ropId,
+                        handleIndex,
+                        returnValue == 0,
+                        out var stateWarning);
+                    WarnIfPresent(context, stateWarning);
+                }
+                break;
+            }
+            case 0x77: // RopSynchronizationUploadStateStreamEnd (MS-OXCROPS 2.2.13.11.2).
+            {
+                if (context.CaptureContext is { } captureContext)
+                {
+                    var completion = captureContext.CompleteIcsStateOperation(
+                        context.CaptureScope,
+                        ropId,
+                        handleIndex,
+                        returnValue == 0,
+                        out var stateWarning);
+                    WarnIfPresent(context, stateWarning);
+                    if (completion is not null)
+                    {
+                        WarnIfPresent(context, completion.Warning);
+                        children.Add(ParseCompletedIcsState(completion, operationOffset, context));
+                    }
+                }
+                break;
+            }
             case 0x78: // RopSynchronizationImportMessageMove (MS-OXCROPS 2.2.13.5.2).
                 if (returnValue == 0)
                 {
@@ -539,6 +612,80 @@ internal static class RopFastTransferDecoders
                 allowProvisional: context.Direction == MapiDirection.Request,
                 out key);
     }
+
+    private static MapiNode ParseCompletedIcsState(
+        MapiCaptureContext.IcsStateCompletion completion,
+        long offset,
+        FastTransferParseContext context)
+    {
+        // A reconstructed state can contain thousands of IDSET/GLOBSET nodes. Bound it
+        // independently so it cannot consume the enclosing response ROP-list budget.
+        var stateBudget = new MapiNodeBudget();
+        var children = ImmutableArray.CreateBuilder<MapiNode>();
+        if (completion.Data.IsEmpty)
+        {
+            stateBudget.Claim(1);
+            children.Add(MapiNode.Leaf(
+                "StateData",
+                MapiNodeKind.Field,
+                offset,
+                0,
+                "empty initial ICS state"));
+        }
+        else
+        {
+            var reader = new MapiReader(completion.Data.AsSpan(), context.CancellationToken);
+            try
+            {
+                var decoded = FastTransferStreamLexer.ParseIdsetReplGuidValue(
+                    ref reader,
+                    stateBudget,
+                    2);
+                children.Add(MarkReconstructed(decoded, offset));
+            }
+            catch (MapiParseException exception)
+            {
+                Warn(
+                    context,
+                    $"Completed ICS state stream could not be decoded ({exception.Message}); it was retained as raw.");
+                var fallbackBudget = new MapiNodeBudget();
+                children.Add(MarkReconstructed(
+                    ExtendedBufferParser.RawNode(
+                        "StateData",
+                        completion.Data.AsSpan(),
+                        offset,
+                        fallbackBudget),
+                    offset));
+                fallbackBudget.Claim(1);
+                return new MapiNode(
+                    "CompletedStateStream",
+                    MapiNodeKind.Structure,
+                    offset,
+                    0,
+                    $"{IcsStatePropertyName(completion.StateProperty)}; {completion.Data.Length:N0} byte(s) in " +
+                    $"{completion.ChunkCount:N0} chunk(s); reconstructed",
+                    children.ToImmutable());
+            }
+        }
+
+        stateBudget.Claim(1);
+        return new MapiNode(
+            "CompletedStateStream",
+            MapiNodeKind.Structure,
+            offset,
+            0,
+            $"{IcsStatePropertyName(completion.StateProperty)}; {completion.Data.Length:N0} byte(s) in " +
+            $"{completion.ChunkCount:N0} chunk(s); reconstructed",
+            children.ToImmutable());
+    }
+
+    private static MapiNode MarkReconstructed(MapiNode node, long offset) =>
+        node with
+        {
+            Offset = offset,
+            Length = 0,
+            Children = [.. node.Children.Select(child => MarkReconstructed(child, offset))],
+        };
 
     private static void WarnIfPresent(FastTransferParseContext context, string? warning)
     {
@@ -981,6 +1128,19 @@ internal static class RopFastTransferDecoders
     private static void Warn(FastTransferParseContext context, string message) => context.Warnings?.Add(message);
 
     private static string Count(int value) => value.ToString(CultureInfo.InvariantCulture);
+
+    private static bool IsLegalIcsStateProperty(uint tag) => tag is
+        0x40170003 or 0x40170102 or 0x67960102 or 0x67DA0102 or 0x67D20102;
+
+    private static string IcsStatePropertyName(uint tag) => tag switch
+    {
+        0x40170003 => "0x40170003 MetaTagIdsetGiven (PtypInteger32)",
+        0x40170102 => "0x40170102 MetaTagIdsetGiven (PtypBinary)",
+        0x67960102 => "0x67960102 MetaTagCnsetSeen",
+        0x67DA0102 => "0x67DA0102 MetaTagCnsetSeenFAI",
+        0x67D20102 => "0x67D20102 MetaTagCnsetRead",
+        _ => $"0x{tag:X8}",
+    };
 
     private static string Enumerated(uint value, ImmutableDictionary<uint, string> table, int digits)
     {
