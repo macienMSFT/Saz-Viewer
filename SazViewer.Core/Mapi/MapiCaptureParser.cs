@@ -81,18 +81,29 @@ internal static class MapiCaptureParser
                 warnings,
                 session.Id,
                 cancellationToken);
-            if (requestType.Equals("Connect", StringComparison.OrdinalIgnoreCase)
-                || requestType.Equals("Bind", StringComparison.OrdinalIgnoreCase))
+            if (response is not null)
+            {
+                response = response with
+                {
+                    EnvelopeSucceeded = responseCode == "0" && response.EnvelopeSucceeded,
+                    LifecycleTransitionSucceeded = responseCode == "0" && response.LifecycleTransitionSucceeded
+                };
+            }
+            var isEstablishment = requestType.Equals("Connect", StringComparison.OrdinalIgnoreCase)
+                || requestType.Equals("Bind", StringComparison.OrdinalIgnoreCase);
+            var lifecycleTransitionSucceeded = response?.LifecycleTransitionSucceeded == true;
+            if (isEstablishment)
             {
                 var establishmentWarning = context.CompleteLogonCorrelationEstablishment(
                     session.Id,
-                    responseCode == "0");
+                    lifecycleTransitionSucceeded);
                 if (establishmentWarning is not null)
                 {
                     warnings.Add(establishmentWarning);
                 }
             }
-            if (responseCode == "0")
+            if (response?.EnvelopeSucceeded == true
+                && (!isEstablishment || lifecycleTransitionSucceeded))
             {
                 var aliasWarning = context.RegisterResponseCookieAliases(
                     session.Id,
@@ -101,7 +112,7 @@ internal static class MapiCaptureParser
                 {
                     warnings.Add(aliasWarning);
                 }
-                if (session.Response is not null
+                if (lifecycleTransitionSucceeded
                     && (requestType.Equals("Disconnect", StringComparison.OrdinalIgnoreCase)
                         || requestType.Equals("Unbind", StringComparison.OrdinalIgnoreCase)))
                 {
@@ -204,6 +215,8 @@ internal static class MapiCaptureParser
         var localWarnings = new List<string>();
         var bytesToParse = message.Body.NormalizedBytes.Span;
         var budgetForMessage = new MapiNodeBudget();
+        var envelopeSucceeded = false;
+        var lifecycleTransitionSucceeded = false;
         try
         {
             var root = MapiHttpMessageParser.Parse(
@@ -215,6 +228,8 @@ internal static class MapiCaptureParser
                 budgetForMessage,
                 cancellationToken,
                 out var parsedBytes,
+                out envelopeSucceeded,
+                out lifecycleTransitionSucceeded,
                 captureScope);
             sessionWarnings.AddRange(localWarnings);
             var semanticComplete = localWarnings.Count == 0 && !ContainsRaw(root);
@@ -224,7 +239,11 @@ internal static class MapiCaptureParser
                 localWarnings.ToImmutableArray(),
                 parsedBytes == bytesToParse.Length && semanticComplete,
                 parsedBytes,
-                bytesToParse.Length);
+                bytesToParse.Length)
+            {
+                EnvelopeSucceeded = envelopeSucceeded,
+                LifecycleTransitionSucceeded = lifecycleTransitionSucceeded
+            };
         }
         catch (Exception exception) when (exception is MapiParseException or OverflowException)
         {
@@ -242,7 +261,11 @@ internal static class MapiCaptureParser
                 localWarnings.ToImmutableArray(),
                 false,
                 0,
-                bytesToParse.Length);
+                bytesToParse.Length)
+            {
+                EnvelopeSucceeded = envelopeSucceeded,
+                LifecycleTransitionSucceeded = lifecycleTransitionSucceeded
+            };
         }
     }
 

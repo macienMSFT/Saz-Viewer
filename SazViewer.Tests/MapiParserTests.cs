@@ -53,7 +53,126 @@ public sealed class MapiParserTests
         Assert.Equal("X-Server: test", Find(mapi.Response.Root, "AdditionalHeader").Value);
         Assert.True(mapi.Request!.Complete);
         Assert.True(mapi.Response.Complete);
+        Assert.True(mapi.Response.EnvelopeSucceeded);
+        Assert.True(mapi.Response.LifecycleTransitionSucceeded);
         Assert.Single(report.Mapi!.Sessions);
+    }
+
+    [Fact]
+    public void TruncatedConnectResponseCannotEstablishLifecycleTransition()
+    {
+        using var requestBody = new MemoryStream();
+        WriteAsciiZ(requestBody, "/o=Example/ou=Users/cn=User");
+        WriteUInt32(requestBody, 1);
+        WriteUInt32(requestBody, 1252);
+        WriteUInt32(requestBody, 0x0409);
+        WriteUInt32(requestBody, 0x0409);
+        WriteUInt32(requestBody, 0);
+        var truncatedResponse = BuildBody(
+            stream =>
+            {
+                stream.Write(Encoding.ASCII.GetBytes("\r\n"));
+                WriteUInt32(stream, 0);
+                WriteUInt32(stream, 0);
+                WriteUInt32(stream, 120);
+            });
+
+        using var saz = Fixture(
+            ("raw/1_c.txt", Http(
+                "POST /mapi/emsmdb HTTP/1.1",
+                requestBody.ToArray(),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Connect"))),
+            ("raw/1_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                truncatedResponse,
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"),
+                ("Set-Cookie", "sid=must-not-register"))));
+
+        var response = Assert.Single(new SazParser().Parse(saz).Sessions).Mapi!.Response!;
+        Assert.True(response.EnvelopeSucceeded);
+        Assert.False(response.LifecycleTransitionSucceeded);
+        Assert.False(response.Complete);
+    }
+
+    [Fact]
+    public void SuccessfulBindAndUnbindResponsesCompleteLifecycleTransitions()
+    {
+        var bindRequest = BuildBody(
+            stream =>
+            {
+                WriteUInt32(stream, 0);
+                stream.WriteByte(0);
+                WriteUInt32(stream, 0);
+            });
+        var unbindRequest = BuildBody(
+            stream =>
+            {
+                WriteUInt32(stream, 0);
+                WriteUInt32(stream, 0);
+            });
+        var bindResponse = BuildResponse(stream => stream.Write(Guid.Empty.ToByteArray()));
+        var unbindResponse = BuildResponse(_ => { });
+        using var saz = Fixture(
+            ("raw/1_c.txt", Http(
+                "POST /mapi/nspi HTTP/1.1",
+                bindRequest,
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Bind"))),
+            ("raw/1_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                bindResponse,
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"),
+                ("Set-Cookie", "sid=nspi-session"))),
+            ("raw/2_c.txt", Http(
+                "POST /mapi/nspi HTTP/1.1",
+                unbindRequest,
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Unbind"),
+                ("Cookie", "sid=nspi-session"))),
+            ("raw/2_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                unbindResponse,
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"))));
+
+        var sessions = new SazParser().Parse(saz).Sessions;
+        Assert.All(
+            sessions,
+            session =>
+            {
+                Assert.True(session.Mapi!.Response!.EnvelopeSucceeded);
+                Assert.True(session.Mapi.Response.LifecycleTransitionSucceeded);
+            });
+    }
+
+    [Fact]
+    public void BodySuccessfulBindWithoutXResponseCodeDoesNotReportLifecycleSuccess()
+    {
+        var bindRequest = BuildBody(
+            stream =>
+            {
+                WriteUInt32(stream, 0);
+                stream.WriteByte(0);
+                WriteUInt32(stream, 0);
+            });
+        var bindResponse = BuildResponse(stream => stream.Write(Guid.Empty.ToByteArray()));
+        using var saz = Fixture(
+            ("raw/1_c.txt", Http(
+                "POST /mapi/nspi HTTP/1.1",
+                bindRequest,
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Bind"))),
+            ("raw/1_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                bindResponse,
+                ("Content-Type", "application/mapi-http"))));
+
+        var response = Assert.Single(new SazParser().Parse(saz).Sessions).Mapi!.Response!;
+        Assert.False(response.EnvelopeSucceeded);
+        Assert.False(response.LifecycleTransitionSucceeded);
     }
 
     [Fact]
@@ -397,11 +516,97 @@ public sealed class MapiParserTests
                 ("Cookie", "sid=session-a"))));
 
         var report = new SazParser().Parse(saz);
-        Assert.False(report.Sessions[1].Mapi!.Response!.Complete);
+        var disconnect = report.Sessions[1].Mapi!.Response!;
+        Assert.False(disconnect.Complete);
+        Assert.True(disconnect.EnvelopeSucceeded);
+        Assert.True(disconnect.LifecycleTransitionSucceeded);
         var request = report.Sessions[2].Mapi!.Request!;
         Assert.False(request.Complete);
         Assert.Contains(request.Warnings, warning =>
             warning.Contains("LogonFlags.Private", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FailedOrIndeterminateDisconnectEnvelopePreservesLogicalSessionState()
+    {
+        var unsuccessfulResponses = new[]
+        {
+            BuildBody(
+                stream =>
+                {
+                    stream.Write(Encoding.ASCII.GetBytes("\r\n"));
+                    WriteUInt32(stream, 1);
+                    WriteUInt32(stream, 0);
+                }),
+            BuildBody(
+                stream =>
+                {
+                    stream.Write(Encoding.ASCII.GetBytes("\r\n"));
+                    WriteUInt32(stream, 0);
+                    WriteUInt32(stream, 0x80004005);
+                    WriteUInt32(stream, 0);
+                }),
+            BuildBody(
+                stream =>
+                {
+                    stream.Write(Encoding.ASCII.GetBytes("\r\n"));
+                    WriteUInt32(stream, 0);
+                })
+        };
+
+        foreach (var disconnectResponse in unsuccessfulResponses)
+        {
+            byte[] logon =
+            [
+                0xFE, 0x00, 0x00, 0x01,
+                0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00,
+            ];
+            byte[] setReadFlag = [0x11, 0x00, 0x00, 0x00, 0x01];
+            using var saz = Fixture(
+                ("raw/40_c.txt", Http(
+                    "POST /mapi/emsmdb HTTP/1.1",
+                    ExecuteRequest(logon),
+                    ("Content-Type", "application/mapi-http"),
+                    ("X-RequestType", "Execute"),
+                    ("X-ClientInfo", "client-a"))),
+                ("raw/40_s.txt", Http(
+                    "HTTP/1.1 200 OK",
+                    ExecuteResponse(PrivateLogonResponse(), 0x10203040),
+                    ("Content-Type", "application/mapi-http"),
+                    ("X-ResponseCode", "0"),
+                    ("Set-Cookie", "sid=session-a"))),
+                ("raw/41_c.txt", Http(
+                    "POST /mapi/emsmdb HTTP/1.1",
+                    [],
+                    ("Content-Type", "application/mapi-http"),
+                    ("X-RequestType", "Disconnect"),
+                    ("X-ClientInfo", "client-a"),
+                    ("Cookie", "sid=session-a"))),
+                ("raw/41_s.txt", Http(
+                    "HTTP/1.1 200 OK",
+                    disconnectResponse,
+                    ("Content-Type", "application/mapi-http"),
+                    ("X-ResponseCode", "0"))),
+                ("raw/42_c.txt", Http(
+                    "POST /mapi/emsmdb HTTP/1.1",
+                    ExecuteRequest(setReadFlag),
+                    ("Content-Type", "application/mapi-http"),
+                    ("X-RequestType", "Execute"),
+                    ("X-ClientInfo", "client-a"),
+                    ("Cookie", "sid=session-a"))));
+
+            var report = new SazParser().Parse(saz);
+            var disconnect = report.Sessions[1].Mapi!.Response!;
+            Assert.False(disconnect.EnvelopeSucceeded);
+            Assert.False(disconnect.LifecycleTransitionSucceeded);
+            var laterRequest = report.Sessions[2].Mapi!.Request!;
+            Assert.True(laterRequest.Complete);
+            Assert.DoesNotContain(
+                laterRequest.Warnings,
+                warning => warning.Contains("LogonFlags.Private", StringComparison.Ordinal));
+        }
     }
 
     [Fact]

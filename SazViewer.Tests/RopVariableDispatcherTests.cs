@@ -347,9 +347,11 @@ public sealed class RopVariableDispatcherTests
         context.RegisterLogonCorrelationScope(scope, "full-pipeline-connection");
         var root = MapiHttpMessageParser.Parse(
             message, "Execute", MapiDirection.Response, context, warnings, new MapiNodeBudget(), CancellationToken.None,
-            out var parsedBytes, scope);
+            out var parsedBytes, out var envelopeSucceeded, out var lifecycleTransitionSucceeded, scope);
 
         Assert.Equal(message.Length, parsedBytes);
+        Assert.True(envelopeSucceeded);
+        Assert.False(lifecycleTransitionSucceeded);
         // The synthetic buffer omits a server object handle table (irrelevant to this test) and its
         // FastTransfer payload ends on an EndMessage marker, so a couple of benign informational
         // warnings are expected; no warning here may indicate a parse failure.

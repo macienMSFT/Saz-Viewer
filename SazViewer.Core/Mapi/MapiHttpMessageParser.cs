@@ -15,8 +15,12 @@ internal static class MapiHttpMessageParser
         MapiNodeBudget budget,
         CancellationToken cancellationToken,
         out long parsedBytes,
+        out bool envelopeSucceeded,
+        out bool lifecycleTransitionSucceeded,
         string? captureScope = null)
     {
+        envelopeSucceeded = false;
+        lifecycleTransitionSucceeded = false;
         var reader = new MapiReader(bytes, cancellationToken);
         var children = ImmutableArray.CreateBuilder<MapiNode>();
         var fastTransferAssembler = context.FastTransferAssembler;
@@ -31,8 +35,20 @@ internal static class MapiHttpMessageParser
                 budget.Claim(0);
                 return new MapiNode(requestType, MapiNodeKind.Operation, 0, bytes.Length, "Response", children.ToImmutable());
             }
-            ReadUInt32(ref reader, children, "ErrorCode", budget, hex: true);
-            ParseResponseOperation(ref reader, requestType, children, warnings, budget, cancellationToken, fastTransferAssembler, captureScope, context);
+            var errorCode = ReadUInt32(ref reader, children, "ErrorCode", budget, hex: true);
+            envelopeSucceeded = errorCode == 0;
+            ParseResponseOperation(
+                ref reader,
+                requestType,
+                children,
+                warnings,
+                budget,
+                cancellationToken,
+                fastTransferAssembler,
+                captureScope,
+                context,
+                envelopeSucceeded,
+                ref lifecycleTransitionSucceeded);
         }
         else
         {
@@ -271,9 +287,11 @@ internal static class MapiHttpMessageParser
         List<string> warnings,
         MapiNodeBudget budget,
         CancellationToken cancellationToken,
-        FastTransferStreamAssembler? fastTransferAssembler = null,
-        string? captureScope = null,
-        MapiCaptureContext? context = null)
+        FastTransferStreamAssembler? fastTransferAssembler,
+        string? captureScope,
+        MapiCaptureContext? context,
+        bool envelopeSucceeded,
+        ref bool lifecycleTransitionSucceeded)
     {
         switch (requestType.ToUpperInvariant())
         {
@@ -283,6 +301,7 @@ internal static class MapiHttpMessageParser
                 ReadUInt32(ref reader, nodes, "RetryDelay", budget);
                 ReadAsciiZ(ref reader, nodes, "DnPrefix", budget);
                 ReadUnicodeZ(ref reader, nodes, "DisplayName", budget);
+                lifecycleTransitionSucceeded = envelopeSucceeded;
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
             case "EXECUTE":
@@ -304,6 +323,7 @@ internal static class MapiHttpMessageParser
                 break;
             case "BIND":
                 ReadGuid(ref reader, nodes, "ServerGuid", budget);
+                lifecycleTransitionSucceeded = envelopeSucceeded;
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
             case "COMPAREMIDS":
@@ -412,6 +432,9 @@ internal static class MapiHttpMessageParser
                 break;
             case "UNBIND":
             case "DISCONNECT":
+                lifecycleTransitionSucceeded = envelopeSucceeded;
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
             case "MODLINKATT":
             case "MODPROPS":
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);

@@ -53,7 +53,12 @@ public sealed record MapiMessageParse(
     ImmutableArray<string> Warnings,
     bool Complete,
     long ParsedBytes,
-    long TotalBytes);
+    long TotalBytes)
+{
+    public bool EnvelopeSucceeded { get; init; }
+
+    public bool LifecycleTransitionSucceeded { get; init; }
+}
 
 public sealed record MapiSession(
     string HttpSessionId,
