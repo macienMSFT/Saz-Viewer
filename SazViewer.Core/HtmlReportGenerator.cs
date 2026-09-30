@@ -25,7 +25,7 @@ public sealed class HtmlReportGenerator
 *{box-sizing:border-box}html{scrollbar-gutter:stable}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
 main{width:100%;padding:4px}h2,h3,h4{margin:.25em 0}.muted,.format-status{color:var(--muted)}
 .controls{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 4px}input,select,button{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:7px 10px}
-input{min-width:280px;flex:1}button{cursor:pointer}button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff}
+input{min-width:280px;flex:1}button{cursor:pointer}
 table{width:100%;border-collapse:collapse;background:var(--panel);font-size:13px}th{position:sticky;top:0;z-index:2;background:var(--panel2);text-align:left}
 th,td{padding:8px;border:1px solid var(--line);vertical-align:top}tbody tr:hover{background:#1f2630}#httpTable tbody tr{cursor:pointer}
 #httpTable tbody tr:focus{outline:2px solid var(--accent);outline-offset:-2px}#httpTable tbody tr.selected{background:var(--selected);box-shadow:inset 4px 0 var(--accent)}
@@ -37,13 +37,22 @@ details{margin:4px 0}summary{cursor:pointer;color:var(--accent)}pre{white-space:
 .detail-pane.has-selection{flex-basis:var(--detail-height)}.detail-resizer{height:9px;cursor:row-resize;touch-action:none;background:linear-gradient(transparent 3px,var(--line) 3px,var(--line) 5px,transparent 5px)}
 .detail-resizer:focus{outline:2px solid var(--accent);outline-offset:-2px}.detail-content{height:calc(100% - 9px);overflow:auto;padding:10px 14px}.detail-placeholder{display:flex;height:100%;align-items:center;justify-content:center;color:var(--muted)}
 .session-heading{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}.session-heading .url{font-weight:600}
-.message-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}.message-panel{min-width:0;border:1px solid var(--line);border-radius:7px;padding:10px;background:var(--bg)}
-.detail-block{margin-top:10px}.detail-block h4{display:flex;align-items:center;gap:8px}.headers{max-height:220px}.body-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:5px 0}.body-toolbar .format-status{flex:1;min-width:180px}
-.body-view{max-height:360px;margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:#13233a}.session-meta{margin-top:10px}.session-meta pre{max-height:180px}.empty-message{color:var(--muted);padding:18px;text-align:center}
-.protocol-block{margin-top:10px;border-top:1px solid var(--line);padding-top:8px}.protocol-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}.protocol-toolbar input{min-width:160px}.protocol-tree{max-height:420px;overflow:auto;border:1px solid var(--line);padding:6px;background:var(--panel)}.protocol-node{margin-left:14px}.protocol-node>summary{display:flex;gap:7px;align-items:baseline}.protocol-field{display:flex;gap:7px;margin-left:16px;padding:2px 0}.protocol-offset{color:var(--muted);font:12px ui-monospace,Consolas,monospace}.protocol-value{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}.protocol-kind{color:var(--accent);font-size:12px}.protocol-hidden{display:none!important}
+.message-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}.message-panel{display:flex;flex-direction:column;min-width:0;border:1px solid var(--line);border-radius:7px;padding:10px;background:var(--bg)}
+.headers{white-space:pre-wrap}
+.tab-strip{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:8px 0 0}
+.tab-strip [role=tab]{background:transparent;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;padding:6px 12px;color:var(--muted);cursor:pointer;font:inherit}
+.tab-strip [role=tab][aria-selected=true]{color:var(--text);background:var(--panel);border-color:var(--line);border-bottom:2px solid var(--accent);margin-bottom:-1px}
+.tab-strip [role=tab]:disabled{color:#4b535c;cursor:not-allowed;opacity:.5}
+.tab-strip [role=tab]:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;z-index:1}
+.tab-panels{flex:1;min-height:260px;max-height:58vh;overflow:auto;border:1px solid var(--line);border-top:none;background:var(--panel);padding:10px 12px;margin-bottom:2px}
+.tab-panel.hidden{display:none!important}.tab-empty{color:var(--muted);padding:14px 4px}
+.format-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 6px}.format-meta .format-status{flex:1;min-width:180px}
+.captured-bytes{margin-top:8px}.captured-bytes summary{cursor:pointer;color:var(--accent)}
+.body-view{margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:#13233a}.session-meta{margin-top:10px}.session-meta pre{max-height:180px}.empty-message{color:var(--muted);padding:18px;text-align:center}
+.protocol-meta{margin-bottom:6px}.protocol-block{margin-top:6px}.protocol-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}.protocol-toolbar input{min-width:160px}.protocol-tree{overflow:visible;border:1px solid var(--line);padding:6px;background:var(--panel)}.protocol-node{margin-left:14px}.protocol-node>summary{display:flex;gap:7px;align-items:baseline}.protocol-field{display:flex;gap:7px;margin-left:16px;padding:2px 0}.protocol-offset{color:var(--muted);font:12px ui-monospace,Consolas,monospace}.protocol-value{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}.protocol-kind{color:var(--accent);font-size:12px}.protocol-hidden{display:none!important}
 .syn-key{color:#79c0ff}.syn-string{color:#a5d6ff}.syn-number{color:#ffa657}.syn-literal{color:#ff7b72}.syn-punct{color:#8b949e}.syn-tag{color:#7ee787}.syn-attr{color:#d2a8ff}.syn-comment{color:#8b949e;font-style:italic}.syn-value{color:#a5d6ff}
 .ws-table-scroll{max-height:70vh;overflow:auto;border:1px solid var(--line);margin-bottom:24px}.ws-table-scroll pre{max-height:320px}
-@media(max-width:900px){main{padding:2px}.message-grid{grid-template-columns:1fr}.detail-pane.has-selection{--detail-height:52vh}.body-view{max-height:260px}.http-workspace{height:calc(100vh - 4px);height:calc(100dvh - 4px);min-height:360px}}
+@media(max-width:900px){main{padding:2px}.message-grid{grid-template-columns:1fr}.detail-pane.has-selection{--detail-height:52vh}.tab-panels{max-height:44vh}.http-workspace{height:calc(100vh - 4px);height:calc(100dvh - 4px);min-height:360px}}
 </style>
 </head>
 <body><main>
@@ -117,7 +126,7 @@ function selectRow(row){
   if(selectedRow){selectedRow.classList.remove('selected');selectedRow.setAttribute('aria-selected','false')}
   selectedRow=row;row.classList.add('selected');row.setAttribute('aria-selected','true');
   detailContent.replaceChildren(template.content.cloneNode(true));detailPane.classList.add('has-selection');
-  highlightSelected(detailContent);renderProtocolTrees(detailContent);resizer.setAttribute('aria-disabled','false');
+  highlightSelected(detailContent);renderProtocolTrees(detailContent);setupTabs(detailContent);resizer.setAttribute('aria-disabled','false');
   requestAnimationFrame(updateResizeAria);
 }
 httpRows.forEach(row=>{
@@ -145,13 +154,48 @@ bindFilter('httpSearch','httpFilter','httpTable',()=>{
   }
 });
 bindFilter('wsSearch','wsFilter','wsTable');
-detailContent.addEventListener('click',event=>{
-  const button=event.target.closest('button[data-body-view]');
-  if(!button)return;
-  const body=button.closest('.body-block'),view=button.dataset.bodyView;
-  body.querySelectorAll('button[data-body-view]').forEach(item=>item.setAttribute('aria-pressed',String(item===button)));
-  body.querySelectorAll('.body-view').forEach(item=>item.classList.toggle('hidden',!item.classList.contains(`${view}-view`)));
-});
+const preferredTab={};
+function tabsOf(tablist){return [...tablist.querySelectorAll('[role="tab"]')]}
+function activateTab(tablist,key,options){
+  const tabs=tabsOf(tablist),target=tabs.find(tab=>tab.dataset.tab===key&&!tab.disabled);
+  if(!target)return;
+  const panels=tablist.parentElement.querySelectorAll(':scope>.tab-panels>.tab-panel');
+  tabs.forEach(tab=>{const active=tab===target;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1});
+  panels.forEach(panel=>panel.classList.toggle('hidden',panel.id!==target.getAttribute('aria-controls')));
+  if(options&&options.remember)preferredTab[tablist.dataset.side]=key;
+  if(options&&options.focus)target.focus();
+}
+function initialTabFor(tablist){
+  const tabs=tabsOf(tablist);
+  const enabled=key=>tabs.some(tab=>tab.dataset.tab===key&&!tab.disabled);
+  const remembered=preferredTab[tablist.dataset.side];
+  if(remembered&&enabled(remembered))return remembered;
+  for(const key of ['mapi','json','xml','raw','headers']){if(enabled(key))return key}
+  return null;
+}
+function setupTabList(tablist){
+  const key=initialTabFor(tablist);
+  if(key)activateTab(tablist,key);
+  tablist.addEventListener('click',event=>{
+    const tab=event.target.closest('[role="tab"]');
+    if(!tab||tab.disabled||tab.parentElement!==tablist)return;
+    activateTab(tablist,tab.dataset.tab,{remember:true});
+  });
+  tablist.addEventListener('keydown',event=>{
+    if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+    const enabledTabs=tabsOf(tablist).filter(tab=>!tab.disabled);
+    if(enabledTabs.length===0)return;
+    const currentIndex=Math.max(0,enabledTabs.indexOf(document.activeElement));
+    let nextIndex=currentIndex;
+    if(event.key==='ArrowRight')nextIndex=(currentIndex+1)%enabledTabs.length;
+    else if(event.key==='ArrowLeft')nextIndex=(currentIndex-1+enabledTabs.length)%enabledTabs.length;
+    else if(event.key==='Home')nextIndex=0;
+    else if(event.key==='End')nextIndex=enabledTabs.length-1;
+    event.preventDefault();
+    activateTab(tablist,enabledTabs[nextIndex].dataset.tab,{focus:true,remember:true});
+  });
+}
+function setupTabs(root){root.querySelectorAll('[role="tablist"]').forEach(setupTabList)}
 const resizer=document.getElementById('detailResizer');
 function appendSpan(fragment,className,text){
   const span=document.createElement('span');span.className=className;span.textContent=text;fragment.append(span);
@@ -356,8 +400,8 @@ clearSelection();
         html.Append("</span><span class=\"url\">");
         Text(html, session.Url ?? "-");
         html.Append("</span></div><div class=\"message-grid\">");
-        AppendMessagePanel(html, "Request", session.Request, session.Mapi?.Request);
-        AppendMessagePanel(html, "Response", session.Response, session.Mapi?.Response);
+        AppendMessagePanel(html, "Request", "request", session.Request, session.Mapi?.Request);
+        AppendMessagePanel(html, "Response", "response", session.Response, session.Mapi?.Response);
         html.Append("</div><div class=\"session-meta\">");
         if (session.ClientEndpoint is not null || session.ServerEndpoint is not null)
         {
@@ -386,49 +430,207 @@ clearSelection();
     private void AppendMessagePanel(
         StringBuilder html,
         string title,
+        string side,
         HttpMessage? message,
         MapiMessageParse? protocol)
     {
         html.Append("<section class=\"message-panel\"><h3>").Append(title).Append("</h3>");
-        if (message is null)
-        {
-            html.Append("<div class=\"empty-message\">No ").Append(title.ToLowerInvariant()).Append(" entry was captured.</div></section>");
-            return;
-        }
 
-        html.Append("<div class=\"detail-block\"><h4>Headers</h4><pre class=\"headers\">");
+        var lowerTitle = title.ToLowerInvariant();
+        var body = message is null ? null : bodyFormatter.Format(message.Body, message.Header("Content-Type"));
+        var jsonEnabled = body is { Format: BodyFormat.Json, CanToggle: true };
+        var xmlEnabled = body is { Format: BodyFormat.Xml, CanToggle: true };
+        var mapiEnabled = protocol is not null;
+        var headersEnabled = message is not null && message.Headers.Count > 0;
+        var rawEnabled = message is not null;
+        var anyEnabled = jsonEnabled || xmlEnabled || mapiEnabled || headersEnabled || rawEnabled;
+
+        string? initial = !anyEnabled
+            ? null
+            : mapiEnabled
+                ? "mapi"
+                : jsonEnabled
+                    ? "json"
+                    : xmlEnabled
+                        ? "xml"
+                        : rawEnabled
+                            ? "raw"
+                            : "headers";
+
+        AppendTabStrip(html, title, side, jsonEnabled, xmlEnabled, mapiEnabled, headersEnabled, rawEnabled, initial);
+
+        html.Append("<div class=\"tab-panels\">");
+        AppendTabPanel(
+            html, side, "json", initial == "json", jsonEnabled,
+            $"JSON view is not available: the {lowerTitle} body is not recognized, valid JSON.",
+            jsonEnabled ? inner => AppendFormattedBody(inner, body!, "json") : null);
+        AppendTabPanel(
+            html, side, "xml", initial == "xml", xmlEnabled,
+            $"XML view is not available: the {lowerTitle} body is not recognized, valid XML.",
+            xmlEnabled ? inner => AppendFormattedBody(inner, body!, "xml") : null);
+        AppendTabPanel(
+            html, side, "mapi", initial == "mapi", mapiEnabled,
+            $"MAPI view is not available: no protocol tree was parsed for this {lowerTitle}.",
+            mapiEnabled ? inner => AppendProtocol(inner, protocol!) : null);
+        AppendTabPanel(
+            html, side, "headers", initial == "headers", headersEnabled,
+            message is null
+                ? $"No {lowerTitle} entry was captured."
+                : $"No headers were captured for this {lowerTitle}.",
+            headersEnabled ? inner => AppendHeadersOnly(inner, message!) : null);
+        AppendTabPanel(
+            html, side, "raw", initial == "raw", rawEnabled,
+            $"No {lowerTitle} entry was captured.",
+            rawEnabled ? inner => AppendRawView(inner, message!, body!) : null);
+        if (!anyEnabled)
+        {
+            html.Append("<div class=\"tab-empty\">No ").Append(lowerTitle).Append(" entry was captured.</div>");
+        }
+        html.Append("</div></section>");
+    }
+
+    private static void AppendTabStrip(
+        StringBuilder html,
+        string title,
+        string side,
+        bool jsonEnabled,
+        bool xmlEnabled,
+        bool mapiEnabled,
+        bool headersEnabled,
+        bool rawEnabled,
+        string? initial)
+    {
+        html.Append("<div class=\"tab-strip\" role=\"tablist\" aria-label=\"").Append(title)
+            .Append(" detail views\" data-side=\"").Append(side).Append("\">");
+        AppendTabButton(html, side, "json", "JSON", jsonEnabled, initial == "json");
+        AppendTabButton(html, side, "xml", "XML", xmlEnabled, initial == "xml");
+        AppendTabButton(html, side, "mapi", "MAPI", mapiEnabled, initial == "mapi");
+        AppendTabButton(html, side, "headers", "Headers", headersEnabled, initial == "headers");
+        AppendTabButton(html, side, "raw", "Raw", rawEnabled, initial == "raw");
+        html.Append("</div>");
+    }
+
+    private static void AppendTabButton(
+        StringBuilder html,
+        string side,
+        string key,
+        string label,
+        bool enabled,
+        bool selected)
+    {
+        html.Append("<button type=\"button\" role=\"tab\" id=\"").Append(side).Append("-tab-").Append(key)
+            .Append("\" aria-controls=\"").Append(side).Append("-panel-").Append(key)
+            .Append("\" aria-selected=\"").Append(selected ? "true" : "false")
+            .Append("\" data-tab=\"").Append(key)
+            .Append("\" tabindex=\"").Append(selected ? "0" : "-1").Append('"');
+        if (!enabled)
+        {
+            html.Append(" disabled aria-disabled=\"true\"");
+        }
+        html.Append('>').Append(label).Append("</button>");
+    }
+
+    private static void AppendTabPanel(
+        StringBuilder html,
+        string side,
+        string key,
+        bool selected,
+        bool enabled,
+        string unavailableMessage,
+        Action<StringBuilder>? content)
+    {
+        html.Append("<div role=\"tabpanel\" id=\"").Append(side).Append("-panel-").Append(key)
+            .Append("\" aria-labelledby=\"").Append(side).Append("-tab-").Append(key)
+            .Append("\" tabindex=\"0\" class=\"tab-panel");
+        if (!selected)
+        {
+            html.Append(" hidden");
+        }
+        html.Append('"').Append('>');
+        if (enabled && content is not null)
+        {
+            content(html);
+        }
+        else
+        {
+            html.Append("<div class=\"tab-empty\">");
+            Text(html, unavailableMessage);
+            html.Append("</div>");
+        }
+        html.Append("</div>");
+    }
+
+    private static void AppendHeadersOnly(StringBuilder html, HttpMessage message)
+    {
+        html.Append("<pre class=\"headers\">");
         Text(html, message.StartLine + "\n");
         foreach (var header in message.Headers)
         {
             Text(html, $"{header.Name}: {header.Value}\n");
         }
-        html.Append("</pre></div><div class=\"detail-block body-block\"><h4>Body <span class=\"muted\">(");
-        if (message.Body.WasDecoded)
+        html.Append("</pre>");
+    }
+
+    private static void AppendFormattedBody(StringBuilder html, BodyPresentation body, string format)
+    {
+        html.Append("<div class=\"format-meta\"><span class=\"format-badge\">");
+        Text(html, body.Label);
+        html.Append("</span><span class=\"format-status\">");
+        Text(html, body.Status);
+        html.Append("</span></div><pre class=\"body-view formatted-view\" data-format=\"")
+            .Append(format).Append("\">");
+        Text(html, body.Formatted);
+        html.Append("</pre>");
+    }
+
+    private static void AppendRawView(StringBuilder html, HttpMessage message, BodyPresentation body)
+    {
+        var source = message.Body;
+        html.Append("<h4>Original headers</h4>");
+        AppendHeadersOnly(html, message);
+        html.Append("<h4>").Append(source.WasDecoded ? "Decoded body" : "Body").Append(" <span class=\"muted\">(");
+        if (source.WasDecoded)
         {
-            html.Append(FormatBytes(message.Body.Length)).Append(" decoded; ")
-                .Append(FormatBytes(message.Body.CapturedLength)).Append(" captured");
+            html.Append(FormatBytes(source.Length)).Append(" decoded; ")
+                .Append(FormatBytes(source.CapturedLength)).Append(" captured");
         }
         else
         {
-            html.Append(FormatBytes(message.Body.Length));
+            html.Append(FormatBytes(source.Length));
         }
-        html.Append(")</span></h4>");
-        AppendBody(html, bodyFormatter.Format(message.Body, message.Header("Content-Type")), message.Body);
-        html.Append("</div>");
-        if (protocol is not null)
+        html.Append(")</span></h4><div class=\"format-meta\"><span class=\"format-badge\">");
+        Text(html, body.Label);
+        html.Append("</span><span class=\"format-status\">");
+        Text(html, body.Status);
+        html.Append("</span></div>");
+        if (source.DecodingStatus is not null)
         {
-            AppendProtocol(html, protocol);
+            html.Append(source.WasDecoded ? "<div class=\"decode-status\">" : "<div class=\"warning\">");
+            Text(html, source.DecodingStatus);
+            html.Append("</div>");
         }
-        html.Append("</section>");
+        html.Append("<pre class=\"body-view\">");
+        Text(html, body.Raw);
+        html.Append("</pre>");
+        if (source.CapturedBytesPreview is not null)
+        {
+            html.Append("<details class=\"captured-bytes\"><summary>Captured bytes (pre-decode)</summary><pre>");
+            Text(html, source.CapturedBytesPreview);
+            if (source.CapturedBytesPreviewTruncated)
+            {
+                Text(html, "\n[Captured byte preview truncated]");
+            }
+            html.Append("</pre></details>");
+        }
     }
 
     private static void AppendProtocol(StringBuilder html, MapiMessageParse protocol)
     {
-        html.Append("<section class=\"protocol-block\"><h4>Protocol <span class=\"muted\">(")
+        html.Append("<div class=\"protocol-meta muted\">(")
             .Append(protocol.Complete ? "complete" : "partial").Append(", ")
             .Append(protocol.ParsedBytes.ToString("N0", CultureInfo.InvariantCulture)).Append(" of ")
             .Append(protocol.TotalBytes.ToString("N0", CultureInfo.InvariantCulture))
-            .Append(" bytes)</span></h4>");
+            .Append(" bytes)</div>");
         foreach (var warning in protocol.Warnings.Take(50))
         {
             html.Append("<div class=\"warning\">");
@@ -439,9 +641,9 @@ clearSelection();
         {
             root = ToProtocolData(protocol.Root)
         });
-        html.Append("<div data-protocol=\"");
+        html.Append("<div class=\"protocol-block\" data-protocol=\"");
         Attribute(html, payload);
-        html.Append("\"><span class=\"muted\">Protocol tree loads when this session is selected.</span></div></section>");
+        html.Append("\"><span class=\"muted\">Protocol tree loads when this session is selected.</span></div>");
     }
 
     private static object ToProtocolData(MapiNode node) => new
@@ -453,61 +655,6 @@ clearSelection();
         value = node.Value,
         children = node.Children.Select(ToProtocolData).ToArray()
     };
-
-    private static void AppendBody(
-        StringBuilder html,
-        BodyPresentation body,
-        BodyPreview source)
-    {
-        var syntaxFormat = body.CanToggle ? body.Format : BodyFormat.Text;
-        html.Append("<div class=\"body-toolbar\"><span class=\"format-badge\">");
-        Text(html, body.Label);
-        html.Append("</span><span class=\"format-status\">");
-        Text(html, body.Status);
-        html.Append("</span>");
-        if (body.CanToggle || source.CapturedBytesPreview is not null)
-        {
-            html.Append("<span class=\"body-toggle\" role=\"group\" aria-label=\"Body display mode\"><button type=\"button\" data-body-view=\"formatted\" aria-pressed=\"true\">Formatted</button>");
-            if (body.CanToggle)
-            {
-                html.Append("<button type=\"button\" data-body-view=\"raw\" aria-pressed=\"false\">");
-                Text(html, source.WasDecoded ? "Decoded text" : "Raw");
-                html.Append("</button>");
-            }
-            if (source.CapturedBytesPreview is not null)
-            {
-                html.Append("<button type=\"button\" data-body-view=\"captured\" aria-pressed=\"false\">Captured bytes</button>");
-            }
-            html.Append("</span>");
-        }
-        html.Append("</div>");
-        if (source.DecodingStatus is not null)
-        {
-            html.Append(source.WasDecoded ? "<div class=\"decode-status\">" : "<div class=\"warning\">");
-            Text(html, source.DecodingStatus);
-            html.Append("</div>");
-        }
-        html.Append("<pre class=\"body-view formatted-view\" data-format=\"")
-            .Append(syntaxFormat.ToString().ToLowerInvariant()).Append("\">");
-        Text(html, body.Formatted);
-        html.Append("</pre>");
-        if (body.CanToggle)
-        {
-            html.Append("<pre class=\"body-view raw-view hidden\">");
-            Text(html, body.Raw);
-            html.Append("</pre>");
-        }
-        if (source.CapturedBytesPreview is not null)
-        {
-            html.Append("<pre class=\"body-view captured-view hidden\">");
-            Text(html, source.CapturedBytesPreview);
-            if (source.CapturedBytesPreviewTruncated)
-            {
-                Text(html, "\n[Captured byte preview truncated]");
-            }
-            html.Append("</pre>");
-        }
-    }
 
     private static void AppendWebSocketSection(StringBuilder html, IReadOnlyList<WebSocketMessage> messages)
     {

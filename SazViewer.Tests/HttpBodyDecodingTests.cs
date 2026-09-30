@@ -429,7 +429,7 @@ public sealed class HttpBodyDecodingTests
 
         Assert.DoesNotContain("</script><img src=x onerror=alert(1)>", html, StringComparison.Ordinal);
         Assert.Contains("&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;", html, StringComparison.Ordinal);
-        Assert.Contains("Decoded text", html, StringComparison.Ordinal);
+        Assert.Contains("Decoded body", html, StringComparison.Ordinal);
         Assert.Contains("Decoded in wire-removal order: content: gzip.", html, StringComparison.Ordinal);
         Assert.Contains("Captured bytes", html, StringComparison.Ordinal);
         Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);

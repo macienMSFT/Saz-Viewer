@@ -24,7 +24,7 @@ dotnet run --project .\SazViewer.Cli -- --help
 
 When no output path is supplied, the report is written beside the input archive with an `.html` extension.
 
-In the report, select an HTTP row with the mouse or keyboard to open its request and response in the resizable bottom pane. The pane keeps the session table visible, switches to a vertical layout on narrow windows, and provides formatted/raw views for detected JSON, XML, and text bodies. Detected MAPI/HTTP and NSPI sessions have a protocol badge/filter and a searchable, expandable protocol tree with byte offsets and lengths.
+In the report, select an HTTP row with the mouse or keyboard to open its request and response in the resizable bottom pane. The pane keeps the session table visible and switches to a vertical layout on narrow windows. Each side (request and response) has its own always-visible tab strip — JSON, XML, MAPI, Headers, Raw — with unavailable tabs shown disabled; the selected tab fills the pane's content area. JSON and XML tabs offer pretty-printed, syntax-highlighted views when the body is recognized as valid JSON/XML; the MAPI tab holds a searchable, lazily expandable protocol tree with byte offsets and lengths for detected MAPI/HTTP and NSPI sessions; Headers shows only the captured header block; Raw shows the original captured headers plus the decoded body text (with decode status/encodings), a bounded hex view for binary bodies, and a compact "Captured bytes" control when pre-decode bytes are available. The initial tab favors MAPI, then JSON/XML, then Raw, then Headers, whichever is available, and each pane's tabs support Left/Right/Home/End keyboard navigation. Detected MAPI/HTTP and NSPI sessions also keep the protocol badge/filter in the session table.
 
 ## Publish a self-contained Windows executable
 
@@ -42,7 +42,7 @@ Use `win-arm64` instead of `win-x64` for Windows on ARM. The published executabl
 - HTTP body previews are bounded. Text uses a safely recognized charset; binary data is shown as a bounded hex preview.
 - Declared chunked transfer framing is removed before content decoding. `gzip`, zlib-wrapped `deflate` (with a raw-DEFLATE compatibility fallback), and `br` are supported, including chained and repeated `Content-Encoding` fields in HTTP decoding order.
 - Decoding is transactional and bounded: an HTTP entry is read through a 4 MiB protocol-payload limit plus bounded headers, each decoded stage is limited to at most 4 MiB and 100x expansion (with a 1 MiB floor), gzip content is capped at 128 members, displayed decoded bodies remain capped at 64 KiB, and captured encoded-byte views are capped at 16 KiB. Unsupported, corrupt, incomplete, or oversized content remains available as bounded captured hex with a warning.
-- The detail pane keeps captured headers unchanged. Successfully decoded bodies offer formatted content, decoded text, and the original captured bytes as distinct views.
+- The detail pane keeps captured headers unchanged. Successfully decoded bodies are shown as decoded text in the Raw tab (with decode status and removed encodings noted), and a compact "Captured bytes" control reveals the original pre-decode bytes when available.
 - WebSocket records are displayed separately with direction, opcode/type, length, timestamp when available, and safe text or hex previews.
 - The tool does not execute captured content and does not make network requests.
 
