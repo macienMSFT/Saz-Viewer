@@ -243,6 +243,62 @@ public sealed class HtmlReportGeneratorTests
     }
 
     [Fact]
+    public void UsesCompactWideHttpColumnsWithoutTypeAndKeepsFullTimestampMetadata()
+    {
+        var firstTimestamp = new DateTimeOffset(2026, 9, 29, 21, 7, 8, 123, TimeSpan.FromHours(-4));
+        var secondTimestamp = firstTimestamp.AddMilliseconds(877);
+        var report = new SazReport { SourceName = "table-layout.saz" };
+        report.Sessions.Add(
+            new HttpSession
+            {
+                Id = "early",
+                ArchiveOrder = 0,
+                Timestamp = firstTimestamp,
+                Method = "GET",
+                Url = "https://example.test/a/very/long/path?first=1&second=2",
+                StatusCode = 200,
+                ContentType = "application/json"
+            });
+        report.Sessions.Add(
+            new HttpSession
+            {
+                Id = "later",
+                ArchiveOrder = 1,
+                Timestamp = secondTimestamp,
+                Method = "POST",
+                Url = "https://example.test/later",
+                StatusCode = 201,
+                ContentType = "text/plain"
+            });
+
+        var html = new HtmlReportGenerator().Generate(report);
+        var httpHeaderStart = html.IndexOf("<table id=\"httpTable\">", StringComparison.Ordinal);
+        var httpHeaderEnd = html.IndexOf("</thead>", httpHeaderStart, StringComparison.Ordinal);
+        var httpHeader = html[httpHeaderStart..httpHeaderEnd];
+
+        Assert.Contains(
+            "<th class=\"http-time\">Time</th><th class=\"http-id\">ID</th><th class=\"http-method\">Method</th><th class=\"http-protocol\">Protocol</th><th class=\"http-url\">URL</th><th class=\"http-status\">Status</th><th class=\"http-bytes num\">Req</th><th class=\"http-bytes num\">Resp</th>",
+            httpHeader,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(">Type</th>", httpHeader, StringComparison.Ordinal);
+        Assert.Contains("#httpTable{min-width:1140px;table-layout:auto}", html, StringComparison.Ordinal);
+        Assert.Contains("#httpTable .http-time{width:184px;min-width:184px;white-space:nowrap}", html, StringComparison.Ordinal);
+        Assert.Contains("#httpTable .http-url{width:52%;min-width:420px;word-break:normal;overflow-wrap:anywhere}", html, StringComparison.Ordinal);
+        Assert.Contains("#httpTable th,#httpTable td{padding:5px 7px;line-height:1.3}", html, StringComparison.Ordinal);
+        Assert.Contains(
+            "<time datetime=\"2026-09-29T21:07:08.1230000-04:00\" title=\"Captured timestamp: 2026-09-29 21:07:08.123 -04:00\" aria-label=\"Captured timestamp 2026-09-29 21:07:08.123 -04:00\">2026-09-29 21:07:08.123</time>",
+            html,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(">2026-09-29 21:07:08.123 -04:00</time>", html, StringComparison.Ordinal);
+        Assert.True(
+            html.IndexOf(">early</td>", StringComparison.Ordinal)
+            < html.IndexOf(">later</td>", StringComparison.Ordinal),
+            "Display-only timestamp formatting must not reorder sessions.");
+        Assert.Contains("https://example.test/a/very/long/path?first=1&amp;second=2", html, StringComparison.Ordinal);
+        Assert.Contains("application/json", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GeneratesLazySafeMapiProtocolTreeSelectedAsInitialTab()
     {
         const string attack = "</script><img src=x onerror=alert(1)>";
@@ -287,7 +343,7 @@ public sealed class HtmlReportGeneratorTests
 
         Assert.Contains("<option value=\"mapi\">MAPI/NSPI only</option>", html, StringComparison.Ordinal);
         Assert.Contains("data-mapi=\"true\"", html, StringComparison.Ordinal);
-        Assert.Contains("<th>Protocol</th>", html, StringComparison.Ordinal);
+        Assert.Contains("<th class=\"http-protocol\">Protocol</th>", html, StringComparison.Ordinal);
         Assert.Contains("data-protocol=", html, StringComparison.Ordinal);
         Assert.Contains("renderProtocolTrees(detailContent)", html, StringComparison.Ordinal);
         Assert.Contains("document.createElement(hasChildren?'details':'div')", html, StringComparison.Ordinal);
