@@ -278,19 +278,6 @@ internal sealed class MapiCaptureContext
 
         var pending = queue.Dequeue();
         var hasResponseHandle = TryResolveServerHandle(captureScope, responseHandleIndex, out var responseHandle);
-        if (!success)
-        {
-            if (pending.RequestHandle is { } failedRequestHandle)
-            {
-                tableColumns.Remove(failedRequestHandle);
-            }
-            if (hasResponseHandle)
-            {
-                tableColumns.Remove(responseHandle);
-            }
-            return;
-        }
-
         if (pending.HandleIndex != responseHandleIndex
             || (pending.RequestHandle is { } requestHandle
                 && hasResponseHandle
@@ -299,6 +286,20 @@ internal sealed class MapiCaptureContext
             if (pending.RequestHandle is { } mismatchedRequestHandle)
             {
                 tableColumns.Remove(mismatchedRequestHandle);
+            }
+            if (hasResponseHandle)
+            {
+                tableColumns.Remove(responseHandle);
+            }
+            pendingSetColumns.Remove(captureScope);
+            InvalidatePendingTableColumns(captureScope, queue);
+            return;
+        }
+        if (!success)
+        {
+            if (pending.RequestHandle is { } failedRequestHandle)
+            {
+                tableColumns.Remove(failedRequestHandle);
             }
             if (hasResponseHandle)
             {
@@ -369,6 +370,31 @@ internal sealed class MapiCaptureContext
         }
 
         var pending = queue.Dequeue();
+        if (pending.HandleIndex != responseHandleIndex)
+        {
+            if (pending.RequestHandle is { } mismatchedRequestHandle)
+            {
+                tableColumns.Remove(mismatchedRequestHandle);
+            }
+            if (hasResponseHandle)
+            {
+                tableColumns.Remove(responseHandle);
+            }
+            pendingResetTables.Remove(captureScope);
+            while (queue.Count > 0)
+            {
+                var later = queue.Dequeue();
+                if (later.RequestHandle is { } laterRequestHandle)
+                {
+                    tableColumns.Remove(laterRequestHandle);
+                }
+                if (TryResolveServerHandle(captureScope, later.HandleIndex, out var laterResponseHandle))
+                {
+                    tableColumns.Remove(laterResponseHandle);
+                }
+            }
+            return;
+        }
         if (!success)
         {
             return;
@@ -388,18 +414,7 @@ internal sealed class MapiCaptureContext
     {
         if (pendingSetColumns.Remove(captureScope, out var pendingColumns))
         {
-            while (pendingColumns.Count > 0)
-            {
-                var pending = pendingColumns.Dequeue();
-                if (pending.RequestHandle is { } requestHandle)
-                {
-                    tableColumns.Remove(requestHandle);
-                }
-                if (TryResolveServerHandle(captureScope, pending.HandleIndex, out var responseHandle))
-                {
-                    tableColumns.Remove(responseHandle);
-                }
-            }
+            InvalidatePendingTableColumns(captureScope, pendingColumns);
         }
 
         if (pendingResetTables.Remove(captureScope, out var pendingResets))
@@ -420,10 +435,29 @@ internal sealed class MapiCaptureContext
 
         propertySpecificTags.Remove(captureScope);
         requestRopLists.Remove(captureScope);
-        pendingLogonPrivacy.Remove(captureScope);
-        pendingFastTransferUploads.Remove(captureScope);
+        if (pendingLogonPrivacy.Remove(captureScope, out var abandonedLogons)
+            && TryResolveConnectionScope(captureScope, out var logonScope))
+        {
+            foreach (var pending in abandonedLogons)
+            {
+                logonPrivacy.Remove((logonScope, pending.LogonId));
+            }
+        }
+        if (pendingFastTransferUploads.Remove(captureScope, out var abandonedUploads))
+        {
+            foreach (var upload in abandonedUploads)
+            {
+                FastTransferAssembler.Forget(upload.Key);
+            }
+        }
         configuredFastTransferOutputSlots.Remove(captureScope);
-        pendingOutputObjectTypes.Remove(captureScope);
+        if (pendingOutputObjectTypes.Remove(captureScope, out var abandonedObjectTypes))
+        {
+            foreach (var pending in abandonedObjectTypes)
+            {
+                InvalidateHandleState(captureScope, pending.HandleIndex);
+            }
+        }
         successfulOutputObjectTypes.Remove(captureScope);
         pendingObjectRootDependencies.Remove(captureScope);
         if (pendingIcsStateOperations.Remove(captureScope, out var abandonedStateOperations))
@@ -443,6 +477,27 @@ internal sealed class MapiCaptureContext
         sessionHandles.Remove(captureScope);
         logonCorrelationScopes.Remove(captureScope);
         pendingFallbackCorrelationScopes.Remove(captureScope);
+    }
+
+    private void InvalidatePendingTableColumns(
+        string captureScope,
+        Queue<(
+            uint HandleIndex,
+            (string Scope, uint Handle)? RequestHandle,
+            ImmutableArray<(ushort Type, ushort Id)> Columns)> pendingColumns)
+    {
+        while (pendingColumns.Count > 0)
+        {
+            var pending = pendingColumns.Dequeue();
+            if (pending.RequestHandle is { } requestHandle)
+            {
+                tableColumns.Remove(requestHandle);
+            }
+            if (TryResolveServerHandle(captureScope, pending.HandleIndex, out var responseHandle))
+            {
+                tableColumns.Remove(responseHandle);
+            }
+        }
     }
 
     public bool TryGetTableColumnsByHandleValue(
@@ -585,14 +640,20 @@ internal sealed class MapiCaptureContext
         var pending = queue.Dequeue();
         if (pending.RopId != ropId || pending.HandleIndex != outputHandleIndex)
         {
+            var abandonedHandleIndices = queue
+                .Select(candidate => candidate.HandleIndex)
+                .Append(pending.HandleIndex)
+                .Append(outputHandleIndex)
+                .Distinct()
+                .ToArray();
             pendingOutputObjectTypes.Remove(captureScope);
             successfulOutputObjectTypes.Remove(captureScope);
-            if (success && TryResolveServerHandle(captureScope, outputHandleIndex, out var mismatched))
+            foreach (var handleIndex in abandonedHandleIndices)
             {
-                serverObjectTypes.Remove(mismatched);
+                InvalidateHandleState(captureScope, handleIndex);
             }
             return "Output server-object type provenance did not match the response operation; " +
-                "pending object types for this HTTP session were discarded.";
+                "pending object types and affected prior handle state for this HTTP session were discarded.";
         }
 
         if (success)
@@ -880,28 +941,73 @@ internal sealed class MapiCaptureContext
             || !pendingFastTransferUploads.TryGetValue(captureScope, out var queue)
             || queue.Count == 0)
         {
-            return null;
+            if (captureScope is not null
+                && TryGetFastTransferStreamKey(
+                    captureScope,
+                    handleIndex,
+                    allowProvisional: true,
+                    out var unstagedKey))
+            {
+                FastTransferAssembler.Forget(unstagedKey);
+            }
+            return "FastTransfer upload response has no staged request; retained stream state for the response " +
+                "handle was discarded rather than treated as authoritative.";
         }
 
         var pending = queue.Dequeue();
         var matchingHandle = pending.HandleIndex == handleIndex;
-        if (!matchingHandle || pending.Invalidated)
+        if (!matchingHandle)
         {
-            InvalidateLaterUploads(queue, pending.Key);
+            FastTransferAssembler.Forget(pending.Key);
+            if (TryGetFastTransferStreamKey(
+                    captureScope,
+                    handleIndex,
+                    allowProvisional: true,
+                    out var responseKey))
+            {
+                FastTransferAssembler.Forget(responseKey);
+            }
+            foreach (var later in queue)
+            {
+                FastTransferAssembler.Forget(later.Key);
+            }
+            queue.Clear();
+            pendingFastTransferUploads.Remove(captureScope);
             return "FastTransfer upload response could not be paired safely with its staged request; " +
                 "the staged stream state was discarded.";
+        }
+        if (pending.Invalidated)
+        {
+            InvalidateLaterUploads(queue, pending.Key);
+            return "FastTransfer upload response matched state that was already invalidated by an earlier " +
+                "same-session operation; unrelated staged streams were preserved.";
         }
 
         if (!success)
         {
+            if (bufferUsedSize > 0 && bufferUsedSize < pending.Buffer.Length)
+            {
+                var partialWarning = CommitAcceptedFastTransferPrefix(pending, queue, bufferUsedSize);
+                return partialWarning ??
+                    $"FastTransfer upload failed after accepting {bufferUsedSize:N0} of " +
+                    $"{pending.Buffer.Length:N0} staged byte(s); the accepted prefix was committed and later " +
+                    "same-stream staged state was discarded.";
+            }
+            if (bufferUsedSize == 0)
+            {
+                InvalidateLaterUploads(queue, pending.Key);
+                return "FastTransfer upload failed without accepting staged bytes; prior committed stream state " +
+                    "was retained and later same-stream staged state was discarded.";
+            }
             FastTransferAssembler.Forget(pending.Key);
             InvalidateLaterUploads(queue, pending.Key);
-            return "FastTransfer upload failed; BufferUsedSize is not reliable on failure, so the staged " +
-                "request and prior reconstructed state for this upload context were discarded.";
+            return "FastTransfer upload failed with a full or invalid BufferUsedSize; that value is not reliable " +
+                "for failed operations, so prior reconstructed state for this upload context was discarded.";
         }
 
         if (bufferUsedSize > pending.Buffer.Length)
         {
+            FastTransferAssembler.Forget(pending.Key);
             InvalidateLaterUploads(queue, pending.Key);
             return $"FastTransfer upload response reports BufferUsedSize {bufferUsedSize:N0}, which exceeds " +
                 $"the staged {pending.Buffer.Length:N0}-byte request buffer; the staged stream state was discarded.";
@@ -915,6 +1021,24 @@ internal sealed class MapiCaptureContext
 
         if (bufferUsedSize > 0)
         {
+            var partialWarning = CommitAcceptedFastTransferPrefix(pending, queue, bufferUsedSize);
+            if (partialWarning is not null)
+            {
+                return partialWarning;
+            }
+        }
+        InvalidateLaterUploads(queue, pending.Key);
+        return $"FastTransfer upload accepted {bufferUsedSize:N0} of {pending.Buffer.Length:N0} staged byte(s); " +
+            "only the accepted prefix was committed and later same-round-trip state was discarded.";
+    }
+
+    private string? CommitAcceptedFastTransferPrefix(
+        PendingFastTransferUpload pending,
+        Queue<PendingFastTransferUpload> queue,
+        uint bufferUsedSize)
+    {
+        try
+        {
             var accepted = FastTransferStreamLexer.Lex(
                 pending.Buffer.AsSpan(0, checked((int)bufferUsedSize)),
                 pending.AbsoluteOffset,
@@ -923,10 +1047,20 @@ internal sealed class MapiCaptureContext
                 0,
                 CancellationToken.None);
             FastTransferAssembler.Commit(pending.Key, accepted.State);
+            InvalidateLaterUploads(queue, pending.Key);
+            return accepted.State.Desynchronized
+                ? $"FastTransfer upload accepted {bufferUsedSize:N0} of {pending.Buffer.Length:N0} staged " +
+                    "byte(s), but the accepted prefix is not a valid continuation; the stream is retained as " +
+                    "desynchronized and later same-round-trip state was discarded."
+                : null;
         }
-        InvalidateLaterUploads(queue, pending.Key);
-        return $"FastTransfer upload accepted {bufferUsedSize:N0} of {pending.Buffer.Length:N0} staged byte(s); " +
-            "only the accepted prefix was committed and later same-round-trip state was discarded.";
+        catch (MapiParseException ex)
+        {
+            FastTransferAssembler.Forget(pending.Key);
+            InvalidateLaterUploads(queue, pending.Key);
+            return $"FastTransfer upload accepted prefix could not be reconstructed safely ({ex.Message}); " +
+                "the staged stream state was discarded.";
+        }
     }
 
     private static void InvalidateLaterUploads(
@@ -1006,6 +1140,10 @@ internal sealed class MapiCaptureContext
             || !pendingIcsStateOperations.TryGetValue(captureScope, out var queue)
             || queue.Count == 0)
         {
+            if (TryCreateIcsStateKey(captureScope, handleIndex, out var unstagedKey))
+            {
+                activeIcsStateUploads.Remove(unstagedKey);
+            }
             warning = $"RopSynchronization state-stream response 0x{ropId:X2} has no staged request.";
             return null;
         }
@@ -1016,9 +1154,16 @@ internal sealed class MapiCaptureContext
         {
             activeIcsStateUploads.Remove(key);
             activeIcsStateUploads.Remove(pending.Key);
+            foreach (var later in queue)
+            {
+                activeIcsStateUploads.Remove(later.Key);
+            }
+            queue.Clear();
+            pendingIcsStateOperations.Remove(captureScope);
             warning =
                 $"RopSynchronization state-stream response 0x{ropId:X2}/handle {handleIndex} does not match " +
-                $"the staged 0x{pending.RopId:X2}/handle {pending.HandleIndex}; state was discarded.";
+                $"the staged 0x{pending.RopId:X2}/handle {pending.HandleIndex}; this HTTP session's staged " +
+                "state-stream operations were discarded.";
             return null;
         }
 
@@ -1476,6 +1621,15 @@ internal sealed class MapiCaptureContext
             || !pendingLogonPrivacy.TryGetValue(captureScope, out var queue)
             || queue.Count == 0)
         {
+            if (success
+                && responseIsPrivate is not null
+                && TryResolveConnectionScope(captureScope, out var unstagedScope))
+            {
+                foreach (var key in logonPrivacy.Keys.Where(key => key.Scope == unstagedScope).ToArray())
+                {
+                    logonPrivacy.Remove(key);
+                }
+            }
             return;
         }
 

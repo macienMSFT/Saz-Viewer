@@ -1058,9 +1058,16 @@ public sealed class RopVariableDispatcherTests
     {
         const uint objectHandle = 0x50607080;
         var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("initial-object", "logical-connection");
+        context.RecordSessionHandles("initial-object", [objectHandle]);
+        context.StageOutputObjectType("initial-object", 0x03, 0);
+        context.CompleteOutputObjectType("initial-object", 0x03, 0, success: true);
+        context.CompleteHttpSession("initial-object");
+
         context.RegisterLogonCorrelationScope("missing-object", "logical-connection");
         context.RecordSessionHandles("missing-object", [objectHandle]);
-        context.StageOutputObjectType("missing-object", 0x03, 0);
+        Assert.True(context.TryGetServerObjectType("missing-object", 0, out _));
+        context.StageOutputObjectType("missing-object", 0x02, 0);
         context.CompleteHttpSession("missing-object");
 
         context.RegisterLogonCorrelationScope("object-release", "logical-connection");
@@ -1072,6 +1079,262 @@ public sealed class RopVariableDispatcherTests
         Assert.True(context.TryGetServerObjectType("object-release", 0, out _));
         context.InvalidateHandleState("object-release", 0);
         Assert.False(context.TryGetServerObjectType("object-release", 0, out _));
+    }
+
+    [Fact]
+    public void MismatchedOutputResponseInvalidatesEveryAffectedPriorObjectType()
+    {
+        const string connection = "logical-connection";
+        uint[] handles = [0x10203040, 0x50607080, 0x90A0B0C0];
+        var context = new MapiCaptureContext();
+        for (var index = 0; index < handles.Length; index++)
+        {
+            var seedScope = $"seed-object-{index}";
+            context.RegisterLogonCorrelationScope(seedScope, connection);
+            context.RecordSessionHandles(seedScope, [handles[index]]);
+            context.StageOutputObjectType(seedScope, 0x03, 0);
+            context.CompleteOutputObjectType(seedScope, 0x03, 0, success: true);
+            context.CompleteHttpSession(seedScope);
+        }
+
+        context.RegisterLogonCorrelationScope("mismatch-object", connection);
+        context.RecordSessionHandles("mismatch-object", [.. handles]);
+        context.StageOutputObjectType("mismatch-object", 0x02, 0);
+        context.StageOutputObjectType("mismatch-object", 0x23, 1);
+        var warning = context.CompleteOutputObjectType(
+            "mismatch-object",
+            ropId: 0x23,
+            outputHandleIndex: 2,
+            success: false);
+
+        Assert.Contains("did not match", warning);
+        Assert.False(context.TryGetServerObjectType("mismatch-object", 0, out _));
+        Assert.False(context.TryGetServerObjectType("mismatch-object", 1, out _));
+        Assert.False(context.TryGetServerObjectType("mismatch-object", 2, out _));
+    }
+
+    [Fact]
+    public void MissingOrInvalidUploadResponseDiscardsPreviouslyCommittedStreamState()
+    {
+        const string connection = "logical-connection";
+        const uint serverHandle = 0x50607080;
+        var key = new FastTransferStreamKey(connection, serverHandle);
+        var buffer = Concat(Le(0x30010003u), Le(1u));
+        var context = new MapiCaptureContext();
+
+        context.StageFastTransferUpload(
+            "commit",
+            0,
+            key,
+            buffer,
+            0,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+        Assert.Null(context.CompleteFastTransferUpload("commit", 0, true, (uint)buffer.Length));
+        Assert.Contains(key, context.FastTransferAssembler.Snapshot.Keys);
+
+        context.StageFastTransferUpload(
+            "missing",
+            0,
+            key,
+            buffer,
+            0,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+        context.CompleteHttpSession("missing");
+        Assert.DoesNotContain(key, context.FastTransferAssembler.Snapshot.Keys);
+
+        context.StageFastTransferUpload(
+            "oversized",
+            0,
+            key,
+            buffer,
+            0,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+        var oversizedWarning = context.CompleteFastTransferUpload(
+            "oversized",
+            0,
+            true,
+            (uint)buffer.Length + 1);
+        Assert.Contains("exceeds", oversizedWarning);
+        Assert.DoesNotContain(key, context.FastTransferAssembler.Snapshot.Keys);
+    }
+
+    [Fact]
+    public void MalformedAcceptedUploadPrefixFailsClosedWithoutThrowing()
+    {
+        const string connection = "logical-connection";
+        const uint serverHandle = 0x50607080;
+        var key = new FastTransferStreamKey(connection, serverHandle);
+        var buffer = Concat(Le(0x30010003u), Le(1u));
+        var context = new MapiCaptureContext();
+        context.StageFastTransferUpload(
+            "partial",
+            0,
+            key,
+            buffer,
+            0,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+
+        var warning = context.CompleteFastTransferUpload("partial", 0, true, 5);
+
+        Assert.Contains("accepted prefix is not a valid continuation", warning);
+        Assert.True(context.FastTransferAssembler.StateFor(key).Desynchronized);
+    }
+
+    [Fact]
+    public void MismatchedUploadResponseDiscardsTheWholeStagedResponseQueue()
+    {
+        var buffer = Concat(Le(0x30010003u), Le(1u));
+        var context = new MapiCaptureContext();
+        var first = new FastTransferStreamKey("logical-connection", 0x10203040);
+        var second = new FastTransferStreamKey("logical-connection", 0x50607080);
+        var response = new FastTransferStreamKey("logical-connection", 0x90A0B0C0);
+        context.StageFastTransferUpload("seed-response", 0, response, buffer, 0, new MapiNodeBudget(), 0, CancellationToken.None);
+        context.CompleteFastTransferUpload("seed-response", 0, true, (uint)buffer.Length);
+        context.RegisterLogonCorrelationScope("mismatch", "logical-connection");
+        context.RecordSessionHandles(
+            "mismatch",
+            [first.ServerObjectHandle, second.ServerObjectHandle, response.ServerObjectHandle]);
+        context.StageFastTransferUpload(
+            "mismatch",
+            0,
+            first,
+            buffer,
+            0,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+        context.StageFastTransferUpload(
+            "mismatch",
+            1,
+            second,
+            buffer,
+            0,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+
+        var warning = context.CompleteFastTransferUpload(
+            "mismatch",
+            handleIndex: 2,
+            success: true,
+            bufferUsedSize: (uint)buffer.Length);
+
+        Assert.Contains("could not be paired safely", warning);
+        Assert.Empty(context.FastTransferAssembler.Snapshot);
+        Assert.Contains("no staged request", context.CompleteFastTransferUpload(
+            "mismatch",
+            handleIndex: 1,
+            success: true,
+            bufferUsedSize: (uint)buffer.Length));
+    }
+
+    [Fact]
+    public void SuccessfulMismatchedTableResponsesInvalidateAllQueuedColumnState()
+    {
+        const string connection = "logical-connection";
+        const uint firstHandle = 0x10203040;
+        const uint secondHandle = 0x50607080;
+        ImmutableArray<(ushort Type, ushort Id)> firstColumns = [(0x0003, 0x3001)];
+        ImmutableArray<(ushort Type, ushort Id)> secondColumns = [(0x001F, 0x3002)];
+        var context = new MapiCaptureContext();
+
+        context.RegisterLogonCorrelationScope("initial-columns", connection);
+        context.RecordSessionHandles("initial-columns", [firstHandle, secondHandle]);
+        context.EnqueueSetColumns("initial-columns", 0, firstColumns);
+        context.CompleteSetColumns("initial-columns", 0, success: true);
+        context.EnqueueSetColumns("initial-columns", 1, secondColumns);
+        context.CompleteSetColumns("initial-columns", 1, success: true);
+        context.CompleteHttpSession("initial-columns");
+
+        context.RegisterLogonCorrelationScope("mismatch-columns", connection);
+        context.RecordSessionHandles("mismatch-columns", [firstHandle, secondHandle]);
+        context.EnqueueSetColumns("mismatch-columns", 0, secondColumns);
+        context.EnqueueSetColumns("mismatch-columns", 1, firstColumns);
+        context.CompleteSetColumns("mismatch-columns", 1, success: false);
+
+        Assert.False(context.TryGetTableColumns("mismatch-columns", 0, out _));
+        Assert.False(context.TryGetTableColumns("mismatch-columns", 1, out _));
+
+        context.EnqueueSetColumns("mismatch-columns", 0, firstColumns);
+        context.CompleteSetColumns("mismatch-columns", 0, success: true);
+        context.EnqueueSetColumns("mismatch-columns", 1, secondColumns);
+        context.CompleteSetColumns("mismatch-columns", 1, success: true);
+        context.EnqueueResetTable("mismatch-columns", 0);
+        context.EnqueueResetTable("mismatch-columns", 1);
+        context.CompleteResetTable("mismatch-columns", 1, success: false);
+
+        Assert.False(context.TryGetTableColumns("mismatch-columns", 0, out _));
+        Assert.False(context.TryGetTableColumns("mismatch-columns", 1, out _));
+    }
+
+    [Fact]
+    public void InvalidatedUploadPreservesUnrelatedQueuedStreamAndDesynchronization()
+    {
+        var malformed = Concat(Le(0x30010003u), Le(1u));
+        var valid = Concat(Le(0x30020003u), Le(2u));
+        var context = new MapiCaptureContext();
+        var first = new FastTransferStreamKey("logical-connection", 0x10203040);
+        var second = new FastTransferStreamKey("logical-connection", 0x50607080);
+        context.StageFastTransferUpload("queued", 0, first, malformed, 0, new MapiNodeBudget(), 0, CancellationToken.None);
+        context.StageFastTransferUpload("queued", 0, first, valid, 0, new MapiNodeBudget(), 0, CancellationToken.None);
+        context.StageFastTransferUpload("queued", 1, second, valid, 0, new MapiNodeBudget(), 0, CancellationToken.None);
+
+        var partialWarning = context.CompleteFastTransferUpload("queued", 0, true, 5);
+        Assert.Contains("not a valid continuation", partialWarning);
+        Assert.True(context.FastTransferAssembler.StateFor(first).Desynchronized);
+
+        var invalidatedWarning = context.CompleteFastTransferUpload(
+            "queued",
+            0,
+            true,
+            (uint)valid.Length);
+        Assert.Contains("already invalidated", invalidatedWarning);
+        Assert.True(context.FastTransferAssembler.StateFor(first).Desynchronized);
+
+        Assert.Null(context.CompleteFastTransferUpload(
+            "queued",
+            1,
+            true,
+            (uint)valid.Length));
+        Assert.Contains(second, context.FastTransferAssembler.Snapshot.Keys);
+    }
+
+    [Fact]
+    public void UnstagedFastTransferAndIcsResponsesInvalidateResolvedPersistentState()
+    {
+        const string connection = "logical-connection";
+        const uint serverHandle = 0x10203040;
+        var context = new MapiCaptureContext();
+        var key = new FastTransferStreamKey(connection, serverHandle);
+        var buffer = Concat(Le(0x30010003u), Le(1u));
+        context.StageFastTransferUpload("seed", 0, key, buffer, 0, new MapiNodeBudget(), 0, CancellationToken.None);
+        context.CompleteFastTransferUpload("seed", 0, true, (uint)buffer.Length);
+        Assert.Contains(key, context.FastTransferAssembler.Snapshot.Keys);
+
+        context.RegisterLogonCorrelationScope("unstaged", connection);
+        context.RecordSessionHandles("unstaged", [serverHandle]);
+        var uploadWarning = context.CompleteFastTransferUpload("unstaged", 0, true, (uint)buffer.Length);
+        Assert.Contains("no staged request", uploadWarning);
+        Assert.DoesNotContain(key, context.FastTransferAssembler.Snapshot.Keys);
+
+        context.StageIcsStateBegin("unstaged", 0, 0x67960102, 0);
+        context.CompleteIcsStateOperation("unstaged", 0x75, 0, true, out _);
+        context.CompleteHttpSession("unstaged");
+        context.RegisterLogonCorrelationScope("unstaged-response", connection);
+        context.RecordSessionHandles("unstaged-response", [serverHandle]);
+        context.CompleteIcsStateOperation("unstaged-response", 0x76, 0, true, out var icsWarning);
+        Assert.Contains("no staged request", icsWarning);
+        context.StageIcsStateEnd("unstaged-response", 0);
+        context.CompleteIcsStateOperation("unstaged-response", 0x77, 0, true, out var endWarning);
+        Assert.Contains("no successful Begin", endWarning);
     }
 
     [Fact]
@@ -1259,7 +1522,37 @@ public sealed class RopVariableDispatcherTests
 
         Assert.Empty(context.FastTransferAssembler.Snapshot);
         Assert.Contains(warnings, warning =>
-            warning.Contains("BufferUsedSize is not reliable on failure", StringComparison.Ordinal));
+            warning.Contains("full or invalid BufferUsedSize", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void FailedUploadCommitsAProtocolDefinedStrictAcceptedPrefix()
+    {
+        var first = Concat(Le(0x30010003u), Le(1u));
+        var second = Concat(Le(0x30020003u), Le(2u));
+        var buffer = Concat(first, second);
+        var key = new FastTransferStreamKey("logical-connection", 0x50607080);
+        var context = new MapiCaptureContext();
+        context.StageFastTransferUpload(
+            "failed-partial",
+            0,
+            key,
+            buffer,
+            0,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+
+        var warning = context.CompleteFastTransferUpload(
+            "failed-partial",
+            0,
+            success: false,
+            bufferUsedSize: (uint)first.Length);
+
+        Assert.Contains("failed after accepting", warning);
+        var state = context.FastTransferAssembler.StateFor(key);
+        Assert.Equal(1, state.BufferCount);
+        Assert.False(state.Desynchronized);
     }
 
     [Fact]

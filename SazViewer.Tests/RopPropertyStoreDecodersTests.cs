@@ -1111,6 +1111,8 @@ public sealed class RopPropertyStoreDecodersTests
         Assert.False(context.TryGetLogonPrivacy("failed-logon", 5, out _));
 
         context.RegisterLogonCorrelationScope("missing-logon", "logical-connection");
+        context.RecordLogonPrivacy("missing-logon", 5, isPrivate: true);
+        Assert.True(context.TryGetLogonPrivacy("missing-logon", 5, out _));
         ParseOne(request, MapiDirection.Request, context: context, captureScope: "missing-logon");
         context.CompleteHttpSession("missing-logon");
         Assert.False(context.TryGetLogonPrivacy("missing-logon", 5, out _));
@@ -1177,6 +1179,21 @@ public sealed class RopPropertyStoreDecodersTests
         Assert.False(firstPrivate);
         Assert.True(context.TryGetLogonPrivacy(scope, 6, out var secondPrivate));
         Assert.True(secondPrivate);
+    }
+
+    [Fact]
+    public void UnstagedSuccessfulLogonResponseInvalidatesConnectionPrivacyState()
+    {
+        const string scope = "unstaged-logon";
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope(scope, "logical-connection");
+        context.RecordLogonPrivacy(scope, 5, isPrivate: true);
+        context.RecordLogonPrivacy(scope, 6, isPrivate: false);
+
+        context.CompleteLogonPrivacy(scope, success: true, responseIsPrivate: true);
+
+        Assert.False(context.TryGetLogonPrivacy(scope, 5, out _));
+        Assert.False(context.TryGetLogonPrivacy(scope, 6, out _));
     }
 
     [Fact]
