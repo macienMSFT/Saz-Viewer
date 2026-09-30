@@ -192,11 +192,7 @@ internal static class RopFastTransferDecoders
             case 0x4D: // RopFastTransferSourceCopyTo (MS-OXCROPS 2.2.12.8.1).
             {
                 var outputHandle = ReadHandle(ref reader, children, "OutputHandleIndex", context);
-                ConfigureRoot(
-                    context,
-                    outputHandle,
-                    FastTransferRootKind.Unknown,
-                    "RopFastTransferSourceCopyTo without a recovered Folder/Message/Attachment object type");
+                ConfigureObjectRoot(context, inputHandle, outputHandle, "RopFastTransferSourceCopyTo");
                 ReadByteField(ref reader, children, "Level", context);
                 var flagsOffset = reader.Position;
                 var copyFlags = reader.ReadUInt32("CopyFlags");
@@ -208,11 +204,7 @@ internal static class RopFastTransferDecoders
             case 0x69: // RopFastTransferSourceCopyProperties (MS-OXCROPS 2.2.12.9.1).
             {
                 var outputHandle = ReadHandle(ref reader, children, "OutputHandleIndex", context);
-                ConfigureRoot(
-                    context,
-                    outputHandle,
-                    FastTransferRootKind.Unknown,
-                    "RopFastTransferSourceCopyProperties without a recovered Folder/Message/Attachment object type");
+                ConfigureObjectRoot(context, inputHandle, outputHandle, "RopFastTransferSourceCopyProperties");
                 ReadByteField(ref reader, children, "Level", context);
                 ReadFlagsByte(ref reader, children, "CopyFlags", CopyFlagsCopyProperties, context);
                 ReadFlagsByte(ref reader, children, "SendOptions", SendOptions, context);
@@ -242,19 +234,31 @@ internal static class RopFastTransferDecoders
             {
                 var outputHandle = ReadHandle(ref reader, children, "OutputHandleIndex", context);
                 var sourceOperation = ReadEnumByte(ref reader, children, "SourceOperation", SourceOperations, context);
+                var usesObjectRoot = sourceOperation is 0x01 or 0x02;
+                var provisionalObjectType = false;
                 var root = sourceOperation switch
                 {
                     0x03 => FastTransferRootKind.MessageList,
                     0x04 => FastTransferRootKind.TopFolder,
+                    0x01 or 0x02 => ResolveObjectRoot(context, inputHandle, out provisionalObjectType),
                     _ => FastTransferRootKind.Unknown,
                 };
+                if (usesObjectRoot && provisionalObjectType)
+                {
+                    context.CaptureContext?.RegisterObjectRootDependency(
+                        context.CaptureScope,
+                        inputHandle,
+                        outputHandle,
+                        $"RopFastTransferDestinationConfigure SourceOperation 0x{sourceOperation:X2}");
+                }
                 ConfigureRoot(
                     context,
                     outputHandle,
                     root,
                     root == FastTransferRootKind.Unknown
                         ? $"RopFastTransferDestinationConfigure SourceOperation 0x{sourceOperation:X2} without a recovered Folder/Message/Attachment object type"
-                        : $"RopFastTransferDestinationConfigure SourceOperation 0x{sourceOperation:X2}");
+                        : $"RopFastTransferDestinationConfigure SourceOperation 0x{sourceOperation:X2}" +
+                            (sourceOperation is 0x01 or 0x02 ? $" on recovered {root}" : string.Empty));
                 ReadFlagsByte(ref reader, children, "CopyFlags", CopyFlagsDestinationConfigure, context);
                 break;
             }
@@ -672,6 +676,55 @@ internal static class RopFastTransferDecoders
             context,
             context.CaptureContext?.ConfigureFastTransferRoot(
                 context.CaptureScope, outputHandleIndex, root, provenance));
+    }
+
+    private static void ConfigureObjectRoot(
+        FastTransferParseContext context,
+        byte inputHandleIndex,
+        byte outputHandleIndex,
+        string operation)
+    {
+        var root = ResolveObjectRoot(context, inputHandleIndex, out var provisional);
+        if (provisional)
+        {
+            context.CaptureContext?.RegisterObjectRootDependency(
+                context.CaptureScope,
+                inputHandleIndex,
+                outputHandleIndex,
+                operation);
+        }
+        ConfigureRoot(
+            context,
+            outputHandleIndex,
+            root,
+            root == FastTransferRootKind.Unknown
+                ? $"{operation} without a recovered Folder/Message/Attachment object type"
+                : $"{operation} on recovered {root}");
+    }
+
+    private static FastTransferRootKind ResolveObjectRoot(
+        FastTransferParseContext context,
+        byte inputHandleIndex,
+        out bool provisional)
+    {
+        provisional = false;
+        if (context.CaptureContext is null
+            || !context.CaptureContext.TryGetServerObjectType(
+                context.CaptureScope,
+                inputHandleIndex,
+                out var objectType,
+                out provisional))
+        {
+            return FastTransferRootKind.Unknown;
+        }
+
+        return objectType switch
+        {
+            MapiCaptureContext.ServerObjectType.Folder => FastTransferRootKind.FolderContent,
+            MapiCaptureContext.ServerObjectType.Message => FastTransferRootKind.MessageContent,
+            MapiCaptureContext.ServerObjectType.Attachment => FastTransferRootKind.AttachmentContent,
+            _ => FastTransferRootKind.Unknown,
+        };
     }
 
     private static MapiNode ParseCompletedIcsState(

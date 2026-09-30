@@ -113,12 +113,16 @@ internal readonly record struct FastTransferGrammarState(
         FastTransferRootKind.HierarchySync or
         FastTransferRootKind.State or
         FastTransferRootKind.MessageList or
-        FastTransferRootKind.TopFolder;
+        FastTransferRootKind.TopFolder or
+        FastTransferRootKind.FolderContent or
+        FastTransferRootKind.MessageContent or
+        FastTransferRootKind.AttachmentContent;
 
     public bool IsComplete => Phase == FastTransferGrammarPhase.Complete;
 
-    public static FastTransferGrammarState ForRoot(FastTransferRootKind root, string provenance) =>
-        new(
+    public static FastTransferGrammarState ForRoot(FastTransferRootKind root, string provenance)
+    {
+        var state = new FastTransferGrammarState(
             root,
             root switch
             {
@@ -127,9 +131,50 @@ internal readonly record struct FastTransferGrammarState(
                 FastTransferRootKind.State => FastTransferGrammarPhase.AwaitStateBegin,
                 FastTransferRootKind.MessageList => FastTransferGrammarPhase.MessageListReady,
                 FastTransferRootKind.TopFolder => FastTransferGrammarPhase.TopFolderStart,
+                FastTransferRootKind.FolderContent => FastTransferGrammarPhase.TopFolderProperties,
+                FastTransferRootKind.MessageContent => FastTransferGrammarPhase.ObjectMessageProperties,
+                FastTransferRootKind.AttachmentContent => FastTransferGrammarPhase.ObjectAttachmentProperties,
                 _ => FastTransferGrammarPhase.None,
             },
             provenance);
+        return root switch
+        {
+            FastTransferRootKind.FolderContent => state with
+            {
+                ProductionStack =
+                [
+                    new FastTransferProductionFrame(
+                    FastTransferProductionKind.Folder,
+                    FastTransferProductionPhase.FolderProperties,
+                    0,
+                    0),
+                ],
+            },
+            FastTransferRootKind.MessageContent => state with
+            {
+                ProductionStack =
+                [
+                    new FastTransferProductionFrame(
+                    FastTransferProductionKind.Message,
+                    FastTransferProductionPhase.MessageStart,
+                    0,
+                    0),
+                ],
+            },
+            FastTransferRootKind.AttachmentContent => state with
+            {
+                ProductionStack =
+                [
+                    new FastTransferProductionFrame(
+                    FastTransferProductionKind.Attachment,
+                    FastTransferProductionPhase.AttachmentStart,
+                    0,
+                    0),
+                ],
+            },
+            _ => state,
+        };
+    }
 }
 
 /// <summary>
@@ -181,7 +226,12 @@ internal static class FastTransferGrammar
             return state;
         }
 
-        if (state.Root is FastTransferRootKind.MessageList or FastTransferRootKind.TopFolder)
+        if (state.Root is
+            FastTransferRootKind.MessageList or
+            FastTransferRootKind.TopFolder or
+            FastTransferRootKind.FolderContent or
+            FastTransferRootKind.MessageContent or
+            FastTransferRootKind.AttachmentContent)
         {
             return AdvanceObjectProperty(state, tag, offset, syntaxDepth);
         }
@@ -216,7 +266,12 @@ internal static class FastTransferGrammar
             return state;
         }
 
-        if (state.Root is FastTransferRootKind.MessageList or FastTransferRootKind.TopFolder)
+        if (state.Root is
+            FastTransferRootKind.MessageList or
+            FastTransferRootKind.TopFolder or
+            FastTransferRootKind.FolderContent or
+            FastTransferRootKind.MessageContent or
+            FastTransferRootKind.AttachmentContent)
         {
             return AdvanceObjectMetaProperty(state, tag, offset, syntaxDepth);
         }
@@ -274,6 +329,13 @@ internal static class FastTransferGrammar
                 AdvanceMessageList(state, tag, offset, syntaxDepthBefore, syntaxDepthAfter),
             FastTransferRootKind.TopFolder =>
                 AdvanceTopFolder(state, tag, offset, syntaxDepthBefore, syntaxDepthAfter),
+            FastTransferRootKind.FolderContent =>
+                tag == FxErrorInfo
+                    ? AdvanceRecoveryError(state, offset, syntaxDepthAfter)
+                    : AdvanceObjectMarker(state, tag, offset, syntaxDepthBefore, syntaxDepthAfter),
+            FastTransferRootKind.MessageContent or
+            FastTransferRootKind.AttachmentContent =>
+                AdvanceObjectMarker(state, tag, offset, syntaxDepthBefore, syntaxDepthAfter),
             _ => state,
         };
     }
@@ -285,7 +347,8 @@ internal static class FastTransferGrammar
         && state.Phase is
             FastTransferGrammarPhase.MessageListReady or
             FastTransferGrammarPhase.MessageListAfterPrefix or
-            FastTransferGrammarPhase.MessageListAfterWarning;
+            FastTransferGrammarPhase.MessageListAfterWarning
+        || CanCompleteObjectContent(state);
 
     public static FastTransferGrammarState Finalize(FastTransferGrammarState state) =>
         CanComplete(state)
@@ -520,7 +583,9 @@ internal static class FastTransferGrammar
                 : 0;
         }
 
-        if (state.Root != FastTransferRootKind.TopFolder)
+        if (state.Root is not (
+            FastTransferRootKind.TopFolder or
+            FastTransferRootKind.FolderContent))
         {
             return null;
         }
@@ -751,7 +816,8 @@ internal static class FastTransferGrammar
         int depthBefore,
         int depthAfter)
     {
-        if (tag == EndFolder
+        if (frame.EndTag != 0
+            && tag == frame.EndTag
             && depthBefore == frame.SyntaxDepth
             && depthAfter == frame.SyntaxDepth - 1
             && frame.Phase is
@@ -821,7 +887,8 @@ internal static class FastTransferGrammar
         int depthBefore,
         int depthAfter)
     {
-        if (tag == frame.EndTag
+        if (frame.EndTag != 0
+            && tag == frame.EndTag
             && depthBefore == frame.SyntaxDepth
             && depthAfter == frame.SyntaxDepth - 1
             && frame.Phase is
@@ -903,7 +970,8 @@ internal static class FastTransferGrammar
         int depthBefore,
         int depthAfter)
     {
-        if (tag == EndAttach
+        if (frame.EndTag != 0
+            && tag == frame.EndTag
             && depthBefore == frame.SyntaxDepth
             && depthAfter == frame.SyntaxDepth - 1
             && frame.Phase is
@@ -1089,6 +1157,45 @@ internal static class FastTransferGrammar
                 FastTransferGrammarPhase.ObjectAttachmentAfterEmbedded,
             _ => throw new InvalidOperationException("Unknown FastTransfer production phase."),
         };
+
+    private static bool CanCompleteObjectContent(FastTransferGrammarState state)
+    {
+        var frames = Frames(state);
+        if (frames.Length != 1 || frames[0].SyntaxDepth != 0 || frames[0].EndTag != 0)
+        {
+            return false;
+        }
+
+        var frame = frames[0];
+        return state.Root switch
+        {
+            FastTransferRootKind.FolderContent when
+                frame.Kind == FastTransferProductionKind.Folder
+                && frame.Phase is
+                    FastTransferProductionPhase.FolderProperties or
+                    FastTransferProductionPhase.FolderWarningAmbiguous or
+                    FastTransferProductionPhase.FolderMessageReady or
+                    FastTransferProductionPhase.FolderMessageAfterPrefix or
+                    FastTransferProductionPhase.FolderMessageAfterWarning or
+                    FastTransferProductionPhase.FolderSubFolders => true,
+            FastTransferRootKind.MessageContent when
+                frame.Kind == FastTransferProductionKind.Message
+                && frame.Phase is
+                    FastTransferProductionPhase.MessageStart or
+                    FastTransferProductionPhase.MessageProperties or
+                    FastTransferProductionPhase.MessageAfterRecipientDelimiter or
+                    FastTransferProductionPhase.MessageRecipients or
+                    FastTransferProductionPhase.MessageAfterAttachmentDelimiter or
+                    FastTransferProductionPhase.MessageAttachments => true,
+            FastTransferRootKind.AttachmentContent when
+                frame.Kind == FastTransferProductionKind.Attachment
+                && frame.Phase is
+                    FastTransferProductionPhase.AttachmentStart or
+                    FastTransferProductionPhase.AttachmentProperties or
+                    FastTransferProductionPhase.AttachmentAfterEmbedded => true,
+            _ => false,
+        };
+    }
 
     private static bool IsMessageChildMarker(uint tag) => tag is
         StartRecip or EndToRecip or NewAttach or EndAttach or StartEmbed or EndEmbed;

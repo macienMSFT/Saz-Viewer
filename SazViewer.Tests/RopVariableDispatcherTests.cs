@@ -714,6 +714,366 @@ public sealed class RopVariableDispatcherTests
         Assert.True(context.FastTransferAssembler.StateFor(key).Complete);
     }
 
+    [Theory]
+    [InlineData((byte)0x02, (byte)0x4D, (int)FastTransferRootKind.FolderContent)]
+    [InlineData((byte)0x1C, (byte)0x69, (int)FastTransferRootKind.FolderContent)]
+    [InlineData((byte)0x03, (byte)0x69, (int)FastTransferRootKind.MessageContent)]
+    [InlineData((byte)0x06, (byte)0x4D, (int)FastTransferRootKind.MessageContent)]
+    [InlineData((byte)0x46, (byte)0x69, (int)FastTransferRootKind.MessageContent)]
+    [InlineData((byte)0x22, (byte)0x4D, (int)FastTransferRootKind.AttachmentContent)]
+    [InlineData((byte)0x23, (byte)0x69, (int)FastTransferRootKind.AttachmentContent)]
+    public void RecoveredInputObjectTypeSelectsCopyObjectContentRoot(
+        byte establishingRopId,
+        byte copyRopId,
+        int expectedRootValue)
+    {
+        const uint ownerHandle = 0x10203040;
+        const uint objectHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("object-establish", "logical-connection");
+        context.RecordSessionHandles("object-establish", [ownerHandle, objectHandle]);
+        context.StageOutputObjectType("object-establish", establishingRopId, 1);
+        Assert.Null(context.CompleteOutputObjectType(
+            "object-establish",
+            establishingRopId,
+            1,
+            success: true));
+        context.CompleteHttpSession("object-establish");
+
+        context.RegisterLogonCorrelationScope("copy-object", "logical-connection");
+        var request = copyRopId == 0x4D
+            ? Concat([0x4D, 0x00, 0x00, 0x01, 0x00], Le(0u), [0x00], Le((ushort)0))
+            : Concat([0x69, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00], Le((ushort)0));
+        RopBufferParser.Parse(
+            Frame(request, objectHandle, uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "copy-object",
+            context);
+
+        var provisional = new FastTransferStreamKey("copy-object", 1, Provisional: true);
+        Assert.Equal(
+            (FastTransferRootKind)expectedRootValue,
+            context.FastTransferAssembler.StateFor(provisional).Grammar.Root);
+    }
+
+    [Fact]
+    public void SameExecuteOpenThenCopyUsesProvisionalOutputSlotType()
+    {
+        const uint ownerHandle = 0x10203040;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("same-execute-copy", "logical-connection");
+        var openFolder = Concat([0x02, 0x00, 0x00, 0x01], new byte[8], [0x00]);
+        var copyTo = Concat([0x4D, 0x00, 0x01, 0x02, 0x00], Le(0u), [0x00], Le((ushort)0));
+
+        RopBufferParser.Parse(
+            Frame(
+                Concat(openFolder, copyTo),
+                ownerHandle,
+                uint.MaxValue,
+                uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "same-execute-copy",
+            context);
+
+        var provisional = new FastTransferStreamKey("same-execute-copy", 2, Provisional: true);
+        Assert.Equal(
+            FastTransferRootKind.FolderContent,
+            context.FastTransferAssembler.StateFor(provisional).Grammar.Root);
+    }
+
+    [Fact]
+    public void SameExecuteProvisionalTypeOverridesAReusedSlotsPreviousObjectType()
+    {
+        const uint ownerHandle = 0x10203040;
+        const uint previousMessageHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("previous-object", "logical-connection");
+        context.RecordSessionHandles("previous-object", [previousMessageHandle]);
+        context.StageOutputObjectType("previous-object", 0x03, 0);
+        context.CompleteOutputObjectType("previous-object", 0x03, 0, success: true);
+        context.CompleteHttpSession("previous-object");
+
+        context.RegisterLogonCorrelationScope("reuse-then-copy", "logical-connection");
+        var openFolder = Concat([0x02, 0x00, 0x00, 0x01], new byte[8], [0x00]);
+        var copyTo = Concat([0x4D, 0x00, 0x01, 0x02, 0x00], Le(0u), [0x00], Le((ushort)0));
+        RopBufferParser.Parse(
+            Frame(
+                Concat(openFolder, copyTo),
+                ownerHandle,
+                previousMessageHandle,
+                uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "reuse-then-copy",
+            context);
+
+        var provisional = new FastTransferStreamKey("reuse-then-copy", 2, Provisional: true);
+        Assert.Equal(
+            FastTransferRootKind.FolderContent,
+            context.FastTransferAssembler.StateFor(provisional).Grammar.Root);
+    }
+
+    [Fact]
+    public void FailedSameExecuteOpenRefreshesCopyRootFromTheRetainedObject()
+    {
+        const uint ownerHandle = 0x10203040;
+        const uint previousMessageHandle = 0x50607080;
+        const uint transferHandle = 0x90A0B0C0;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("retained-message", "logical-connection");
+        context.RecordSessionHandles("retained-message", [previousMessageHandle]);
+        context.StageOutputObjectType("retained-message", 0x03, 0);
+        context.CompleteOutputObjectType("retained-message", 0x03, 0, success: true);
+        context.CompleteHttpSession("retained-message");
+
+        context.RegisterLogonCorrelationScope("failed-open-copy", "logical-connection");
+        var openFolder = Concat([0x02, 0x00, 0x00, 0x01], new byte[8], [0x00]);
+        var copyTo = Concat([0x4D, 0x00, 0x01, 0x02, 0x00], Le(0u), [0x00], Le((ushort)0));
+        RopBufferParser.Parse(
+            Frame(
+                Concat(openFolder, copyTo),
+                ownerHandle,
+                previousMessageHandle,
+                uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "failed-open-copy",
+            context);
+
+        var provisional = new FastTransferStreamKey("failed-open-copy", 2, Provisional: true);
+        Assert.Equal(
+            FastTransferRootKind.FolderContent,
+            context.FastTransferAssembler.StateFor(provisional).Grammar.Root);
+
+        RopBufferParser.Parse(
+            Frame(
+                Concat(
+                    [0x02, 0x01],
+                    Le(0x80004005u),
+                    [0x4D, 0x02],
+                    Le(0u)),
+                ownerHandle,
+                previousMessageHandle,
+                transferHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "failed-open-copy",
+            context);
+
+        var resolved = new FastTransferStreamKey("logical-connection", transferHandle);
+        Assert.Equal(
+            FastTransferRootKind.MessageContent,
+            context.FastTransferAssembler.StateFor(resolved).Grammar.Root);
+        Assert.DoesNotContain(provisional, context.FastTransferAssembler.Snapshot.Keys);
+    }
+
+    [Fact]
+    public void MalformedRequestTailDiscardsPendingObjectAndFastTransferProvenance()
+    {
+        const uint ownerHandle = 0x10203040;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("malformed-request", "logical-connection");
+        var openFolder = Concat([0x02, 0x00, 0x00, 0x01], new byte[8], [0x00]);
+        var copyTo = Concat([0x4D, 0x00, 0x01, 0x02, 0x00], Le(0u), [0x00], Le((ushort)0));
+
+        RopBufferParser.Parse(
+            Frame(
+                Concat(openFolder, copyTo, [0x02]),
+                ownerHandle,
+                uint.MaxValue,
+                uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "malformed-request",
+            context);
+
+        Assert.False(context.TryGetServerObjectType("malformed-request", 1, out _));
+        Assert.DoesNotContain(
+            new FastTransferStreamKey("malformed-request", 2, Provisional: true),
+            context.FastTransferAssembler.Snapshot.Keys);
+    }
+
+    [Theory]
+    [InlineData((byte)0x01)]
+    [InlineData((byte)0x02)]
+    public void DestinationConfigureUsesRecoveredObjectTypeForCopyOperations(byte sourceOperation)
+    {
+        const uint objectHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("destination-establish", "logical-connection");
+        context.RecordSessionHandles("destination-establish", [0u, objectHandle]);
+        context.StageOutputObjectType("destination-establish", 0x03, 1);
+        context.CompleteOutputObjectType("destination-establish", 0x03, 1, success: true);
+        context.CompleteHttpSession("destination-establish");
+
+        context.RegisterLogonCorrelationScope("destination-copy", "logical-connection");
+        RopBufferParser.Parse(
+            Frame(
+                [0x53, 0x00, 0x00, 0x01, sourceOperation, 0x00],
+                objectHandle,
+                uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "destination-copy",
+            context);
+
+        var provisional = new FastTransferStreamKey("destination-copy", 1, Provisional: true);
+        Assert.Equal(
+            FastTransferRootKind.MessageContent,
+            context.FastTransferAssembler.StateFor(provisional).Grammar.Root);
+    }
+
+    [Fact]
+    public void SuccessfulOpenFolderPipelineRecordsFolderObjectType()
+    {
+        const uint ownerHandle = 0x10203040;
+        const uint folderHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("open-folder", "logical-connection");
+        RopBufferParser.Parse(
+            Frame(
+                Concat([0x02, 0x00, 0x00, 0x01], new byte[8], [0x00]),
+                ownerHandle,
+                uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "open-folder",
+            context);
+        RopBufferParser.Parse(
+            Frame(
+                Concat([0x02, 0x01], Le(0u), [0x00, 0x00]),
+                ownerHandle,
+                folderHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "open-folder",
+            context);
+        context.CompleteHttpSession("open-folder");
+
+        context.RegisterLogonCorrelationScope("folder-use", "logical-connection");
+        context.RecordSessionHandles("folder-use", [folderHandle]);
+        Assert.True(context.TryGetServerObjectType("folder-use", 0, out var type));
+        Assert.Equal(MapiCaptureContext.ServerObjectType.Folder, type);
+    }
+
+    [Fact]
+    public void ReusedOutputSlotCommitsOnlyTheFinalSuccessfulObjectType()
+    {
+        const uint objectHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("reuse-object", "logical-connection");
+        context.RecordSessionHandles("reuse-object", [0u, objectHandle]);
+        context.StageOutputObjectType("reuse-object", 0x02, 1);
+        context.StageOutputObjectType("reuse-object", 0x03, 1);
+
+        context.CompleteOutputObjectType("reuse-object", 0x02, 1, success: true);
+        Assert.True(context.TryGetServerObjectType("reuse-object", 1, out var provisional));
+        Assert.Equal(MapiCaptureContext.ServerObjectType.Message, provisional);
+        context.CompleteOutputObjectType("reuse-object", 0x03, 1, success: true);
+
+        Assert.True(context.TryGetServerObjectType("reuse-object", 1, out var type));
+        Assert.Equal(MapiCaptureContext.ServerObjectType.Message, type);
+    }
+
+    [Fact]
+    public void ReusedOutputSlotRetainsTheLastSuccessfulTypeWhenTheFinalCreationFails()
+    {
+        const uint objectHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("reuse-failure", "logical-connection");
+        context.RecordSessionHandles("reuse-failure", [0u, objectHandle]);
+        context.StageOutputObjectType("reuse-failure", 0x02, 1);
+        context.StageOutputObjectType("reuse-failure", 0x03, 1);
+
+        context.CompleteOutputObjectType("reuse-failure", 0x02, 1, success: true);
+        context.CompleteOutputObjectType("reuse-failure", 0x03, 1, success: false);
+
+        Assert.True(context.TryGetServerObjectType("reuse-failure", 1, out var type));
+        Assert.Equal(MapiCaptureContext.ServerObjectType.Folder, type);
+    }
+
+    [Fact]
+    public void FailedOutputPreservesExistingTypeAndUnknownSuccessfulOutputClearsIt()
+    {
+        const uint objectHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("initial-object", "logical-connection");
+        context.RecordSessionHandles("initial-object", [objectHandle]);
+        context.StageOutputObjectType("initial-object", 0x03, 0);
+        context.CompleteOutputObjectType("initial-object", 0x03, 0, success: true);
+        context.CompleteHttpSession("initial-object");
+
+        context.RegisterLogonCorrelationScope("failed-object", "logical-connection");
+        context.RecordSessionHandles("failed-object", [objectHandle]);
+        context.StageOutputObjectType("failed-object", 0x02, 0);
+        context.CompleteOutputObjectType("failed-object", 0x02, 0, success: false);
+        Assert.True(context.TryGetServerObjectType("failed-object", 0, out var preserved));
+        Assert.Equal(MapiCaptureContext.ServerObjectType.Message, preserved);
+
+        context.StageOutputObjectType("failed-object", 0x21, 0);
+        context.CompleteOutputObjectType("failed-object", 0x21, 0, success: true);
+        Assert.False(context.TryGetServerObjectType("failed-object", 0, out _));
+    }
+
+    [Fact]
+    public void MissingOutputResponseAndReleaseDoNotLeakObjectTypeState()
+    {
+        const uint objectHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("missing-object", "logical-connection");
+        context.RecordSessionHandles("missing-object", [objectHandle]);
+        context.StageOutputObjectType("missing-object", 0x03, 0);
+        context.CompleteHttpSession("missing-object");
+
+        context.RegisterLogonCorrelationScope("object-release", "logical-connection");
+        context.RecordSessionHandles("object-release", [objectHandle]);
+        Assert.False(context.TryGetServerObjectType("object-release", 0, out _));
+
+        context.StageOutputObjectType("object-release", 0x03, 0);
+        context.CompleteOutputObjectType("object-release", 0x03, 0, success: true);
+        Assert.True(context.TryGetServerObjectType("object-release", 0, out _));
+        context.InvalidateHandleState("object-release", 0);
+        Assert.False(context.TryGetServerObjectType("object-release", 0, out _));
+    }
+
     [Fact]
     public void DoneStatusReportsAnIncompleteProvenanceSelectedRoot()
     {

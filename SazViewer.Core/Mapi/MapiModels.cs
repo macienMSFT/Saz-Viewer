@@ -80,6 +80,14 @@ public sealed record MapiCoverage(
 
 internal sealed class MapiCaptureContext
 {
+    internal enum ServerObjectType
+    {
+        Unknown,
+        Folder,
+        Message,
+        Attachment,
+    }
+
     private readonly Dictionary<uint, string> logons = [];
     private readonly Dictionary<uint, string> handles = [];
 
@@ -110,6 +118,10 @@ internal sealed class MapiCaptureContext
         Queue<(uint HandleIndex, (string Scope, uint Handle)? RequestHandle)>> pendingResetTables = [];
     private readonly Dictionary<string, Queue<PendingFastTransferUpload>> pendingFastTransferUploads = [];
     private readonly Dictionary<string, HashSet<uint>> configuredFastTransferOutputSlots = [];
+    private readonly Dictionary<string, Queue<PendingOutputObjectType>> pendingOutputObjectTypes = [];
+    private readonly Dictionary<string, Dictionary<uint, ServerObjectType>> successfulOutputObjectTypes = [];
+    private readonly Dictionary<string, List<PendingObjectRootDependency>> pendingObjectRootDependencies = [];
+    private readonly Dictionary<(string Scope, uint Handle), ServerObjectType> serverObjectTypes = [];
     private readonly Dictionary<string, Queue<PendingIcsStateOperation>> pendingIcsStateOperations = [];
     private readonly Dictionary<IcsStateStreamKey, ActiveIcsStateUpload> activeIcsStateUploads = [];
 
@@ -147,6 +159,16 @@ internal sealed class MapiCaptureContext
         public required long AbsoluteOffset { get; init; }
         public bool Invalidated { get; set; }
     }
+
+    private readonly record struct PendingOutputObjectType(
+        byte RopId,
+        uint HandleIndex,
+        ServerObjectType Type);
+
+    private readonly record struct PendingObjectRootDependency(
+        uint InputHandleIndex,
+        uint OutputHandleIndex,
+        string Operation);
 
     private readonly record struct IcsStateStreamKey(string Scope, uint Handle, bool Provisional = false);
 
@@ -385,6 +407,9 @@ internal sealed class MapiCaptureContext
         requestRopLists.Remove(captureScope);
         pendingFastTransferUploads.Remove(captureScope);
         configuredFastTransferOutputSlots.Remove(captureScope);
+        pendingOutputObjectTypes.Remove(captureScope);
+        successfulOutputObjectTypes.Remove(captureScope);
+        pendingObjectRootDependencies.Remove(captureScope);
         if (pendingIcsStateOperations.Remove(captureScope, out var abandonedStateOperations))
         {
             foreach (var operation in abandonedStateOperations)
@@ -490,6 +515,240 @@ internal sealed class MapiCaptureContext
         return null;
     }
 
+    public void StageOutputObjectType(string? captureScope, byte ropId, uint outputHandleIndex)
+    {
+        if (captureScope is null)
+        {
+            return;
+        }
+
+        if (!pendingOutputObjectTypes.TryGetValue(captureScope, out var queue))
+        {
+            if (pendingOutputObjectTypes.Count >= MapiParseLimits.MaxStateEntries)
+            {
+                return;
+            }
+            queue = [];
+            pendingOutputObjectTypes[captureScope] = queue;
+        }
+        if (queue.Count >= MapiParseLimits.MaxStateEntries)
+        {
+            return;
+        }
+
+        queue.Enqueue(new PendingOutputObjectType(
+            ropId,
+            outputHandleIndex,
+            ropId switch
+            {
+                0x02 or 0x1C => ServerObjectType.Folder,
+                0x03 or 0x06 or 0x46 => ServerObjectType.Message,
+                0x22 or 0x23 => ServerObjectType.Attachment,
+                _ => ServerObjectType.Unknown,
+            }));
+    }
+
+    public string? CompleteOutputObjectType(
+        string? captureScope,
+        byte ropId,
+        uint outputHandleIndex,
+        bool success)
+    {
+        if (success)
+        {
+            CompleteSuccessfulOutputHandle(captureScope, outputHandleIndex);
+        }
+        if (captureScope is null
+            || !pendingOutputObjectTypes.TryGetValue(captureScope, out var queue)
+            || queue.Count == 0)
+        {
+            return null;
+        }
+
+        var pending = queue.Dequeue();
+        if (pending.RopId != ropId || pending.HandleIndex != outputHandleIndex)
+        {
+            pendingOutputObjectTypes.Remove(captureScope);
+            successfulOutputObjectTypes.Remove(captureScope);
+            if (success && TryResolveServerHandle(captureScope, outputHandleIndex, out var mismatched))
+            {
+                serverObjectTypes.Remove(mismatched);
+            }
+            return "Output server-object type provenance did not match the response operation; " +
+                "pending object types for this HTTP session were discarded.";
+        }
+
+        if (success)
+        {
+            if (!successfulOutputObjectTypes.TryGetValue(captureScope, out var bySlot))
+            {
+                bySlot = [];
+                successfulOutputObjectTypes[captureScope] = bySlot;
+            }
+            bySlot[outputHandleIndex] = pending.Type;
+        }
+
+        if (queue.Any(candidate => candidate.HandleIndex == outputHandleIndex))
+        {
+            return null;
+        }
+
+        if (successfulOutputObjectTypes.TryGetValue(captureScope, out var completed)
+            && completed.Remove(outputHandleIndex, out var type)
+            && TryResolveServerHandle(captureScope, outputHandleIndex, out var handle))
+        {
+            serverObjectTypes.Remove(handle);
+            if (type != ServerObjectType.Unknown
+                && (serverObjectTypes.Count < MapiParseLimits.MaxStateEntries
+                    || serverObjectTypes.ContainsKey(handle)))
+            {
+                serverObjectTypes[handle] = type;
+            }
+            if (completed.Count == 0)
+            {
+                successfulOutputObjectTypes.Remove(captureScope);
+            }
+        }
+
+        if (queue.Count == 0)
+        {
+            pendingOutputObjectTypes.Remove(captureScope);
+        }
+        RefreshObjectRootDependencies(captureScope, outputHandleIndex);
+        return null;
+    }
+
+    public bool TryGetServerObjectType(
+        string? captureScope,
+        uint handleIndex,
+        out ServerObjectType type)
+    {
+        return TryGetServerObjectType(captureScope, handleIndex, out type, out _);
+    }
+
+    public bool TryGetServerObjectType(
+        string? captureScope,
+        uint handleIndex,
+        out ServerObjectType type,
+        out bool provisional)
+    {
+        type = ServerObjectType.Unknown;
+        provisional = false;
+        if (captureScope is null)
+        {
+            return false;
+        }
+
+        if (pendingOutputObjectTypes.TryGetValue(captureScope, out var pending))
+        {
+            foreach (var candidate in pending.Reverse())
+            {
+                if (candidate.HandleIndex == handleIndex)
+                {
+                    type = candidate.Type;
+                    provisional = true;
+                    return type != ServerObjectType.Unknown;
+                }
+            }
+        }
+
+        return TryResolveServerHandle(captureScope, handleIndex, out var handle)
+            && serverObjectTypes.TryGetValue(handle, out type);
+    }
+
+    public void RegisterObjectRootDependency(
+        string? captureScope,
+        uint inputHandleIndex,
+        uint outputHandleIndex,
+        string operation)
+    {
+        if (captureScope is null)
+        {
+            return;
+        }
+
+        if (!pendingObjectRootDependencies.TryGetValue(captureScope, out var dependencies))
+        {
+            if (pendingObjectRootDependencies.Count >= MapiParseLimits.MaxStateEntries)
+            {
+                return;
+            }
+            dependencies = [];
+            pendingObjectRootDependencies[captureScope] = dependencies;
+        }
+        if (dependencies.Count < MapiParseLimits.MaxStateEntries)
+        {
+            dependencies.Add(new PendingObjectRootDependency(
+                inputHandleIndex,
+                outputHandleIndex,
+                operation));
+        }
+    }
+
+    public void DiscardPendingOutputObjectTypes(string? captureScope)
+    {
+        if (captureScope is null)
+        {
+            return;
+        }
+
+        pendingOutputObjectTypes.Remove(captureScope);
+        successfulOutputObjectTypes.Remove(captureScope);
+        pendingObjectRootDependencies.Remove(captureScope);
+        configuredFastTransferOutputSlots.Remove(captureScope);
+        FastTransferAssembler.ForgetProvisional(captureScope);
+    }
+
+    private void RefreshObjectRootDependencies(string captureScope, uint inputHandleIndex)
+    {
+        if (!pendingObjectRootDependencies.TryGetValue(captureScope, out var dependencies))
+        {
+            return;
+        }
+
+        var matching = dependencies
+            .Where(dependency => dependency.InputHandleIndex == inputHandleIndex)
+            .ToArray();
+        foreach (var dependency in matching)
+        {
+            var root = TryGetServerObjectType(
+                captureScope,
+                inputHandleIndex,
+                out var type)
+                ? type switch
+                {
+                    ServerObjectType.Folder => FastTransferRootKind.FolderContent,
+                    ServerObjectType.Message => FastTransferRootKind.MessageContent,
+                    ServerObjectType.Attachment => FastTransferRootKind.AttachmentContent,
+                    _ => FastTransferRootKind.Unknown,
+                }
+                : FastTransferRootKind.Unknown;
+            var key = new FastTransferStreamKey(
+                captureScope,
+                dependency.OutputHandleIndex,
+                Provisional: true);
+            FastTransferAssembler.Configure(
+                key,
+                root,
+                root == FastTransferRootKind.Unknown
+                    ? $"{dependency.Operation} after unresolved same-session object creation"
+                    : $"{dependency.Operation} after resolved same-session {type} output state");
+            if (pendingFastTransferUploads.TryGetValue(captureScope, out var uploads))
+            {
+                foreach (var upload in uploads.Where(upload => upload.Key == key))
+                {
+                    upload.Invalidated = true;
+                }
+            }
+            dependencies.Remove(dependency);
+        }
+
+        if (dependencies.Count == 0)
+        {
+            pendingObjectRootDependencies.Remove(captureScope);
+        }
+    }
+
     public void InvalidateHandleState(string? captureScope, uint handleIndex)
     {
         if (captureScope is null)
@@ -502,6 +761,7 @@ internal sealed class MapiCaptureContext
         if (TryResolveServerHandle(captureScope, handleIndex, out var handle))
         {
             tableColumns.Remove(handle);
+            serverObjectTypes.Remove(handle);
             FastTransferAssembler.Forget(new FastTransferStreamKey(handle.Scope, handle.Handle));
             activeIcsStateUploads.Remove(new IcsStateStreamKey(handle.Scope, handle.Handle));
         }
@@ -522,6 +782,7 @@ internal sealed class MapiCaptureContext
         }
 
         tableColumns.Remove(handle);
+        serverObjectTypes.Remove(handle);
         var resolved = new FastTransferStreamKey(handle.Scope, handle.Handle);
         FastTransferAssembler.ResolveProvisional(provisional, resolved);
         if (pendingFastTransferUploads.TryGetValue(captureScope, out var pending))

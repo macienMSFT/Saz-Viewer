@@ -166,6 +166,10 @@ internal static class RopSemanticParser
                         ? $"no fixed-width {direction.ToString().ToLowerInvariant()} schema is implemented for it"
                         : "the RopId is not recognized") +
                     $"; no further operations in this list are decoded.");
+                if (direction == MapiDirection.Request)
+                {
+                    context?.DiscardPendingOutputObjectTypes(captureScope);
+                }
                 break;
             }
 
@@ -195,28 +199,40 @@ internal static class RopSemanticParser
                 var newReferences = handleReferences
                     .Where(reference => reference.OperationIndex == index - 1)
                     .ToArray();
-                if (direction == MapiDirection.Request && ropId == 0x82)
+                if (direction == MapiDirection.Request)
                 {
                     foreach (var output in newReferences.Where(reference => reference.FieldName == "OutputHandleIndex"))
                     {
-                        var provenanceWarning = context?.ConfigureFastTransferRoot(
-                            captureScope,
-                            output.Index,
-                            FastTransferRootKind.State,
-                            "RopSynchronizationGetTransferState");
-                        if (provenanceWarning is not null)
+                        context?.StageOutputObjectType(captureScope, ropId, output.Index);
+                        if (ropId == 0x82)
                         {
-                            warnings.Add(provenanceWarning);
+                            var provenanceWarning = context?.ConfigureFastTransferRoot(
+                                captureScope,
+                                output.Index,
+                                FastTransferRootKind.State,
+                                "RopSynchronizationGetTransferState");
+                            if (provenanceWarning is not null)
+                            {
+                                warnings.Add(provenanceWarning);
+                            }
                         }
                     }
                 }
                 if (direction == MapiDirection.Response
-                    && ropList.Length - opStartLocal >= 6
-                    && BinaryPrimitives.ReadUInt32LittleEndian(ropList[(opStartLocal + 2)..]) == 0)
+                    && ropList.Length - opStartLocal >= 6)
                 {
+                    var success = BinaryPrimitives.ReadUInt32LittleEndian(ropList[(opStartLocal + 2)..]) == 0;
                     foreach (var output in newReferences.Where(reference => reference.FieldName == "OutputHandleIndex"))
                     {
-                        context?.CompleteSuccessfulOutputHandle(captureScope, output.Index);
+                        var provenanceWarning = context?.CompleteOutputObjectType(
+                            captureScope,
+                            ropId,
+                            output.Index,
+                            success);
+                        if (provenanceWarning is not null)
+                        {
+                            warnings.Add(provenanceWarning);
+                        }
                     }
                 }
                 if (ropId == 0x01)
@@ -259,6 +275,10 @@ internal static class RopSemanticParser
                 warnings.Add(
                     $"ROP list operation {index} (0x{ropId:X2} {RopBufferParser.Name(ropId)}) could not be parsed: " +
                     $"{ex.Message}; the remaining {raw.Length:N0} byte(s) are retained as raw and no further operations in this list are decoded.");
+                if (direction == MapiDirection.Request)
+                {
+                    context?.DiscardPendingOutputObjectTypes(captureScope);
+                }
                 break;
             }
         }

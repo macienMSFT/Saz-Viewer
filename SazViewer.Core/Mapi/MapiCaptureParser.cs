@@ -112,12 +112,12 @@ internal static class MapiCaptureParser
                 "Capture-local table columns and row/notification reconstruction",
                 "Cross-HTTP FastTransfer stream reconstruction by logical MAPI connection and server object handle",
                 "FastTransfer typed syntactical markers plus ProgressInformation and PropertyGroupInfo structures",
-                "Provenance-bound contentsSync, hierarchySync, state, messageList, and recursive topFolder production validation"
+                "Provenance-bound contentsSync, hierarchySync, state, messageList, recursive topFolder, and typed CopyTo/CopyProperties object-content validation"
             ],
             [
                 "RopReadRecipients response RecipientRow property internals remain bounded raw because that response carries no RecipientColumns array and the protocol does not identify a deterministic external column source",
                 "In the property/stream/store family's generic property-value arrays (RopGetPropertiesSpecific/RopSetProperties and similar), PtypRestriction/PtypRuleAction values and any property type outside the fixed MS-OXCDATA 2.11.1 table are intentionally refused rather than guessed; the message/rule/permission family's own RuleData/PermissionData arrays and the folder/table family's own restrictions do fully decode both types with an explicit ROP-buffer-vs-extended-rule width boundary",
-                "FastTransfer CopyTo/CopyProperties cannot yet select folderContent/messageContent/attachmentContent roots because their input server-object type is not yet reconstructed"
+                "FastTransfer object-content root selection requires a successful same-capture Folder/Message/Attachment handle provenance; unavailable or conflicting handle history remains explicitly unvalidated"
             ]);
         return new MapiCapture(
             resultSessions,

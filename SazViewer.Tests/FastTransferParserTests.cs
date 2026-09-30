@@ -1157,6 +1157,120 @@ public sealed class FastTransferParserTests
     }
 
     [Fact]
+    public void ValidatesFolderContentRootWithoutAnOuterFolderMarker()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                property,
+                Le(0x400C0003u),
+                property,
+                Le(0x400D0003u),
+                Le(0x400A0003u),
+                property,
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test CopyTo folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Null(result.State.CompletionIssue);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void FolderContentRecoveryUnwindsToItsMarkerlessMessageListBoundary()
+    {
+        var extendedErrorInfo = new byte[88];
+        var result = LexWithState(
+            Concat(
+                Le(0x400C0003u),
+                Le(0x40180003u),
+                Le((ushort)0x0102),
+                Le((ushort)0x0000),
+                Le((uint)extendedErrorInfo.Length),
+                extendedErrorInfo),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.FolderContent,
+                "test RecoverMode CopyTo folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Equal(0, result.State.MarkerDepth);
+        Assert.Null(result.State.CompletionIssue);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void ValidatesMessageContentRootWithoutAnOuterMessageMarker()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                property,
+                Le(0x40030003u),
+                property,
+                Le(0x40040003u),
+                Le(0x40000003u),
+                Le((ushort)0x0003),
+                Le((ushort)0x0E21),
+                Le(1u),
+                Le(0x400E0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.MessageContent,
+                "test CopyProperties message"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Null(result.State.CompletionIssue);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void ValidatesAttachmentContentRootWithoutAttachNumberOrOuterMarkers()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                Le(0x4008001Eu),
+                Le(0u),
+                property,
+                Le(0x40010003u),
+                property,
+                Le(0x40020003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.AttachmentContent,
+                "test CopyTo attachment"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Null(result.State.CompletionIssue);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Theory]
+    [InlineData((int)FastTransferRootKind.FolderContent)]
+    [InlineData((int)FastTransferRootKind.MessageContent)]
+    [InlineData((int)FastTransferRootKind.AttachmentContent)]
+    public void ReportsIncompleteObjectContentWhileAChildProductionIsOpen(int rootValue)
+    {
+        var root = (FastTransferRootKind)rootValue;
+        var openingMarker = root == FastTransferRootKind.FolderContent
+            ? 0x400A0003u
+            : root == FastTransferRootKind.MessageContent
+                ? 0x40030003u
+                : 0x40010003u;
+        var result = LexWithState(
+            Le(openingMarker),
+            FastTransferStreamState.ForRoot(root, "test object content"));
+
+        Assert.False(result.State.Desynchronized);
+        Assert.NotNull(result.State.CompletionIssue);
+        Assert.False(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
     public void RecoverModeErrorInfoUnwindsToContentsSyncAndRequiresOneBinaryProperty()
     {
         var extendedErrorInfo = new byte[88];
