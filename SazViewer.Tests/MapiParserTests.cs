@@ -251,12 +251,531 @@ public sealed class MapiParserTests
         Assert.Equal("-1", Find(parsed.Root, "Delta").Value);
     }
 
+    [Fact]
+    public void CompletesPreviouslyMissingNspiMethodEnvelopes()
+    {
+        var cases = new (string Method, byte[] Request, byte[] Response)[]
+        {
+            ("GetMatches", BuildBody(
+                stream =>
+                {
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 0);
+                }),
+                BuildResponse(
+                    stream =>
+                    {
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                    })),
+            ("ModProps", BuildBody(
+                stream =>
+                {
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 0);
+                }),
+                BuildResponse(_ => { })),
+            ("SeekEntries", BuildBody(
+                stream =>
+                {
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 0);
+                }),
+                BuildResponse(
+                    stream =>
+                    {
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                    })),
+            ("GetProps", BuildBody(
+                stream =>
+                {
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 0);
+                }),
+                BuildResponse(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 1252);
+                        stream.WriteByte(0);
+                    })),
+            ("GetSpecialTable", BuildBody(
+                stream =>
+                {
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 0);
+                }),
+                BuildResponse(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 1252);
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                    })),
+            ("GetTemplateInfo", BuildBody(
+                stream =>
+                {
+                    WriteUInt32(stream, 0);
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 1252);
+                    WriteUInt32(stream, 0x409);
+                    WriteUInt32(stream, 0);
+                }),
+                BuildResponse(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 1252);
+                        stream.WriteByte(0);
+                    })),
+            ("QueryRows", BuildBody(
+                stream =>
+                {
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 0);
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 0);
+                }),
+                BuildResponse(
+                    stream =>
+                    {
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                    })),
+            ("ResolveNames", BuildBody(
+                stream =>
+                {
+                    WriteUInt32(stream, 0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    stream.WriteByte(0);
+                    WriteUInt32(stream, 0);
+                }),
+                BuildResponse(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 1252);
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                    }))
+        };
+
+        foreach (var (method, request, response) in cases)
+        {
+            using var saz = Fixture(
+                ("raw/8_c.txt", Http(
+                    "POST /mapi/nspi HTTP/1.1",
+                    request,
+                    ("Content-Type", "application/mapi-http"),
+                    ("X-RequestType", method))),
+                ("raw/8_s.txt", Http(
+                    "HTTP/1.1 200 OK",
+                    response,
+                    ("Content-Type", "application/mapi-http"),
+                    ("X-ResponseCode", "0"))));
+
+            var mapi = Assert.Single(new SazParser().Parse(saz).Sessions).Mapi!;
+
+            Assert.True(mapi.Request!.Complete, $"{method} request was partial: {string.Join("; ", mapi.Request.Warnings)}");
+            Assert.True(mapi.Response!.Complete, $"{method} response was partial: {string.Join("; ", mapi.Response.Warnings)}");
+        }
+    }
+
+    [Fact]
+    public void ParsesTypedAddressBookValuesAndMultivalues()
+    {
+        using var data = new MemoryStream();
+        WriteUInt32(data, 6);
+        WriteUInt16(data, 0x001F);
+        WriteUInt16(data, 0x3001);
+        data.WriteByte(1);
+        WriteUnicodeZ(data, "Display Name");
+        WriteUInt16(data, 0x0102);
+        WriteUInt16(data, 0x3002);
+        data.WriteByte(1);
+        WriteUInt32(data, 3);
+        data.Write([0x01, 0x02, 0x03]);
+        WriteUInt16(data, 0x1003);
+        WriteUInt16(data, 0x3003);
+        data.WriteByte(1);
+        WriteUInt32(data, 2);
+        WriteUInt32(data, 10);
+        WriteUInt32(data, 20);
+        WriteUInt16(data, 0x101F);
+        WriteUInt16(data, 0x3004);
+        data.WriteByte(1);
+        WriteUInt32(data, 2);
+        data.WriteByte(1);
+        WriteUnicodeZ(data, "First");
+        data.WriteByte(0);
+        WriteUInt16(data, 0x1102);
+        WriteUInt16(data, 0x3005);
+        data.WriteByte(1);
+        WriteUInt32(data, 2);
+        data.WriteByte(1);
+        WriteUInt32(data, 2);
+        data.Write([0xAA, 0xBB]);
+        data.WriteByte(0);
+        WriteUInt16(data, 0x000B);
+        WriteUInt16(data, 0x3006);
+        data.WriteByte(1);
+        var reader = new MapiReader(data.ToArray());
+
+        var node = NspiPropertyParser.ParseValueList(ref reader, "Values", new MapiNodeBudget());
+
+        Assert.True(reader.End);
+        Assert.Equal("Display Name", Find(node, "PropertyValue").Value);
+        Assert.Contains("3 bytes", Flatten(node).Select(item => item.Value));
+        Assert.Contains("20", Flatten(node).Select(item => item.Value));
+        Assert.Contains("First", Flatten(node).Select(item => item.Value));
+        Assert.Contains("2 bytes", Flatten(node).Select(item => item.Value));
+        Assert.Contains("true", Flatten(node).Select(item => item.Value));
+    }
+
+    [Fact]
+    public void ParsesEveryRestrictionFormIncludingSubObject()
+    {
+        var restrictions = new[]
+        {
+            new byte[] { 0x00, 0, 0, 0, 0 },
+            new byte[] { 0x01, 0, 0, 0, 0 },
+            new byte[] { 0x02, 0x08, 0x03, 0, 0x01, 0x30 },
+            new byte[] { 0x03, 0, 0, 0, 0, 0x1E, 0, 0x01, 0x30, 0x1F, 0, 0x02, 0x30, (byte)'x', 0 },
+            new byte[] { 0x04, 4, 0x03, 0, 0x01, 0x30, 0x03, 0, 0x01, 0x30, 42, 0, 0, 0 },
+            new byte[] { 0x05, 4, 0x03, 0, 0x01, 0x30, 0x03, 0, 0x02, 0x30 },
+            new byte[] { 0x06, 1, 0x03, 0, 0x01, 0x30, 0xFF, 0, 0, 0 },
+            new byte[] { 0x07, 4, 0x03, 0, 0x01, 0x30, 4, 0, 0, 0 },
+            new byte[] { 0x08, 0x03, 0, 0x01, 0x30 },
+            new byte[] { 0x09, 0x0D, 0, 0x05, 0x30, 0x08, 0x03, 0, 0x01, 0x30 },
+            new byte[] { 0x0A, 1, 0x1E, 0, 0x01, 0x30, (byte)'x', 0, 0 },
+            new byte[] { 0x0B, 1, 0, 0, 0, 0x08, 0x03, 0, 0x01, 0x30 }
+        };
+
+        foreach (var bytes in restrictions)
+        {
+            var reader = new MapiReader(bytes);
+            var node = NspiRestrictionParser.Parse(ref reader, new MapiNodeBudget());
+
+            Assert.True(reader.End, $"{node.Name} left {reader.Remaining} bytes.");
+        }
+    }
+
+    [Fact]
+    public void ParsesOptionalGetPropsValuesAndGetMatchesRestriction()
+    {
+        var request = BuildBody(
+            stream =>
+            {
+                WriteUInt32(stream, 0);
+                stream.WriteByte(0);
+                stream.WriteByte(0);
+                WriteUInt32(stream, 0);
+                stream.WriteByte(1);
+                stream.WriteByte(0x08);
+                WriteUInt32(stream, 0x30010003);
+                stream.WriteByte(0);
+                WriteUInt32(stream, 10);
+                stream.WriteByte(0);
+                WriteUInt32(stream, 0);
+            });
+        var response = BuildResponse(
+            stream =>
+            {
+                WriteUInt32(stream, 1252);
+                stream.WriteByte(1);
+                WriteUInt32(stream, 1);
+                WriteUInt16(stream, 0x001F);
+                WriteUInt16(stream, 0x3001);
+                stream.WriteByte(1);
+                WriteUnicodeZ(stream, "Resolved");
+            });
+        using var getMatchesSaz = Fixture(
+            ("raw/9_c.txt", Http(
+                "POST /mapi/nspi HTTP/1.1",
+                request,
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "GetMatches"))));
+        using var getPropsSaz = Fixture(
+            ("raw/10_c.txt", Http(
+                "POST /mapi/nspi HTTP/1.1",
+                BuildBody(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 0);
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                        WriteUInt32(stream, 0);
+                    }),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "GetProps"))),
+            ("raw/10_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                response,
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"))));
+
+        var restriction = Assert.Single(new SazParser().Parse(getMatchesSaz).Sessions).Mapi!.Request!;
+        var values = Assert.Single(new SazParser().Parse(getPropsSaz).Sessions).Mapi!.Response!;
+
+        Assert.Equal("ExistRestriction", Find(restriction.Root, "ExistRestriction").Name);
+        Assert.True(restriction.Complete);
+        Assert.Equal("Resolved", Find(values.Root, "PropertyValue").Value);
+        Assert.True(values.Complete);
+    }
+
+    [Fact]
+    public void ParsesIndependentSeekEntriesAndUpdateStatResponseFlags()
+    {
+        using var seekSaz = Fixture(
+            ("raw/11_c.txt", Http(
+                "POST /mapi/nspi HTTP/1.1",
+                BuildBody(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 0);
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                        WriteUInt32(stream, 0);
+                    }),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "SeekEntries"))),
+            ("raw/11_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                BuildResponse(
+                    stream =>
+                    {
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                    }),
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"))));
+        using var updateSaz = Fixture(
+            ("raw/12_c.txt", Http(
+                "POST /mapi/nspi HTTP/1.1",
+                BuildBody(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 0);
+                        stream.WriteByte(0);
+                        stream.WriteByte(1);
+                        WriteUInt32(stream, 0);
+                    }),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "UpdateStat"))),
+            ("raw/12_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                BuildResponse(
+                    stream =>
+                    {
+                        stream.WriteByte(0);
+                        stream.WriteByte(1);
+                        WriteUInt32(stream, unchecked((uint)-2));
+                    }),
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"))));
+
+        var seek = Assert.Single(new SazParser().Parse(seekSaz).Sessions).Mapi!.Response!;
+        var update = Assert.Single(new SazParser().Parse(updateSaz).Sessions).Mapi!.Response!;
+
+        Assert.True(seek.Complete);
+        Assert.Equal("false", Find(seek.Root, "HasColsAndRows").Value);
+        Assert.True(update.Complete);
+        Assert.Equal("-2", Find(update.Root, "Delta").Value);
+    }
+
+    [Fact]
+    public void EnforcesRestrictionDepthAndPropertyBudgets()
+    {
+        var nested = Enumerable.Repeat((byte)0x02, MapiParseLimits.MaxDepth + 1)
+            .Concat(new byte[] { 0x08, 0x03, 0, 0x01, 0x30 })
+            .ToArray();
+        var excessiveCount = BuildBody(stream => WriteUInt32(stream, MapiParseLimits.MaxCollectionCount + 1u));
+        var exhaustedBudget = new MapiNodeBudget();
+        exhaustedBudget.Claim(0, MapiParseLimits.MaxNodes);
+        byte[] emptyList = [0, 0, 0, 0];
+
+        Assert.Contains(
+            "depth exceeds",
+            Assert.Throws<MapiParseException>(() => ParseRestriction(nested)).Message);
+        Assert.Contains(
+            "safe limit",
+            Assert.Throws<MapiParseException>(() => ParseValueList(excessiveCount, new MapiNodeBudget())).Message);
+        Assert.Contains(
+            "tree exceeds",
+            Assert.Throws<MapiParseException>(() => ParseValueList(emptyList, exhaustedBudget)).Message);
+    }
+
+    [Theory]
+    [InlineData(0x101F)]
+    [InlineData(0x1102)]
+    public void RejectsTruncatedMultivalueVariableProperties(ushort type)
+    {
+        var bytes = BuildBody(
+            stream =>
+            {
+                stream.WriteByte(1);
+                WriteUInt32(stream, 1);
+                stream.WriteByte(1);
+            });
+        Assert.Throws<MapiParseException>(() => ParsePropertyValue(bytes, type));
+    }
+
+    [Fact]
+    public void ParsesFlaggedRowsWithUnspecifiedErrorAndUnavailableValues()
+    {
+        var rowBytes = BuildBody(
+            stream =>
+            {
+                stream.WriteByte(1);
+                WriteUInt16(stream, 0x0003);
+                stream.WriteByte(0);
+                WriteUInt32(stream, 42);
+                stream.WriteByte(0x0A);
+                WriteUInt32(stream, 0x8004010F);
+                stream.WriteByte(0x01);
+            });
+        var reader = new MapiReader(rowBytes);
+
+        var row = NspiPropertyParser.ParseRow(
+            ref reader,
+            [0x30010000, 0x30020003, 0x30030003],
+            "Row",
+            new MapiNodeBudget());
+
+        Assert.True(reader.End);
+        Assert.Contains("42", Flatten(row).Select(item => item.Value));
+        Assert.Contains("0x8004010F", Flatten(row).Select(item => item.Value));
+        Assert.Contains("Unavailable", Flatten(row).Select(item => item.Value));
+    }
+
+    [Fact]
+    public void DecodesString8UsingTheResponseCodePage()
+    {
+        using var saz = Fixture(
+            ("raw/14_c.txt", Http(
+                "POST /mapi/nspi HTTP/1.1",
+                BuildBody(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 0);
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                        WriteUInt32(stream, 0);
+                    }),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "GetProps"))),
+            ("raw/14_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                BuildResponse(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 1252);
+                        stream.WriteByte(1);
+                        WriteUInt32(stream, 1);
+                        WriteUInt16(stream, 0x001E);
+                        WriteUInt16(stream, 0x3001);
+                        stream.WriteByte(1);
+                        stream.Write([0xE9, 0]);
+                    }),
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"))));
+
+        var response = Assert.Single(new SazParser().Parse(saz).Sessions).Mapi!.Response!;
+
+        Assert.True(response.Complete);
+        Assert.Equal("é", Find(response.Root, "PropertyValue").Value);
+    }
+
+    [Fact]
+    public void RetainsString8BytesWhenTheCodePageIsUnsupported()
+    {
+        byte[] bytes = [1, 0x80, 0];
+        var reader = new MapiReader(bytes);
+        var warnings = new List<string>();
+
+        var value = NspiPropertyParser.ParseValue(
+            ref reader,
+            0x001E,
+            "Value",
+            new MapiNodeBudget(),
+            0,
+            includePresence: true,
+            codePage: uint.MaxValue,
+            warnings: warnings);
+
+        Assert.True(reader.End);
+        Assert.Contains(Flatten(value), node => node.Kind == MapiNodeKind.Raw);
+        Assert.Contains(warnings, warning => warning.Contains("unsupported code page", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ReportsUnsupportedRuleActionsAsPartialWithoutConsumingRawData()
+    {
+        using var saz = Fixture(
+            ("raw/13_c.txt", Http(
+                "POST /mapi/nspi HTTP/1.1",
+                BuildBody(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 0);
+                        stream.WriteByte(0);
+                        stream.WriteByte(0);
+                        WriteUInt32(stream, 0);
+                    }),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "GetProps"))),
+            ("raw/13_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                BuildResponse(
+                    stream =>
+                    {
+                        WriteUInt32(stream, 1252);
+                        stream.WriteByte(1);
+                        WriteUInt32(stream, 1);
+                        WriteUInt16(stream, 0x00FE);
+                        WriteUInt16(stream, 0x6680);
+                        stream.Write([0xDE, 0xAD, 0xBE, 0xEF]);
+                    }),
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"))));
+
+        var response = Assert.Single(new SazParser().Parse(saz).Sessions).Mapi!.Response!;
+
+        Assert.False(response.Complete);
+        Assert.Contains(response.Warnings, warning => warning.Contains("Unsupported property type 0x00FE", StringComparison.Ordinal));
+        Assert.Equal(MapiNodeKind.Raw, response.Root.Kind);
+    }
+
     private static MapiNode Find(MapiNode node, string name)
     {
         if (node.Name == name)
         {
             return node;
         }
+
         foreach (var child in node.Children)
         {
             var found = FindOrDefault(child, name);
@@ -266,6 +785,30 @@ public sealed class MapiParserTests
             }
         }
         throw new Xunit.Sdk.XunitException($"Node '{name}' was not found.");
+    }
+
+    private static void ParseRestriction(byte[] bytes)
+    {
+        var reader = new MapiReader(bytes);
+        NspiRestrictionParser.Parse(ref reader, new MapiNodeBudget());
+    }
+
+    private static void ParseValueList(byte[] bytes, MapiNodeBudget budget)
+    {
+        var reader = new MapiReader(bytes);
+        NspiPropertyParser.ParseValueList(ref reader, "Values", budget);
+    }
+
+    private static void ParsePropertyValue(byte[] bytes, ushort type)
+    {
+        var reader = new MapiReader(bytes);
+        NspiPropertyParser.ParseValue(
+            ref reader,
+            type,
+            "Value",
+            new MapiNodeBudget(),
+            0,
+            includePresence: true);
     }
 
     private static MapiNode? FindOrDefault(MapiNode node, string name)
@@ -283,6 +826,18 @@ public sealed class MapiParserTests
             }
         }
         return null;
+    }
+
+    private static IEnumerable<MapiNode> Flatten(MapiNode node)
+    {
+        yield return node;
+        foreach (var child in node.Children)
+        {
+            foreach (var descendant in Flatten(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     private static byte[] ExtendedBuffer(byte[] payload, ushort flags)
@@ -305,6 +860,24 @@ public sealed class MapiParserTests
         }
         return output.ToArray();
     }
+
+    private static byte[] BuildBody(Action<MemoryStream> write)
+    {
+        using var body = new MemoryStream();
+        write(body);
+        return body.ToArray();
+    }
+
+    private static byte[] BuildResponse(Action<MemoryStream> write) =>
+        BuildBody(
+            stream =>
+            {
+                stream.Write(Encoding.ASCII.GetBytes("\r\n"));
+                WriteUInt32(stream, 0);
+                WriteUInt32(stream, 0);
+                write(stream);
+                WriteUInt32(stream, 0);
+            });
 
     private static byte[] Http(
         string startLine,
@@ -340,6 +913,13 @@ public sealed class MapiParserTests
     {
         Span<byte> bytes = stackalloc byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
+        stream.Write(bytes);
+    }
+
+    private static void WriteUInt16(Stream stream, ushort value)
+    {
+        Span<byte> bytes = stackalloc byte[2];
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes, value);
         stream.Write(bytes);
     }
 

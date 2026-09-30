@@ -23,8 +23,8 @@
       "count": 23,
       "of": 23
     },
-    "requestMethodEnvelopesFullyDecoded": {
-      "count": 20,
+    "requestMethodEnvelopeSchemasDecoded": {
+      "count": 23,
       "of": 23,
       "names": [
         "Connect",
@@ -46,11 +46,14 @@
         "QueryColumns",
         "ResolveNames",
         "ResortRestriction",
-        "UpdateStat"
+        "UpdateStat",
+        "GetMatches",
+        "ModProps",
+        "SeekEntries"
       ]
     },
-    "responseMethodEnvelopesFullyDecoded": {
-      "count": 16,
+    "responseMethodEnvelopeSchemasDecoded": {
+      "count": 23,
       "of": 23,
       "names": [
         "Connect",
@@ -68,7 +71,14 @@
         "ModProps",
         "QueryColumns",
         "ResortRestriction",
-        "UpdateStat"
+        "UpdateStat",
+        "GetMatches",
+        "GetProps",
+        "GetSpecialTable",
+        "GetTemplateInfo",
+        "QueryRows",
+        "ResolveNames",
+        "SeekEntries"
       ]
     },
     "extendedBufferFraming": true,
@@ -95,34 +105,22 @@
       "of": 40
     },
     "propertyValueSemanticDispatch": {
-      "count": 0,
+      "count": 31,
       "of": 32
     },
     "restrictionSemanticDispatch": {
-      "count": 0,
-      "of": 11
+      "count": 12,
+      "of": 12,
+      "note": "Includes SubObjectRestriction, which exists upstream but is omitted from its central dispatcher."
     }
   },
   "namedMethodGaps": {
-    "request": [
-      "GetMatches",
-      "ModProps",
-      "SeekEntries"
-    ],
-    "response": [
-      "GetMatches",
-      "GetProps",
-      "GetSpecialTable",
-      "GetTemplateInfo",
-      "QueryRows",
-      "ResolveNames",
-      "SeekEntries"
-    ]
+    "request": [],
+    "response": []
   },
   "remainingSemanticAreas": [
     "All 128 request and 131 response individual ROP dispatchers",
-    "All 32 property-value dispatch cases and the 572 PidTag property-name map",
-    "All 11 upstream restriction dispatch cases, plus the upstream-omitted SubObject restriction",
+    "PtypRuleAction and the 572 PidTag property-name map",
     "All 40 auxiliary payload semantic layouts",
     "FastTransfer and ICS lexical/syntactical grammars and partial-stream reconstruction",
     "Capture-local logon, table-column, notification, and handle correlation beyond framing",

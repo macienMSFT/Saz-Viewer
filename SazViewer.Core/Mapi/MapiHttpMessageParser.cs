@@ -136,6 +136,27 @@ internal static class MapiHttpMessageParser
                 if (ReadBoolean(ref reader, nodes, "HasPropertyTags", budget)) ParsePropertyTagArray(ref reader, nodes, budget);
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
+            case "GETMATCHES":
+            {
+                ReadUInt32(ref reader, nodes, "Reserved", budget, true);
+                uint? codePage = null;
+                if (ReadBoolean(ref reader, nodes, "HasState", budget)) codePage = ParseStat(ref reader, nodes, budget);
+                if (ReadBoolean(ref reader, nodes, "HasMinimalIds", budget)) ParseMinimalEntryIdArray(ref reader, nodes, "MinimalIds", budget);
+                ReadUInt32(ref reader, nodes, "InterfaceOptionFlags", budget, true);
+                if (ReadBoolean(ref reader, nodes, "HasFilter", budget))
+                {
+                    nodes.Add(NspiRestrictionParser.Parse(ref reader, budget, codePage: codePage, warnings: warnings));
+                }
+                if (ReadBoolean(ref reader, nodes, "HasPropertyName", budget))
+                {
+                    ReadGuid(ref reader, nodes, "PropertyNameGuid", budget);
+                    ReadUInt32(ref reader, nodes, "PropertyNameId", budget, true);
+                }
+                ReadUInt32(ref reader, nodes, "RowCount", budget);
+                if (ReadBoolean(ref reader, nodes, "HasColumns", budget)) ParsePropertyTagArray(ref reader, nodes, budget);
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
+            }
             case "GETSPECIALTABLE":
                 ReadUInt32(ref reader, nodes, "Flags", budget, true);
                 if (ReadBoolean(ref reader, nodes, "HasState", budget)) ParseStat(ref reader, nodes, budget);
@@ -158,7 +179,7 @@ internal static class MapiHttpMessageParser
             case "QUERYROWS":
                 ReadUInt32(ref reader, nodes, "Flags", budget, true);
                 if (ReadBoolean(ref reader, nodes, "HasState", budget)) ParseStat(ref reader, nodes, budget);
-                ParseUInt32Array(ref reader, nodes, "ExplicitTable", budget);
+                ParseMinimalEntryIdArray(ref reader, nodes, "ExplicitTable", budget);
                 ReadUInt32(ref reader, nodes, "RowCount", budget);
                 if (ReadBoolean(ref reader, nodes, "HasColumns", budget)) ParsePropertyTagArray(ref reader, nodes, budget);
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
@@ -177,6 +198,19 @@ internal static class MapiHttpMessageParser
                 }
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
+            case "MODPROPS":
+            {
+                ReadUInt32(ref reader, nodes, "Reserved", budget, true);
+                uint? codePage = null;
+                if (ReadBoolean(ref reader, nodes, "HasState", budget)) codePage = ParseStat(ref reader, nodes, budget);
+                if (ReadBoolean(ref reader, nodes, "HasPropertyTags", budget)) ParsePropertyTagArray(ref reader, nodes, budget);
+                if (ReadBoolean(ref reader, nodes, "HasPropertyValues", budget))
+                {
+                    nodes.Add(NspiPropertyParser.ParseValueList(ref reader, "PropertyValues", budget, codePage: codePage, warnings: warnings));
+                }
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
+            }
             case "RESOLVENAMES":
                 ReadUInt32(ref reader, nodes, "Reserved", budget, true);
                 if (ReadBoolean(ref reader, nodes, "HasState", budget)) ParseStat(ref reader, nodes, budget);
@@ -188,10 +222,27 @@ internal static class MapiHttpMessageParser
                 }
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
+            case "SEEKENTRIES":
+            {
+                ReadUInt32(ref reader, nodes, "Reserved", budget, true);
+                uint? codePage = null;
+                if (ReadBoolean(ref reader, nodes, "HasState", budget)) codePage = ParseStat(ref reader, nodes, budget);
+                if (ReadBoolean(ref reader, nodes, "HasTarget", budget))
+                {
+                    nodes.Add(NspiPropertyParser.ParseTaggedValue(ref reader, "Target", budget, codePage: codePage, warnings: warnings));
+                }
+                if (ReadBoolean(ref reader, nodes, "HasExplicitTable", budget))
+                {
+                    ParseMinimalEntryIdArray(ref reader, nodes, "ExplicitTable", budget);
+                }
+                if (ReadBoolean(ref reader, nodes, "HasColumns", budget)) ParsePropertyTagArray(ref reader, nodes, budget);
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
+            }
             case "RESORTRESTRICTION":
                 ReadUInt32(ref reader, nodes, "Reserved", budget, true);
                 if (ReadBoolean(ref reader, nodes, "HasState", budget)) ParseStat(ref reader, nodes, budget);
-                if (ReadBoolean(ref reader, nodes, "HasMinimalIds", budget)) ParseUInt32Array(ref reader, nodes, "MinimalIds", budget);
+                if (ReadBoolean(ref reader, nodes, "HasMinimalIds", budget)) ParseMinimalEntryIdArray(ref reader, nodes, "MinimalIds", budget);
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
             case "UPDATESTAT":
@@ -250,7 +301,7 @@ internal static class MapiHttpMessageParser
             case "DNTOMID":
                 if (ReadBoolean(ref reader, nodes, "HasMinimalIds", budget))
                 {
-                    ParseUInt32Array(ref reader, nodes, "MinimalIds", budget);
+                    ParseMinimalEntryIdArray(ref reader, nodes, "MinimalIds", budget);
                 }
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
@@ -262,14 +313,89 @@ internal static class MapiHttpMessageParser
                 }
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
+            case "GETPROPS":
+            {
+                var codePage = ReadUInt32(ref reader, nodes, "CodePage", budget);
+                if (ReadBoolean(ref reader, nodes, "HasPropertyValues", budget))
+                {
+                    nodes.Add(NspiPropertyParser.ParseValueList(ref reader, "PropertyValues", budget, codePage: codePage, warnings: warnings));
+                }
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
+            }
+            case "GETSPECIALTABLE":
+            {
+                var codePage = ReadUInt32(ref reader, nodes, "CodePage", budget);
+                if (ReadBoolean(ref reader, nodes, "HasVersion", budget)) ReadUInt32(ref reader, nodes, "Version", budget);
+                if (ReadBoolean(ref reader, nodes, "HasRows", budget))
+                {
+                    ParsePropertyValueListArray(ref reader, nodes, "Rows", budget, codePage, warnings);
+                }
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
+            }
+            case "GETTEMPLATEINFO":
+            {
+                var codePage = ReadUInt32(ref reader, nodes, "CodePage", budget);
+                if (ReadBoolean(ref reader, nodes, "HasRow", budget))
+                {
+                    nodes.Add(NspiPropertyParser.ParseValueList(ref reader, "Row", budget, codePage: codePage, warnings: warnings));
+                }
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
+            }
+            case "GETMATCHES":
+                ParseRowsResponse(
+                    ref reader,
+                    nodes,
+                    includeMinimalIds: true,
+                    hasColumnsRequiresState: false,
+                    budget: budget,
+                    warnings: warnings);
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
+            case "QUERYROWS":
+                ParseRowsResponse(
+                    ref reader,
+                    nodes,
+                    includeMinimalIds: false,
+                    hasColumnsRequiresState: false,
+                    budget: budget,
+                    warnings: warnings);
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
+            case "RESOLVENAMES":
+            {
+                var codePage = ReadUInt32(ref reader, nodes, "CodePage", budget);
+                if (ReadBoolean(ref reader, nodes, "HasMinimalIds", budget)) ParseMinimalEntryIdArray(ref reader, nodes, "MinimalIds", budget);
+                ParseColumnsAndRows(ref reader, nodes, "HasRowsAndCols", budget, codePage, warnings);
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
+            }
+            case "SEEKENTRIES":
+            {
+                var hasState = ReadBoolean(ref reader, nodes, "HasState", budget);
+                uint? codePage = null;
+                if (hasState)
+                {
+                    codePage = ParseStat(ref reader, nodes, budget);
+                }
+                ParseColumnsAndRows(ref reader, nodes, "HasColsAndRows", budget, codePage, warnings);
+                ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
+                break;
+            }
             case "UPDATESTAT":
-                if (ReadBoolean(ref reader, nodes, "HasState", budget)) ParseStat(ref reader, nodes, budget);
+                var hasUpdatedState = ReadBoolean(ref reader, nodes, "HasState", budget);
+                if (hasUpdatedState)
+                {
+                    ParseStat(ref reader, nodes, budget);
+                }
                 if (ReadBoolean(ref reader, nodes, "HasDelta", budget)) ReadInt32(ref reader, nodes, "Delta", budget);
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
             case "RESORTRESTRICTION":
                 if (ReadBoolean(ref reader, nodes, "HasState", budget)) ParseStat(ref reader, nodes, budget);
-                if (ReadBoolean(ref reader, nodes, "HasMinimalIds", budget)) ParseUInt32Array(ref reader, nodes, "MinimalIds", budget);
+                if (ReadBoolean(ref reader, nodes, "HasMinimalIds", budget)) ParseMinimalEntryIdArray(ref reader, nodes, "MinimalIds", budget);
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
             case "UNBIND":
@@ -378,13 +504,14 @@ internal static class MapiHttpMessageParser
         nodes.Add(new MapiNode(name, MapiNodeKind.Array, start, size, null, children));
     }
 
-    private static void ParseStat(
+    private static uint ParseStat(
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder nodes,
         MapiNodeBudget budget)
     {
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
+        uint codePage = 0;
         foreach (var name in new[]
         {
             "SortType", "ContainerID", "CurrentRec", "Delta", "NumPos", "TotalRecs",
@@ -397,31 +524,113 @@ internal static class MapiHttpMessageParser
             }
             else
             {
-                ReadUInt32(ref reader, children, name, budget, name.Contains("Locale", StringComparison.Ordinal) || name is "ContainerID" or "CurrentRec");
+                var value = ReadUInt32(ref reader, children, name, budget, name.Contains("Locale", StringComparison.Ordinal) || name is "ContainerID" or "CurrentRec");
+                if (name == "CodePage") codePage = value;
             }
         }
         budget.Claim(0);
         nodes.Add(new MapiNode("State", MapiNodeKind.Structure, start, reader.Position - start, null, children.ToImmutable()));
+        return codePage;
     }
 
-    private static void ParsePropertyTagArray(
+    private static IReadOnlyList<uint> ParsePropertyTagArray(
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder nodes,
         MapiNodeBudget budget)
     {
         var start = reader.Position;
         var count = reader.ReadCount32("PropertyTagCount");
+        var tags = new uint[count];
         var children = ImmutableArray.CreateBuilder<MapiNode>();
         ExtendedBufferParser.AddField(children, "Count", start, 4, count.ToString(), budget);
         for (var index = 0; index < count; index++)
         {
             var offset = reader.Position;
             var tag = reader.ReadUInt32($"PropertyTag[{index}]");
+            tags[index] = tag;
             ExtendedBufferParser.AddField(children, $"PropertyTag[{index}]", offset, 4, FormatPropertyTag(tag), budget);
         }
 
         budget.Claim(0);
         nodes.Add(new MapiNode("PropertyTags", MapiNodeKind.Array, start, reader.Position - start, null, children.ToImmutable()));
+        return tags;
+    }
+
+    private static void ParseRowsResponse(
+        ref MapiReader reader,
+        ImmutableArray<MapiNode>.Builder nodes,
+        bool includeMinimalIds,
+        bool hasColumnsRequiresState,
+        MapiNodeBudget budget,
+        List<string> warnings)
+    {
+        var hasState = ReadBoolean(ref reader, nodes, "HasState", budget);
+        uint? codePage = null;
+        if (hasState) codePage = ParseStat(ref reader, nodes, budget);
+        if (includeMinimalIds && ReadBoolean(ref reader, nodes, "HasMinimalIds", budget))
+        {
+            ParseMinimalEntryIdArray(ref reader, nodes, "MinimalIds", budget);
+        }
+        if (!hasColumnsRequiresState || hasState)
+        {
+            ParseColumnsAndRows(ref reader, nodes, "HasColsAndRows", budget, codePage, warnings);
+        }
+    }
+
+    private static void ParseColumnsAndRows(
+        ref MapiReader reader,
+        ImmutableArray<MapiNode>.Builder nodes,
+        string presenceName,
+        MapiNodeBudget budget,
+        uint? codePage = null,
+        List<string>? warnings = null)
+    {
+        if (!ReadBoolean(ref reader, nodes, presenceName, budget))
+        {
+            return;
+        }
+        var columns = ParsePropertyTagArray(ref reader, nodes, budget);
+        var rowStart = reader.Position;
+        var rowCount = reader.ReadCount32("RowCount");
+        var rows = ImmutableArray.CreateBuilder<MapiNode>();
+        ExtendedBufferParser.AddField(rows, "RowCount", rowStart, 4, rowCount.ToString(CultureInfo.InvariantCulture), budget);
+        for (var index = 0; index < rowCount; index++)
+        {
+            rows.Add(NspiPropertyParser.ParseRow(
+                ref reader,
+                columns,
+                $"Row[{index}]",
+                budget,
+                codePage: codePage,
+                warnings: warnings));
+        }
+        budget.Claim(0);
+        nodes.Add(new MapiNode("RowData", MapiNodeKind.Array, rowStart, reader.Position - rowStart, null, rows.ToImmutable()));
+    }
+
+    private static void ParsePropertyValueListArray(
+        ref MapiReader reader,
+        ImmutableArray<MapiNode>.Builder nodes,
+        string name,
+        MapiNodeBudget budget,
+        uint? codePage = null,
+        List<string>? warnings = null)
+    {
+        var start = reader.Position;
+        var count = reader.ReadCount32($"{name}Count");
+        var rows = ImmutableArray.CreateBuilder<MapiNode>();
+        ExtendedBufferParser.AddField(rows, "Count", start, 4, count.ToString(CultureInfo.InvariantCulture), budget);
+        for (var index = 0; index < count; index++)
+        {
+            rows.Add(NspiPropertyParser.ParseValueList(
+                ref reader,
+                $"{name}[{index}]",
+                budget,
+                codePage: codePage,
+                warnings: warnings));
+        }
+        budget.Claim(0);
+        nodes.Add(new MapiNode(name, MapiNodeKind.Array, start, reader.Position - start, null, rows.ToImmutable()));
     }
 
     private static void ParseSizedEntryId(
@@ -458,7 +667,7 @@ internal static class MapiHttpMessageParser
             children.ToImmutable()));
     }
 
-    private static void ParseUInt32Array(
+    private static void ParseMinimalEntryIdArray(
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder nodes,
         string name,
@@ -470,7 +679,24 @@ internal static class MapiHttpMessageParser
         ExtendedBufferParser.AddField(children, "Count", start, 4, count.ToString(), budget);
         for (var index = 0; index < count; index++)
         {
-            ReadUInt32(ref reader, children, $"[{index}]", budget, true);
+            var entryStart = reader.Position;
+            var value = reader.ReadUInt32($"MinimalEntryId[{index}]");
+            var entryChildren = ImmutableArray.CreateBuilder<MapiNode>();
+            ExtendedBufferParser.AddField(
+                entryChildren,
+                "MinEntryID",
+                entryStart,
+                4,
+                $"0x{value:X8}",
+                budget);
+            budget.Claim(0);
+            children.Add(new MapiNode(
+                $"MinimalEntryID[{index}]",
+                MapiNodeKind.Structure,
+                entryStart,
+                4,
+                null,
+                entryChildren.ToImmutable()));
         }
         budget.Claim(0);
         nodes.Add(new MapiNode(name, MapiNodeKind.Array, start, reader.Position - start, null, children.ToImmutable()));

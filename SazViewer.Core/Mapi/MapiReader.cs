@@ -63,12 +63,26 @@ internal ref struct MapiReader
 
     public int ReadInt32(string field) => unchecked((int)ReadUInt32(field));
 
+    public long ReadInt64(string field) => unchecked((long)ReadUInt64(field));
+
     public ulong ReadUInt64(string field)
     {
         Ensure(sizeof(ulong), field);
         var value = BinaryPrimitives.ReadUInt64LittleEndian(data[position..]);
         position += sizeof(ulong);
         return value;
+    }
+
+    public float ReadSingle(string field)
+    {
+        var bits = ReadInt32(field);
+        return BitConverter.Int32BitsToSingle(bits);
+    }
+
+    public double ReadDouble(string field)
+    {
+        var bits = ReadInt64(field);
+        return BitConverter.Int64BitsToDouble(bits);
     }
 
     public Guid ReadGuid(string field)
@@ -128,13 +142,19 @@ internal ref struct MapiReader
 
     public string ReadNullTerminatedAscii(string field)
     {
-        var remaining = data[position..];
-        var terminator = remaining.IndexOf((byte)0);
+        return Encoding.ASCII.GetString(ReadNullTerminatedBytes(field));
+    }
+
+    public ReadOnlySpan<byte> ReadNullTerminatedBytes(string field)
+    {
+        var start = position;
+        var terminator = data[position..].IndexOf((byte)0);
         if (terminator < 0)
         {
-            throw new MapiParseException(position, $"{field} is missing its null terminator.");
+            throw new MapiParseException(Position, $"{field} is missing its null terminator.");
         }
-        var value = ReadAscii(terminator, field);
+        ValidateStringLength(terminator, field);
+        var value = ReadBytes(terminator, field);
         position++;
         return value;
     }

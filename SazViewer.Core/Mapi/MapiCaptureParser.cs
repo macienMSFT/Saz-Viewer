@@ -18,13 +18,6 @@ internal static class MapiCaptureParser
         "GetMailboxUrl", "GetAddressBookUrl"
     ];
 
-    private static readonly HashSet<string> FullyDecodedNspiRequests = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Bind", "Unbind", "CompareMIds", "DNToMId", "GetPropList", "GetProps",
-        "GetSpecialTable", "GetTemplateInfo", "ModLinkAtt", "QueryRows", "QueryColumns",
-        "ResolveNames", "ResortRestriction", "UpdateStat"
-    };
-
     public static MapiCapture Parse(
         IReadOnlyList<HttpSession> sessions,
         CancellationToken cancellationToken = default)
@@ -97,7 +90,7 @@ internal static class MapiCaptureParser
 
         var resultSessions = parsed.ToImmutable();
         var supportedRequestTypes = MailboxOperations
-            .Concat(FullyDecodedNspiRequests)
+            .Concat(NspiOperations)
             .Order(StringComparer.Ordinal)
             .ToImmutableArray();
         var coverage = new MapiCoverage(
@@ -108,12 +101,8 @@ internal static class MapiCaptureParser
             NspiOperations.Order(StringComparer.Ordinal).ToImmutableArray(),
             ["Envelope", "Auxiliary framing", "Extended buffers", "ROP framing"],
             [
-                "GetMatches request/response",
-                "ModProps request",
-                "SeekEntries request/response",
-                "GetProps, GetSpecialTable, GetTemplateInfo, QueryRows, and ResolveNames responses",
                 "Semantic decoding for all 132 individual ROP request/response payloads",
-                "Full MS-OXCDATA property/restriction and FastTransfer lexical coverage",
+                "PtypRuleAction, full property-name mapping, and FastTransfer lexical coverage",
                 "Cross-session FastTransfer reconstruction"
             ]);
         return new MapiCapture(
