@@ -112,6 +112,8 @@ internal static class RopPropertyStoreDecoders
         // MSOXCPRPT
         0x08, // RopGetPropertiesAll
         0x09, // RopGetPropertiesList
+        0x0A, // RopSetProperties
+        0x0B, // RopDeleteProperties
         0x2B, // RopOpenStream
         0x2C, // RopReadStream
         0x2D, // RopWriteStream
@@ -131,6 +133,7 @@ internal static class RopPropertyStoreDecoders
         0x42, // RopGetOwningServers
         0x45, // RopPublicFolderIsGhosted
         0x60, // RopGetPerUserLongTermIds
+        0x68, // RopGetReceiveFolderTable
         0x6F, // RopOptionsData
         // Core MSOXCROPS
         0x49, // RopGetAddressTypes
@@ -418,6 +421,20 @@ internal static class RopPropertyStoreDecoders
                 }
                 return;
             }
+            case 0x0A: // RopSetProperties
+            case 0x0B: // RopDeleteProperties
+            {
+                // [MS-OXCROPS] 2.2.8.6.2/2.2.8.6.3 and 2.2.8.8.2/2.2.8.8.3: identical response shape to
+                // RopSetPropertiesNoReplicate/RopDeletePropertiesNoReplicate (0x79/0x7A) below - a
+                // ReturnValue-gated PropertyProblem array, present only on success.
+                AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                var success = AddReturnValue(ref reader, children, budget, out _);
+                if (success)
+                {
+                    AddCountedPropertyProblems(ref reader, children, "PropertyProblemCount", "PropertyProblems", budget);
+                }
+                return;
+            }
             case 0x27: // RopGetReceiveFolder
             {
                 AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
@@ -589,6 +606,16 @@ internal static class RopPropertyStoreDecoders
                 {
                     AddBoolField(ref reader, children, "HasFinished", budget);
                     AddLengthPrefixedBytes(ref reader, children, "DataSize", "Data", budget);
+                }
+                return;
+            }
+            case 0x68: // RopGetReceiveFolderTable
+            {
+                AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                var success = AddReturnValue(ref reader, children, budget, out _);
+                if (success)
+                {
+                    AddReceiveFolderTableRows(ref reader, children, budget);
                 }
                 return;
             }
@@ -890,6 +917,51 @@ internal static class RopPropertyStoreDecoders
         budget.Claim(0, count);
         children.Add(new MapiNode(
             arrayFieldName,
+            MapiNodeKind.Array,
+            array.Count == 0 ? reader.Position : array[0].Offset,
+            array.Sum(n => n.Length),
+            $"{count:N0} entrie(s)",
+            array.ToImmutable()));
+    }
+
+    // [MS-OXCSTOR] 2.2.3.4.2: the receive-folder table's row shape is a fixed three-column
+    // PidTagFolderId/PidTagMessageClass/PidTagLastModificationTime list defined by the protocol
+    // itself (not a client-supplied RopSetColumns), so - unlike RopQueryRows/RopFindRow/RopExpandRow,
+    // whose column list is genuinely state-dependent - this response's row shape is entirely
+    // self-determined and safe to decode.
+    private static readonly ImmutableArray<(ushort Type, ushort Id)> ReceiveFolderTableColumns = ImmutableArray.Create<(ushort Type, ushort Id)>(
+        (0x0014, 0x6748), // PidTagFolderId, PtypInteger64
+        (0x001E, 0x001A), // PidTagMessageClass, PtypString8 (all characters are ASCII 0x20-0x7F per [MS-OXCSTOR])
+        (0x0040, 0x3008)); // PidTagLastModificationTime, PtypTime
+
+    /// <summary>
+    /// [MS-OXCSTOR] 2.2.3.4.2 RopGetReceiveFolderTable success response: RowCount(UInt32) followed
+    /// by that many [MS-OXCDATA] 2.8.1 PropertyRow structures against
+    /// <see cref="ReceiveFolderTableColumns"/>, reusing <see cref="RopMessageRulesDecoders"/>'s
+    /// PropertyRow decoder (identical StandardPropertyRow/FlaggedPropertyRow shape, only the column
+    /// list differs) rather than duplicating its width-sensitive value-parsing logic.
+    /// </summary>
+    private static void AddReceiveFolderTableRows(ref MapiReader reader, ImmutableArray<MapiNode>.Builder children, MapiNodeBudget budget)
+    {
+        var countOffset = reader.Position;
+        var count = reader.ReadCount32("RowCount");
+        ExtendedBufferParser.AddField(children, "RowCount", countOffset, 4, count.ToString(CultureInfo.InvariantCulture), budget);
+        var array = ImmutableArray.CreateBuilder<MapiNode>(count);
+        for (var i = 0; i < count; i++)
+        {
+            array.Add(RopMessageRulesDecoders.ParseRopPropertyRow(
+                ref reader,
+                $"Rows[{i}]",
+                ReceiveFolderTableColumns,
+                ReceiveFolderTableColumns.Length,
+                budget,
+                depth: 1,
+                CancellationToken.None,
+                codePage: 20127));
+        }
+        budget.Claim(0, count);
+        children.Add(new MapiNode(
+            "Rows",
             MapiNodeKind.Array,
             array.Count == 0 ? reader.Position : array[0].Offset,
             array.Sum(n => n.Length),

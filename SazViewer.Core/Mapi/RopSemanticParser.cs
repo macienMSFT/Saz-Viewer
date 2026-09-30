@@ -442,6 +442,7 @@ internal static class RopSemanticParser
         Add(S(0x42, Header(FolderOrMessageId("FolderId")))); // RopGetOwningServers
 
         // Group C: 3-byte header plus two fixed-width extra fields (or an extra handle index).
+        Add(S(0x2E, Header(RopField.Of("Origin", RopFieldKind.Byte), RopField.Of("Offset", RopFieldKind.UInt64)))); // RopSeekStream
         Add(S(0x32, Header(RopField.Of("SubmitFlags", RopFieldKind.Byte)))); // RopSubmitMessage
         Add(S(0x05, Header(RopField.Of("OutputHandleIndex", RopFieldKind.HandleIndex), RopField.Of("TableFlags", RopFieldKind.Byte)))); // RopGetContentsTable
         Add(S(0x04, Header(RopField.Of("OutputHandleIndex", RopFieldKind.HandleIndex), RopField.Of("TableFlags", RopFieldKind.Byte)))); // RopGetHierarchyTable
@@ -560,6 +561,7 @@ internal static class RopSemanticParser
             RopField.Of("Numerator", RopFieldKind.UInt32), RopField.Of("Denominator", RopFieldKind.UInt32)))); // RopQueryPosition
         Add(Gated(0x43, "InputHandleIndex", RopFieldTier.Of(LongTermId("LongTermId")))); // RopLongTermIdFromId
         Add(Gated(0x44, "InputHandleIndex", RopFieldTier.Of(RopField.Bytes("ObjectId", 8)))); // RopIdFromLongTermId
+        Add(Gated(0x2E, "InputHandleIndex", RopFieldTier.Of(RopField.Of("NewPosition", RopFieldKind.UInt64)))); // RopSeekStream
         Add(Gated(0x5E, "InputHandleIndex", RopFieldTier.Of(RopField.Of("StreamSize", RopFieldKind.UInt32)))); // RopGetStreamSize
         Add(Gated(0x61, "InputHandleIndex", RopFieldTier.Of(RopField.Of("DatabaseGuid", RopFieldKind.Guid)))); // RopGetPerUserGuid
         Add(Gated(0x6D, "InputHandleIndex", RopFieldTier.Of(FolderOrMessageId("FolderId")))); // RopGetTransportFolder

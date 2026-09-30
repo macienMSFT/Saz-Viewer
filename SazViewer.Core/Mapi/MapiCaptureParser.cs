@@ -113,8 +113,7 @@ internal static class MapiCaptureParser
                 "RopWritePerUserInformation request ReplGuid, RopGetPropertiesSpecific response tags, RopLogon response shape, and RopBufferTooSmall response RequestBuffersSize (each depends on a different, earlier operation's state)",
                 "RopSetMessageReadFlag request ClientData and RopNotify response TableRowData internals (depend on an originating RopLogon or RopSetColumns elsewhere in the session)",
                 "In the property/stream/store family's generic property-value arrays (RopGetPropertiesSpecific/RopSetProperties and similar), PtypRestriction/PtypRuleAction values and any property type outside the fixed MS-OXCDATA 2.11.1 table are intentionally refused rather than guessed; the message/rule/permission family's own RuleData/PermissionData arrays and the folder/table family's own restrictions do fully decode both types with an explicit ROP-buffer-vs-extended-rule width boundary",
-                "FastTransfer reconstruction spans multiple operations within the same MAPI/HTTP session only; joining buffers across separate HTTP round-trips is not attempted",
-                "RopSeekStream (request and response) and the RopSetProperties/RopDeleteProperties/RopGetReceiveFolderTable responses are not yet claimed by any decoder; unlike the other gaps above, their boundaries are not known to be state-dependent, they are simply outside the four wired families' current scope"
+                "FastTransfer reconstruction spans multiple operations within the same MAPI/HTTP session only; joining buffers across separate HTTP round-trips is not attempted"
             ]);
         return new MapiCapture(
             resultSessions,

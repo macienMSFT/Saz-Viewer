@@ -73,6 +73,57 @@ public sealed class RopSemanticParserTests
         Assert.DoesNotContain(ropListNode.Children[2].Children, child => child.Name == "TableStatus");
     }
 
+    [Fact]
+    public void ParsesRopSeekStreamRequestFieldsAndFollowingOperationBoundary()
+    {
+        // RopSeekStream (0x2E) request: Header + Origin(byte) + Offset(UInt64). Origin=2 (RopSeek.End)
+        // and a large Offset value prove the field is read at its full 8-byte width, and the following
+        // RopRelease operation proves the decoder consumed exactly 12 bytes (no over/under-read).
+        var ropList = Concat(
+            Concat([0x2E, 0x00, 0x00], [0x02], Le((ulong)0x0102030405060708)),
+            [0x01, 0x00, 0x01]); // RopRelease
+
+        var buffer = Frame(ropList, 0x11111111u, 0x22222222u);
+        var warnings = new List<string>();
+        var nodes = RopBufferParser.Parse(buffer, 0, MapiDirection.Request, warnings, new MapiNodeBudget(), CancellationToken.None);
+
+        Assert.Empty(warnings);
+        var ropListNode = Find(nodes, "ROP list");
+        Assert.Equal(2, ropListNode.Children.Length);
+        Assert.StartsWith("RopSeekStream", ropListNode.Children[0].Value);
+        Assert.Equal("0x02", Find(ropListNode.Children[0].Children, "Origin").Value);
+        Assert.Equal(0x0102030405060708UL.ToString(), Find(ropListNode.Children[0].Children, "Offset").Value);
+        Assert.StartsWith("RopRelease", ropListNode.Children[1].Value);
+    }
+
+    [Fact]
+    public void ParsesRopSeekStreamResponseSuccessAndFailureBoundaries()
+    {
+        // RopSeekStream (0x2E) response: on success, NewPosition(UInt64) is appended after the
+        // universal 6-byte header; on failure, ReturnValue gates it off entirely and the operation
+        // stays at exactly 6 bytes. A trailing RopModifyRecipients (0x0E) response - a universal
+        // 6-byte success shape - proves both boundaries are exact.
+        var ropList = Concat(
+            Concat([0x2E, 0x00, 0x00, 0x00, 0x00, 0x00], Le((ulong)8192)), // success -> +8
+            [0x2E, 0x01, 0x00, 0x00, 0x00, 0x80], // failure (ReturnValue 0x80000000) -> stays at 6
+            [0x0E, 0x02, 0x00, 0x00, 0x00, 0x00]); // RopModifyRecipients: success, universal 6 bytes
+
+        var buffer = Frame(ropList, 0x00u, 0x01u, 0x02u);
+        var warnings = new List<string>();
+        var nodes = RopBufferParser.Parse(buffer, 0, MapiDirection.Response, warnings, new MapiNodeBudget(), CancellationToken.None);
+
+        Assert.Empty(warnings);
+        var ropListNode = Find(nodes, "ROP list");
+        Assert.Equal(3, ropListNode.Children.Length);
+        Assert.Equal("8192", Find(ropListNode.Children[0].Children, "NewPosition").Value);
+        Assert.Equal(4, ropListNode.Children[0].Children.Length);
+
+        Assert.Equal(3, ropListNode.Children[1].Children.Length);
+        Assert.DoesNotContain(ropListNode.Children[1].Children, child => child.Name == "NewPosition");
+
+        Assert.StartsWith("RopModifyRecipients", ropListNode.Children[2].Value);
+    }
+
     // ---------------------------------------------------------------------------------------------
     // Hostile input hardening: unknown RopIds, known-but-unimplemented RopIds, and truncation must
     // never guess an operation boundary and must fall back to raw transactionally.
@@ -101,17 +152,20 @@ public sealed class RopSemanticParserTests
     [Fact]
     public void StopsAtKnownButUnimplementedRopIdWithoutGuessingFurtherOperationBoundaries()
     {
-        // RopSeekStream (0x2E) is a real, named RopId that none of the fixed-width catalog or the
-        // four self-contained variable-width decoder families implement, so bytes after it must never
-        // be interpreted as another operation.
-        byte[] ropList = [0x01, 0x00, 0x00, 0x2E, 0x00, 0x00, 0x01, 0x00];
+        // RopWritePerUserInformation request (0x64) is a real, named RopId that is deliberately left
+        // unimplemented in both the fixed-width catalog and all four self-contained variable-width
+        // decoder families: its trailing ReplGuid field is present only when DataOffset == 0 AND the
+        // LogonId's originating RopLogon used LogonFlags.Private, state this stateless per-operation
+        // decoder does not have access to. Bytes after it must never be interpreted as another
+        // operation.
+        byte[] ropList = [0x01, 0x00, 0x00, 0x64, 0x00, 0x00, 0x01, 0x00];
         var buffer = Frame(ropList);
         var warnings = new List<string>();
         var nodes = RopBufferParser.Parse(buffer, 0, MapiDirection.Request, warnings, new MapiNodeBudget(), CancellationToken.None);
 
         var ropListNode = Find(nodes, "ROP list");
         Assert.Equal(2, ropListNode.Children.Length);
-        Assert.Equal("0x2E (RopSeekStream)", Find(ropListNode.Children[1].Children, "RopId").Value);
+        Assert.Equal("0x64 (RopWritePerUserInformation)", Find(ropListNode.Children[1].Children, "RopId").Value);
         Assert.Contains(
             warnings,
             w => w.Contains("no fixed-width request schema is implemented", StringComparison.Ordinal));
@@ -276,10 +330,10 @@ public sealed class RopSemanticParserTests
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
-    public void ImplementsExactlyFiftyRequestAndFiftyTwoResponseRopSchemas()
+    public void ImplementsExactlyFiftyOneRequestAndFiftyThreeResponseRopSchemas()
     {
-        Assert.Equal(50, RopSemanticParser.RequestSchemas.Count);
-        Assert.Equal(52, RopSemanticParser.ResponseSchemas.Count);
+        Assert.Equal(51, RopSemanticParser.RequestSchemas.Count);
+        Assert.Equal(53, RopSemanticParser.ResponseSchemas.Count);
 
         // No RopId is accidentally implemented for both directions under a different assumption, and
         // no two entries in the same direction resolve to the same ROP name (a transcription guard).

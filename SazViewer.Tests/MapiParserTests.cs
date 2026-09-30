@@ -59,12 +59,13 @@ public sealed class MapiParserTests
     [Fact]
     public void ParsesExecuteExtendedBufferRopFramingAndHandles()
     {
-        // 0x2E (RopSeekStream) is a real, named RopId that is intentionally implemented by none of
-        // the fixed schema catalog or the four self-contained variable-width decoder families, so it
-        // reliably exercises the "unimplemented RopId retained as raw" framing path exercised by this
-        // test (which is about extended buffer/handle table framing, not about decoding RopSeekStream
-        // itself).
-        byte[] ropPayload = [5, 0, 0x2E, 0, 0, 0x44, 0x33, 0x22, 0x11];
+        // 0x64 (RopWritePerUserInformation) request is a real, named RopId that is intentionally
+        // implemented by none of the fixed schema catalog or the four self-contained variable-width
+        // decoder families (its trailing ReplGuid depends on state from a different, earlier
+        // operation), so it reliably exercises the "unimplemented RopId retained as raw" framing path
+        // exercised by this test (which is about extended buffer/handle table framing, not about
+        // decoding RopWritePerUserInformation itself).
+        byte[] ropPayload = [5, 0, 0x64, 0, 0, 0x44, 0x33, 0x22, 0x11];
         var extended = ExtendedBuffer(ropPayload, flags: 0x0004);
         using var requestBody = new MemoryStream();
         WriteUInt32(requestBody, 0);
@@ -82,7 +83,7 @@ public sealed class MapiParserTests
 
         var request = Assert.Single(new SazParser().Parse(saz).Sessions).Mapi!.Request!;
 
-        Assert.Equal("RopSeekStream", Find(request.Root, "RopId").Value!.Split('(')[1].TrimEnd(')'));
+        Assert.Equal("RopWritePerUserInformation", Find(request.Root, "RopId").Value!.Split('(')[1].TrimEnd(')'));
         Assert.Equal("0x11223344", Find(request.Root, "[0]").Value);
         Assert.Contains(request.Warnings, warning => warning.Contains("individual ROP fields", StringComparison.Ordinal));
     }

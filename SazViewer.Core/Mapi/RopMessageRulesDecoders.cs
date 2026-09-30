@@ -534,16 +534,20 @@ internal static class RopMessageRulesDecoders
     /// unlike <c>NspiPropertyParser.ParseRow</c>, whose <c>includePresence:true</c> behavior is
     /// specific to NSPI's row format and is not reusable here). Each value is parsed with
     /// <see cref="MapiWireWidthContext.RopBuffer"/>, so an embedded PtypBinary value reads its
-    /// 16-bit ROP-buffer byte count rather than NSPI/extended-rule's 32-bit form.
+    /// 16-bit ROP-buffer byte count rather than NSPI/extended-rule's 32-bit form. Internal (rather
+    /// than private) because <see cref="RopPropertyStoreDecoders"/> reuses it verbatim for
+    /// RopGetReceiveFolderTable's fixed-column response rows, which share this exact StandardPropertyRow/
+    /// FlaggedPropertyRow shape against a different, but equally protocol-fixed, column list.
     /// </summary>
-    private static MapiNode ParseRopPropertyRow(
+    internal static MapiNode ParseRopPropertyRow(
         ref MapiReader reader,
         string name,
         ImmutableArray<(ushort Type, ushort Id)> columns,
         int columnCount,
         MapiNodeBudget budget,
         int depth,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        uint? codePage = null)
     {
         budget.Claim(depth);
         var start = reader.Position;
@@ -613,7 +617,7 @@ internal static class RopMessageRulesDecoders
                     budget,
                     depth + 1,
                     includePresence: false,
-                    codePage: null,
+                    codePage: codePage,
                     addressBookSemantics: false,
                     warnings: null,
                     context: MapiWireWidthContext.RopBuffer));

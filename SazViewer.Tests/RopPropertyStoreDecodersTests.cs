@@ -30,8 +30,8 @@ public sealed class RopPropertyStoreDecodersTests
 
     private static readonly byte[] ExpectedResponseRopIds =
     [
-        0x08, 0x09, 0x27, 0x2B, 0x2C, 0x2D, 0x39, 0x3A, 0x42, 0x45, 0x49, 0x4A, 0x50, 0x55, 0x56,
-        0x5F, 0x60, 0x63, 0x67, 0x6F, 0x79, 0x7A, 0x90, 0xA3, 0xF9
+        0x08, 0x09, 0x0A, 0x0B, 0x27, 0x2B, 0x2C, 0x2D, 0x39, 0x3A, 0x42, 0x45, 0x49, 0x4A, 0x50,
+        0x55, 0x56, 0x5F, 0x60, 0x63, 0x67, 0x68, 0x6F, 0x79, 0x7A, 0x90, 0xA3, 0xF9
     ];
 
     [Fact]
@@ -47,9 +47,9 @@ public sealed class RopPropertyStoreDecodersTests
     }
 
     [Fact]
-    public void SupportsReportsExactlyTwentyFiveResponseRopIds()
+    public void SupportsReportsExactlyTwentyEightResponseRopIds()
     {
-        Assert.Equal(25, ExpectedResponseRopIds.Length);
+        Assert.Equal(28, ExpectedResponseRopIds.Length);
         foreach (var ropId in ExpectedResponseRopIds)
         {
             Assert.True(RopPropertyStoreDecoders.Supports(MapiDirection.Response, ropId), $"Expected response 0x{ropId:X2} to be supported.");
@@ -686,6 +686,82 @@ public sealed class RopPropertyStoreDecodersTests
         var (node, _) = ParseOne(bytes, MapiDirection.Response);
         Assert.Equal(bytes.Length, LastPosition);
         Assert.Single(Find(node.Children, "PropertyProblems").Children);
+    }
+
+    [Theory]
+    [InlineData(0x0A)] // RopSetProperties
+    [InlineData(0x0B)] // RopDeleteProperties
+    public void ResponseSetOrDeletePropertiesParsesExactBoundaryAndProvesFollowingOperationProgress(byte ropId)
+    {
+        // [MS-OXCROPS] 2.2.8.6.2/2.2.8.8.2: identical ReturnValue-gated PropertyProblem array shape to
+        // RopSetPropertiesNoReplicate/RopDeletePropertiesNoReplicate (0x79/0x7A) above.
+        var opBytes = Concat([ropId, 0x00], Le((uint)0), Le((ushort)2), PropertyProblem(0, 0x0003, 5, 0x80000001), PropertyProblem(1, 0x001F, 6, 0x80000001));
+        var sentinel = new byte[] { 0x16, 0x02, 0x00, 0x00, 0x00, 0x00 }; // RopGetStatus response: success, universal 6 bytes
+        var (node, _) = ParseOne(Concat(opBytes, sentinel), MapiDirection.Response);
+        Assert.Equal(opBytes.Length, LastPosition);
+        Assert.Equal(2, Find(node.Children, "PropertyProblems").Children.Length);
+    }
+
+    [Theory]
+    [InlineData(0x0A)]
+    [InlineData(0x0B)]
+    public void ResponseSetOrDeletePropertiesFailureStaysAtSixBytesWithoutPropertyProblems(byte ropId)
+    {
+        var opBytes = Concat([ropId, 0x00], Le((uint)0x80000001));
+        var sentinel = new byte[] { 0xEE, 0xFF };
+        var (node, _) = ParseOne(Concat(opBytes, sentinel), MapiDirection.Response);
+        Assert.Equal(opBytes.Length, LastPosition);
+        Assert.False(node.Children.Any(c => c.Name == "PropertyProblems"));
+    }
+
+    [Fact]
+    public void ResponseGetReceiveFolderTableParsesMultipleRowsExactBoundaryAndProvesFollowingOperationProgress()
+    {
+        // [MS-OXCSTOR] 2.2.3.4.2: RowCount(UInt32) followed by that many fixed-column PropertyRow
+        // structures against PidTagFolderId(PtypInteger64)/PidTagMessageClass(PtypString8)/
+        // PidTagLastModificationTime(PtypTime) - a protocol-fixed column list, not one supplied by an
+        // earlier RopSetColumns (unlike RopQueryRows/RopFindRow/RopExpandRow, which remain unsupported).
+        var row1 = Concat([0x00], Le((ulong)1), Encoding.ASCII.GetBytes("IPM.Note"), [0x00], Le((ulong)0x0102030405060708));
+        var row2 = Concat([0x00], Le((ulong)2), Encoding.ASCII.GetBytes("IPM.Appointment"), [0x00], Le((ulong)0x0807060504030201));
+        var opBytes = Concat([0x68, 0x00], Le((uint)0), Le((uint)2), row1, row2);
+        var sentinel = new byte[] { 0x16, 0x02, 0x00, 0x00, 0x00, 0x00 }; // RopGetStatus response sentinel
+        var (node, _) = ParseOne(Concat(opBytes, sentinel), MapiDirection.Response);
+        Assert.Equal(opBytes.Length, LastPosition);
+        var rows = Find(node.Children, "Rows");
+        Assert.Equal(2, rows.Children.Length);
+        var firstMessageClass = Find(rows.Children[0].Children[2].Children, "Value");
+        var secondMessageClass = Find(rows.Children[1].Children[2].Children, "Value");
+        Assert.Equal("IPM.Note", firstMessageClass.Value);
+        Assert.Equal("IPM.Appointment", secondMessageClass.Value);
+        Assert.NotEqual(MapiNodeKind.Raw, firstMessageClass.Kind);
+        Assert.NotEqual(MapiNodeKind.Raw, secondMessageClass.Kind);
+    }
+
+    [Fact]
+    public void ResponseGetReceiveFolderTableFailureStaysAtSixBytesWithoutRowCount()
+    {
+        var opBytes = Concat([0x68, 0x00], Le((uint)0x80000001));
+        var sentinel = new byte[] { 0xEE, 0xFF };
+        var (node, _) = ParseOne(Concat(opBytes, sentinel), MapiDirection.Response);
+        Assert.Equal(opBytes.Length, LastPosition);
+        Assert.False(node.Children.Any(c => c.Name is "Rows" or "RowCount"));
+    }
+
+    [Fact]
+    public void ResponseGetReceiveFolderTableThrowsWhenRowCountExceedsCollectionLimit()
+    {
+        // RowCount claims ~4 billion rows with no row bytes present - a hostile "claim more than
+        // exists" shape that must be rejected by ReadCount32's own bounds check rather than
+        // attempting to allocate an oversized builder or looping unbounded.
+        var bytes = Concat([0x68, 0x00], Le((uint)0), Le((uint)0xFFFFFFFF));
+        AssertThrowsParse(bytes, MapiDirection.Response);
+    }
+
+    [Fact]
+    public void ResponseGetReceiveFolderTableThrowsWhenRowTruncated()
+    {
+        var bytes = Concat([0x68, 0x00], Le((uint)0), Le((uint)1), [0x00], Le((ulong)1)); // MessageClass/LastModificationTime missing
+        AssertThrowsParse(bytes, MapiDirection.Response);
     }
 
     [Fact]

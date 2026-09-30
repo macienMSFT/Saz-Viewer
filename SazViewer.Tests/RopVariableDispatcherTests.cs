@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text;
 using SazViewer.Core;
 
 namespace SazViewer.Tests;
@@ -102,13 +103,16 @@ public sealed class RopVariableDispatcherTests
     {
         // Pinned totals cross-checked by hand against each family's own SupportedRequestRopIds /
         // SupportedResponseRopIds (or RequestRopIds / ResponseRopIds) sets at integration time:
-        // Folder 19/27, PropertyStore 26/25, MessageRules 14/13, FastTransfer 16/7 = 75/72.
+        // Folder 19/27, PropertyStore 26/28, MessageRules 14/13, FastTransfer 16/7 = 75/75.
+        // (PropertyStore's response set grew from 25 to 28 when RopSetProperties (0x0A),
+        // RopDeleteProperties (0x0B), and RopGetReceiveFolderTable (0x68) responses were added as
+        // deterministic, non-state-dependent semantic decoders.)
         // Combined with the two disjointness tests above, this pins the exact reachable surface so an
         // accidental removal (not just an accidental duplicate) is also caught.
         var requestCount = Enumerable.Range(0, 256).Count(v => RopVariableDispatcher.Supports(MapiDirection.Request, (byte)v));
         var responseCount = Enumerable.Range(0, 256).Count(v => RopVariableDispatcher.Supports(MapiDirection.Response, (byte)v));
         Assert.Equal(75, requestCount);
-        Assert.Equal(72, responseCount);
+        Assert.Equal(75, responseCount);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -189,6 +193,61 @@ public sealed class RopVariableDispatcherTests
         Assert.Single(ropListNode.Children);
         Assert.Equal("Operation 0 (malformed)", ropListNode.Children[0].Name);
         Assert.Contains(warnings, w => w.Contains("could not be parsed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ParsesAMixedResponseOperationListAcrossPropertyStoreAndFolderFamiliesWithExactBoundaries()
+    {
+        // Operation 0: RopSetProperties response (0x0A, RopPropertyStoreDecoders) - success, 1 problem.
+        var propertyProblem = Concat(Le((ushort)0), Le((ushort)0x0003), Le((ushort)7), Le((uint)0x80000001));
+        var op0 = Concat([0x0A, 0x00], Le((uint)0), Le((ushort)1), propertyProblem);
+        // Operation 1: RopGetReceiveFolderTable response (0x68, RopPropertyStoreDecoders) - success, 1 row.
+        var row = Concat(
+            [0x00], // PropertyRow.Flag: all values present
+            Le((ulong)0x1122334455667788), // PidTagFolderId (PtypInteger64)
+            Encoding.ASCII.GetBytes("IPM.Note"), [0x00], // PidTagMessageClass (PtypString8)
+            Le((ulong)0x0102030405060708)); // PidTagLastModificationTime (PtypTime)
+        var op1 = Concat([0x68, 0x01], Le((uint)0), Le((uint)1), row);
+        // Operation 2: RopOpenFolder response (0x02, RopFolderTableDecoders) - success, not ghosted.
+        var op2 = Concat([0x02, 0x02], Le((uint)0), [0x00, 0x00]);
+
+        var ropList = Concat(op0, op1, op2);
+        var buffer = Frame(ropList, 0, 0, 0);
+        var warnings = new List<string>();
+        var nodes = RopBufferParser.Parse(buffer, 0, MapiDirection.Response, warnings, new MapiNodeBudget(), CancellationToken.None);
+
+        Assert.Empty(warnings);
+        var ropListNode = Find(nodes, "ROP list");
+        Assert.Equal(3, ropListNode.Children.Length);
+        Assert.StartsWith("RopSetProperties", ropListNode.Children[0].Value);
+        Assert.Equal(op0.Length, ropListNode.Children[0].Length);
+        Assert.Single(Find(ropListNode.Children[0].Children, "PropertyProblems").Children);
+        Assert.StartsWith("RopGetReceiveFolderTable", ropListNode.Children[1].Value);
+        Assert.Equal(op1.Length, ropListNode.Children[1].Length);
+        Assert.Single(Find(ropListNode.Children[1].Children, "Rows").Children);
+        Assert.StartsWith("RopOpenFolder", ropListNode.Children[2].Value);
+        Assert.Equal(op2.Length, ropListNode.Children[2].Length);
+    }
+
+    [Fact]
+    public void StopsAtATruncatedRopGetReceiveFolderTableRowInsideAMixedFamilyListWithoutGuessingFurtherBoundaries()
+    {
+        // Operation 0: a complete RopSetProperties response (0x0A, RopPropertyStoreDecoders), success, no problems.
+        var op0 = Concat([0x0A, 0x00], Le((uint)0), Le((ushort)0));
+        // Operation 1: RopGetReceiveFolderTable response (0x68) claims RowCount=1 but the row bytes are
+        // entirely missing - a classic hostile-input "claim more than exists" truncation.
+        byte[] truncatedOp1 = [0x68, 0x01, .. Le((uint)0), .. Le((uint)1)];
+
+        var ropList = Concat(op0, truncatedOp1);
+        var buffer = Frame(ropList, 0, 0);
+        var warnings = new List<string>();
+        var nodes = RopBufferParser.Parse(buffer, 0, MapiDirection.Response, warnings, new MapiNodeBudget(), CancellationToken.None);
+
+        var ropListNode = Find(nodes, "ROP list");
+        Assert.Equal(2, ropListNode.Children.Length);
+        Assert.StartsWith("RopSetProperties", ropListNode.Children[0].Value);
+        Assert.Equal("Operation 1 (malformed)", ropListNode.Children[1].Name);
+        Assert.Contains(warnings, w => w.Contains("could not be parsed", StringComparison.Ordinal) && w.Contains("no further operations", StringComparison.Ordinal));
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -311,6 +370,13 @@ public sealed class RopVariableDispatcherTests
     {
         var bytes = new byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
+        return bytes;
+    }
+
+    private static byte[] Le(ulong value)
+    {
+        var bytes = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
         return bytes;
     }
 
