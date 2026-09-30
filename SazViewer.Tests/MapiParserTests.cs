@@ -707,6 +707,31 @@ public sealed class MapiParserTests
 
         Assert.True(response.Complete);
         Assert.Equal("é", Find(response.Root, "PropertyValue").Value);
+        Assert.Contains("PidTagDisplayName", Find(response.Root, "PropertyId").Value);
+    }
+
+    [Fact]
+    public void IncludesTheCompleteUpstreamPropertyNameDictionaries()
+    {
+        Assert.Equal(572, MapiPropertyNames.PidTagSymbolCount);
+        Assert.Equal(547, MapiPropertyNames.PidTagIdCount);
+        Assert.Equal(365, MapiPropertyNames.PidLidSymbolCount);
+        Assert.Equal(365, MapiPropertyNames.PidLidIdCount);
+        Assert.Equal(131, MapiPropertyNames.PidNameSymbolCount);
+        Assert.Equal(131, MapiPropertyNames.PidNameIdCount);
+        Assert.Equal("PidTagDisplayName", MapiPropertyNames.PidTag(0x3001));
+        Assert.Contains("PidTagMessageSize", MapiPropertyNames.PidTag(0x0E08));
+        Assert.Contains("PidTagMessageSizeExtended", MapiPropertyNames.PidTag(0x0E08));
+        Assert.Equal(
+            "PidLidAddressBookProviderArrayType",
+            MapiPropertyNames.PidLid("PSETID_Address", 0x8029));
+        Assert.Equal(
+            "PidNameAcceptLanguage",
+            MapiPropertyNames.PidName("PS_INTERNET_HEADERS", "Accept-Language"));
+        Assert.Equal(
+            "PSETID_Address",
+            MapiPropertyNames.PropertySetName(Guid.Parse("00062004-0000-0000-C000-000000000046")));
+        Assert.Null(MapiPropertyNames.PidTag(0xFFFF));
     }
 
     [Fact]

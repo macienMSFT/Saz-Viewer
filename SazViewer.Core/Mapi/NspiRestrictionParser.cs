@@ -139,7 +139,7 @@ internal static class NspiRestrictionParser
             name,
             offset,
             4,
-            $"0x{value:X8} (id 0x{value >> 16:X4}, {NspiPropertyParser.PropertyTypeName((ushort)value)})",
+            $"0x{value:X8} (id {MapiPropertyNames.FormatPidTag((ushort)(value >> 16))}, {NspiPropertyParser.PropertyTypeName((ushort)value)})",
             budget,
             depth);
         return value;

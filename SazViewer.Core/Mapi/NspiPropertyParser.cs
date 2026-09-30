@@ -44,7 +44,7 @@ internal static class NspiPropertyParser
         var id = reader.ReadUInt16($"{name}.PropertyId");
         var children = ImmutableArray.CreateBuilder<MapiNode>();
         AddField(children, "PropertyType", typeOffset, 2, PropertyTypeName(type), budget, depth);
-        AddField(children, "PropertyId", idOffset, 2, $"0x{id:X4}", budget, depth);
+        AddField(children, "PropertyId", idOffset, 2, MapiPropertyNames.FormatPidTag(id), budget, depth);
         children.Add(ParseValue(
             ref reader,
             type,
@@ -113,7 +113,7 @@ internal static class NspiPropertyParser
                         MapiNodeKind.Property,
                         valueStart,
                         reader.Position - valueStart,
-                        $"0x{propertyId:X4}:{declaredType:X4}",
+                        $"{MapiPropertyNames.FormatPidTag(propertyId)}:{declaredType:X4}",
                         valueChildren.ToImmutable()));
                     continue;
                 }
@@ -140,7 +140,7 @@ internal static class NspiPropertyParser
                 MapiNodeKind.Property,
                 valueStart,
                 reader.Position - valueStart,
-                $"0x{propertyId:X4}:{actualType:X4}",
+                $"{MapiPropertyNames.FormatPidTag(propertyId)}:{actualType:X4}",
                 valueChildren.ToImmutable()));
         }
         return new MapiNode(name, MapiNodeKind.Array, start, reader.Position - start, null, children.ToImmutable());
@@ -327,7 +327,7 @@ internal static class NspiPropertyParser
         var id = reader.ReadUInt16($"{name}.PropertyId");
         var children = ImmutableArray.CreateBuilder<MapiNode>();
         AddField(children, "PropertyType", typeOffset, 2, PropertyTypeName(embeddedType), budget, depth);
-        AddField(children, "PropertyId", idOffset, 2, $"0x{id:X4}", budget, depth);
+        AddField(children, "PropertyId", idOffset, 2, MapiPropertyNames.FormatPidTag(id), budget, depth);
         var valueType = valueTypeOverride ?? embeddedType;
         children.Add(ParseValue(
             ref reader,

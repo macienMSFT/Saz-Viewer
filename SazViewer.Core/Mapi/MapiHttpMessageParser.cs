@@ -815,7 +815,7 @@ internal static class MapiHttpMessageParser
     {
         var propertyId = (ushort)(tag >> 16);
         var propertyType = (ushort)tag;
-        return $"0x{tag:X8} (id 0x{propertyId:X4}, {PropertyTypeName(propertyType)})";
+        return $"0x{tag:X8} (id {MapiPropertyNames.FormatPidTag(propertyId)}, {PropertyTypeName(propertyType)})";
     }
 
     private static string PropertyTypeName(ushort type) => type switch

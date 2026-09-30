@@ -112,6 +112,19 @@
       "count": 12,
       "of": 12,
       "note": "Includes SubObjectRestriction, which exists upstream but is omitted from its central dispatcher."
+    },
+    "pidTagPropertyNames": {
+      "count": 572,
+      "of": 572,
+      "uniqueIds": 547
+    },
+    "pidLidPropertyNames": {
+      "count": 365,
+      "of": 365
+    },
+    "pidNamePropertyNames": {
+      "count": 131,
+      "of": 131
     }
   },
   "namedMethodGaps": {
@@ -120,11 +133,10 @@
   },
   "remainingSemanticAreas": [
     "All 128 request and 131 response individual ROP dispatchers",
-    "PtypRuleAction and the 572 PidTag property-name map",
+    "PtypRuleAction",
     "All 40 auxiliary payload semantic layouts",
     "FastTransfer and ICS lexical/syntactical grammars and partial-stream reconstruction",
-    "Capture-local logon, table-column, notification, and handle correlation beyond framing",
-    "365 LID and 131 string-named property mappings"
+    "Capture-local logon, table-column, notification, and handle correlation beyond framing"
   ],
   "safetyDivergences": [
     "Unknown operations, properties, restrictions, and auxiliary blocks are retained as bounded offset/length raw nodes with warnings.",
