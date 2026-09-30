@@ -70,7 +70,7 @@ internal static class ExtendedBufferParser
             {
                 var decodedChildren = parseRops
                     ? RopBufferParser.Parse(decoded, transmittedOffset, direction, warnings, budget, cancellationToken)
-                    : ParseAuxiliary(decoded, transmittedOffset, warnings, budget, cancellationToken);
+                    : AuxiliaryPayloadParser.Parse(decoded, transmittedOffset, warnings, budget, cancellationToken);
                 children.Add(new MapiNode(
                     parseRops ? "ROP payload" : "Auxiliary payload",
                     MapiNodeKind.Structure,
@@ -256,52 +256,6 @@ internal static class ExtendedBufferParser
         return true;
     }
 
-    private static ImmutableArray<MapiNode> ParseAuxiliary(
-        ReadOnlySpan<byte> decoded,
-        long offset,
-        List<string> warnings,
-        MapiNodeBudget budget,
-        CancellationToken cancellationToken)
-    {
-        var result = ImmutableArray.CreateBuilder<MapiNode>();
-        var reader = new MapiReader(decoded, cancellationToken, checked((int)offset));
-        var index = 0;
-        while (!reader.End)
-        {
-            var start = reader.Position;
-            if (reader.Remaining < 4)
-            {
-                warnings.Add($"Auxiliary payload ends with {reader.Remaining} unframed bytes.");
-                result.Add(RawNode("Trailing auxiliary bytes", reader.ReadRemaining("auxiliary tail"), start, budget));
-                break;
-            }
-            var size = reader.ReadUInt16("AUX_HEADER.Size");
-            var version = reader.ReadByte("AUX_HEADER.Version");
-            var type = reader.ReadByte("AUX_HEADER.Type");
-            if (size < 4 || size - 4 > reader.Remaining)
-            {
-                warnings.Add($"Auxiliary block {index} has invalid size {size}.");
-                result.Add(RawNode("Malformed auxiliary block", reader.ReadRemaining("malformed auxiliary"), start, budget));
-                break;
-            }
-            var payload = reader.ReadBytes(size - 4, "Auxiliary payload");
-            var children = ImmutableArray.CreateBuilder<MapiNode>();
-            AddField(children, "Version", start + 2, 1, version.ToString(), budget);
-            AddField(children, "Type", start + 3, 1, AuxiliaryTypeName(version, type), budget);
-            children.Add(RawNode("Payload", payload, start + 4, budget));
-            budget.Claim(0);
-            result.Add(new MapiNode(
-                $"Auxiliary block {index}",
-                MapiNodeKind.Structure,
-                start,
-                size,
-                null,
-                children.ToImmutable()));
-            index++;
-        }
-        return result.ToImmutable();
-    }
-
     internal static MapiNode RawNode(
         string name,
         ReadOnlySpan<byte> bytes,
@@ -338,23 +292,4 @@ internal static class ExtendedBufferParser
         if ((flags & Last) != 0) names.Add("Last");
         return $"0x{flags:X4}" + (names.Count == 0 ? string.Empty : $" ({string.Join(", ", names)})");
     }
-
-    private static string AuxiliaryTypeName(byte version, byte type) =>
-        (version, type) switch
-        {
-            (1, 0x01) => "0x01 PERF_REQUESTID",
-            (1, 0x02) => "0x02 PERF_CLIENTINFO",
-            (1, 0x03) => "0x03 PERF_SERVERINFO",
-            (1, 0x04) => "0x04 PERF_SESSIONINFO",
-            (1, 0x0A) => "0x0A CLIENT_CONTROL",
-            (1, 0x16) => "0x16 OSVERSIONINFO",
-            (1, 0x17) => "0x17 EXORGINFO",
-            (1, 0x18) => "0x18 PERF_ACCOUNTINFO",
-            (1, 0x48) => "0x48 ENDPOINT_CAPABILITIES",
-            (1, 0x49) => "0x49 EXCEPTION_TRACE",
-            (1, 0x4A) => "0x4A CLIENT_CONNECTION_INFO",
-            (1, 0x4B) => "0x4B SERVER_SESSION_INFO",
-            (1, 0x4E) => "0x4E PROTOCOL_DEVICE_IDENTIFICATION",
-            _ => $"0x{type:X2} (version {version})"
-        };
 }

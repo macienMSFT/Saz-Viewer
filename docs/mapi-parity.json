@@ -92,17 +92,20 @@
     "ropListAndHandleTableFraming": true,
     "individualRopSemanticDispatch": {
       "request": {
-        "count": 0,
+        "count": 50,
         "of": 128
       },
       "response": {
-        "count": 0,
+        "count": 52,
         "of": 131
       }
     },
     "auxiliaryPayloadSemanticDispatch": {
-      "count": 0,
-      "of": 40
+      "count": 40,
+      "of": 40,
+      "additionalMsOxcrpcLayouts": [
+        "AUX_TYPE_SERVER_CAPABILITIES"
+      ]
     },
     "propertyValueSemanticDispatch": {
       "count": 32,
@@ -147,9 +150,8 @@
     "response": []
   },
   "remainingSemanticAreas": [
-    "All 128 request and 131 response individual ROP dispatchers",
+    "Remaining 78 request and 79 response individual ROP dispatcher cases",
     "Nested EntryID semantic fields for OP_MOVE, OP_COPY, OP_REPLY, and OP_OOF_REPLY rule actions",
-    "All 40 auxiliary payload semantic layouts",
     "FastTransfer and ICS lexical/syntactical grammars and partial-stream reconstruction",
     "Capture-local logon, table-column, notification, and handle correlation beyond framing"
   ],
@@ -158,6 +160,8 @@
     "Malformed XOR/compression/framing is transactional and never exposed as successful decoded data.",
     "Extended-rule EntryID sizes and recipient/property counts use the 32-bit widths required by MS-OXORULE rather than the pinned upstream parser's narrower reads.",
     "All declared lengths, counts, strings, allocations, recursion, nodes, and payloads are explicitly bounded.",
-    "Parser state is per capture rather than upstream static global state."
+    "Parser state is per capture rather than upstream static global state.",
+    "Auxiliary offset-referenced trailer fields (e.g. MachineName/UserName/ServerDN/ProcessName/annotation strings) are resolved via bounds-checked random-access reads from validated offsets rather than upstream's unchecked sequential pointer arithmetic; out-of-range offsets warn and omit the field, while zero offsets represent absent fields and are omitted without warning.",
+    "AUX_EXCEPTION_TRACE is decoded into an \"ExceptionMessage\" array of individual ExceptionMessage[0..N] line fields split on CR/LF from the bounded remainder after the fixed RopIndex header, rather than upstream's raw single-string dump; this is a readability enhancement and does not change the underlying bytes considered or bounds enforced."
   ]
 }

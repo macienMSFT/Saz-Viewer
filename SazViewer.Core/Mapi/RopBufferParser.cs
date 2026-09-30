@@ -27,45 +27,36 @@ internal static class RopBufferParser
         if (ropSize < 2 || ropSize - 2 > reader.Remaining)
         {
             warnings.Add($"ROP buffer declares RopSize {ropSize}, which is outside the decoded payload.");
+            var malformedOffset = reader.Position;
             nodes.Add(ExtendedBufferParser.RawNode(
                 "Malformed ROP payload",
                 reader.ReadRemaining("malformed ROP payload"),
-                reader.Position,
+                malformedOffset,
                 budget));
             return nodes.ToImmutable();
         }
 
         var listOffset = reader.Position;
         var ropList = reader.ReadBytes(ropSize - 2, "RopsList");
+        var handleReferences = new List<RopHandleReference>();
         if (!ropList.IsEmpty)
         {
-            var operation = ropList[0];
-            var operationChildren = ImmutableArray.CreateBuilder<MapiNode>();
-            ExtendedBufferParser.AddField(
-                operationChildren,
-                "RopId",
+            var operations = RopSemanticParser.ParseOperations(
+                ropList,
                 listOffset,
-                1,
-                $"0x{operation:X2} ({Name(operation)})",
-                budget);
-            if (ropList.Length > 1)
-            {
-                operationChildren.Add(ExtendedBufferParser.RawNode(
-                    "Operation bytes",
-                    ropList[1..],
-                    listOffset + 1,
-                    budget));
-            }
+                direction,
+                warnings,
+                budget,
+                handleReferences,
+                cancellationToken);
             budget.Claim(0);
             nodes.Add(new MapiNode(
                 "ROP list",
                 MapiNodeKind.Array,
                 listOffset,
                 ropList.Length,
-                $"{direction}; semantic operation boundaries are not decoded",
-                operationChildren.ToImmutable()));
-            warnings.Add(
-                $"ROP list begins with {Name(operation)} (0x{operation:X2}); individual ROP fields and additional operation boundaries are retained as raw.");
+                direction.ToString(),
+                operations));
         }
 
         var handlesOffset = reader.Position;
@@ -97,8 +88,28 @@ internal static class RopBufferParser
             reader.Position - handlesOffset,
             null,
             handles.ToImmutable()));
+
+        // Handle table preservation: the table above is parsed and emitted exactly as before; this
+        // pass only adds warnings when a decoded operation's handle-index field pointed outside the
+        // table's actual entry count. It never rewrites or reorders the table itself.
+        foreach (var reference in handleReferences)
+        {
+            if (reference.Index >= index)
+            {
+                warnings.Add(
+                    $"ROP list operation {reference.OperationIndex} field {reference.FieldName} references " +
+                    $"server object handle index {reference.Index}, but the handle table has only {index} entr{(index == 1 ? "y" : "ies")}.");
+            }
+        }
+
         return nodes.ToImmutable();
     }
+
+    /// <summary>
+    /// True when <paramref name="value"/> maps to a named RopId, whether or not a fixed-width schema
+    /// for it has been implemented in <see cref="RopSemanticParser"/>.
+    /// </summary>
+    internal static bool IsKnownRopId(byte value) => Name(value) != "Unknown ROP";
 
     internal static string Name(byte value) => value switch
     {
