@@ -114,7 +114,8 @@ internal static class RopSemanticParser
             var opStartAbsolute = reader.Position;
             var ropId = reader.PeekByte("RopId");
 
-            if (!schemas.TryGetValue(ropId, out var schema))
+            var hasFixedSchema = schemas.TryGetValue(ropId, out var schema);
+            if (!hasFixedSchema && !RopVariableDispatcher.Supports(direction, ropId))
             {
                 // A fresh, throwaway budget guarantees this terminal fallback node can always be
                 // constructed - even if `budget` itself is already exhausted (e.g. by many prior
@@ -156,7 +157,15 @@ internal static class RopSemanticParser
 
             try
             {
-                var node = ParseOperation(ref reader, index, schema, handleReferences, budget);
+                var node = hasFixedSchema
+                    ? ParseOperation(ref reader, index, schema!, handleReferences, budget)
+                    : RopVariableDispatcher.Parse(
+                        ref reader,
+                        index,
+                        direction,
+                        handleReferences,
+                        budget,
+                        cancellationToken);
                 if (reader.LocalPosition <= opStartLocal)
                 {
                     // Defensive: every schema consumes at least 3 bytes, so this should be unreachable.
