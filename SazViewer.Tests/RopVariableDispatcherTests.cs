@@ -1,0 +1,346 @@
+using System.Buffers.Binary;
+using SazViewer.Core;
+
+namespace SazViewer.Tests;
+
+/// <summary>
+/// Integration coverage for <see cref="RopVariableDispatcher"/> - the single routing point that picks
+/// among the four independently authored, self-contained family decoder modules
+/// (<see cref="RopFolderTableDecoders"/>, <see cref="RopPropertyStoreDecoders"/>,
+/// <see cref="RopMessageRulesDecoders"/>, <see cref="RopFastTransferDecoders"/>) for every RopId that
+/// <see cref="RopSemanticParser"/> has no fixed-width schema for.
+/// <para>
+/// These tests exercise the dispatcher at three depths: (1) its own <c>Supports</c> contract against
+/// every RopId/direction pair, cross-checked for overlap against both the other families and the
+/// fixed-schema catalog; (2) the real public entry point a production caller reaches
+/// (<see cref="RopBufferParser.Parse"/>), including multi-operation lists that mix operations from
+/// several families and malformed/truncated input; and (3) the full MAPI/HTTP message pipeline
+/// (<see cref="MapiHttpMessageParser.Parse"/> with a real <see cref="MapiCaptureContext"/>), proving
+/// the capture-local FastTransfer stream assembler and capture scope are threaded correctly end to
+/// end.
+/// </para>
+/// </summary>
+public sealed class RopVariableDispatcherTests
+{
+    // ---------------------------------------------------------------------------------------------
+    // Coverage / overlap invariants - the permanent regression guard for the four-family wiring.
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void SupportsIsExactlyTheUnionOfAllFourFamiliesForEveryByteAndDirection()
+    {
+        foreach (var direction in new[] { MapiDirection.Request, MapiDirection.Response })
+        {
+            for (var value = 0; value <= 0xFF; value++)
+            {
+                var ropId = (byte)value;
+                var expected =
+                    RopFolderTableDecoders.Supports(direction, ropId) ||
+                    RopPropertyStoreDecoders.Supports(direction, ropId) ||
+                    RopMessageRulesDecoders.Supports(direction, ropId) ||
+                    RopFastTransferDecoders.Supports(direction, ropId);
+                Assert.True(
+                    expected == RopVariableDispatcher.Supports(direction, ropId),
+                    $"RopVariableDispatcher.Supports disagrees with the family union for {direction} 0x{ropId:X2}.");
+            }
+        }
+    }
+
+    [Fact]
+    public void NoTwoFamiliesEverClaimTheSameRopIdAndDirection()
+    {
+        foreach (var direction in new[] { MapiDirection.Request, MapiDirection.Response })
+        {
+            for (var value = 0; value <= 0xFF; value++)
+            {
+                var ropId = (byte)value;
+                var claimants = new[]
+                {
+                    RopFolderTableDecoders.Supports(direction, ropId),
+                    RopPropertyStoreDecoders.Supports(direction, ropId),
+                    RopMessageRulesDecoders.Supports(direction, ropId),
+                    RopFastTransferDecoders.Supports(direction, ropId),
+                }.Count(supported => supported);
+                Assert.True(claimants <= 1, $"{direction} 0x{ropId:X2} is claimed by {claimants} of the four families.");
+            }
+        }
+    }
+
+    [Fact]
+    public void NoVariableFamilyEverShadowsAFixedWidthSchema()
+    {
+        // RopSemanticParser always prefers a fixed schema when one exists (see ParseOperations'
+        // hasFixedSchema check); a family claiming a RopId that already has one would be dead code
+        // that RopVariableDispatcherTests must catch immediately if ever introduced.
+        for (var value = 0; value <= 0xFF; value++)
+        {
+            var ropId = (byte)value;
+            if (RopSemanticParser.RequestSchemas.ContainsKey(ropId))
+            {
+                Assert.False(
+                    RopFolderTableDecoders.Supports(MapiDirection.Request, ropId) ||
+                    RopPropertyStoreDecoders.Supports(MapiDirection.Request, ropId) ||
+                    RopMessageRulesDecoders.Supports(MapiDirection.Request, ropId) ||
+                    RopFastTransferDecoders.Supports(MapiDirection.Request, ropId),
+                    $"Request 0x{ropId:X2} has both a fixed schema and a variable-family decoder.");
+            }
+
+            if (RopSemanticParser.ResponseSchemas.ContainsKey(ropId))
+            {
+                Assert.False(
+                    RopFolderTableDecoders.Supports(MapiDirection.Response, ropId) ||
+                    RopPropertyStoreDecoders.Supports(MapiDirection.Response, ropId) ||
+                    RopMessageRulesDecoders.Supports(MapiDirection.Response, ropId) ||
+                    RopFastTransferDecoders.Supports(MapiDirection.Response, ropId),
+                    $"Response 0x{ropId:X2} has both a fixed schema and a variable-family decoder.");
+            }
+        }
+    }
+
+    [Fact]
+    public void DispatcherSupportedCountsMatchThePinnedFourFamilyTotals()
+    {
+        // Pinned totals cross-checked by hand against each family's own SupportedRequestRopIds /
+        // SupportedResponseRopIds (or RequestRopIds / ResponseRopIds) sets at integration time:
+        // Folder 19/27, PropertyStore 26/25, MessageRules 14/13, FastTransfer 16/7 = 75/72.
+        // Combined with the two disjointness tests above, this pins the exact reachable surface so an
+        // accidental removal (not just an accidental duplicate) is also caught.
+        var requestCount = Enumerable.Range(0, 256).Count(v => RopVariableDispatcher.Supports(MapiDirection.Request, (byte)v));
+        var responseCount = Enumerable.Range(0, 256).Count(v => RopVariableDispatcher.Supports(MapiDirection.Response, (byte)v));
+        Assert.Equal(75, requestCount);
+        Assert.Equal(72, responseCount);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Multi-operation boundary parsing across families, through the real public entry point.
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ParsesAFourFamilyMixedRequestOperationListWithExactBoundaries()
+    {
+        // Operation 0: RopOpenFolder (0x02, RopFolderTableDecoders).
+        var op0 = Concat([0x02, 0x00, 0x00, 0x01], Le((ushort)0x0201), [0, 0, 0, 0, 0, 0], [0x00]);
+        // Operation 1: RopGetPropertiesAll (0x08, RopPropertyStoreDecoders).
+        var op1 = Concat([0x08, 0x00, 0x02], Le((ushort)0xFFFF), Le((ushort)0x0001));
+        // Operation 2: RopSetMessageStatus (0x20, RopMessageRulesDecoders).
+        var op2 = Concat([0x20, 0x00, 0x03], Le((ushort)0x0403), [0, 0, 0, 0, 0, 0], Le((uint)0x00000001), Le((uint)0x00000001));
+        // Operation 3: RopFastTransferDestinationConfigure (0x53, RopFastTransferDecoders).
+        var op3 = new byte[] { 0x53, 0x00, 0x04, 0x05, 0x01, 0x00 };
+
+        var ropList = Concat(op0, op1, op2, op3);
+        Assert.Equal(13, op0.Length);
+        Assert.Equal(7, op1.Length);
+        Assert.Equal(19, op2.Length);
+        Assert.Equal(6, op3.Length);
+
+        var buffer = Frame(ropList, 0, 0, 0, 0, 0, 0);
+        var warnings = new List<string>();
+        var nodes = RopBufferParser.Parse(buffer, 0, MapiDirection.Request, warnings, new MapiNodeBudget(), CancellationToken.None);
+
+        var ropListNode = Find(nodes, "ROP list");
+        Assert.Equal(4, ropListNode.Children.Length);
+        Assert.StartsWith("RopOpenFolder", ropListNode.Children[0].Value);
+        Assert.Equal(op0.Length, ropListNode.Children[0].Length);
+        Assert.StartsWith("RopGetPropertiesAll", ropListNode.Children[1].Value);
+        Assert.Equal(op1.Length, ropListNode.Children[1].Length);
+        Assert.StartsWith("RopSetMessageStatus", ropListNode.Children[2].Value);
+        Assert.Equal(op2.Length, ropListNode.Children[2].Length);
+        Assert.StartsWith("RopFastTransferDestinationConfigure", ropListNode.Children[3].Value);
+        Assert.Equal(op3.Length, ropListNode.Children[3].Length);
+    }
+
+    [Fact]
+    public void StopsAtAMalformedOperationInsideAMixedFamilyListWithoutGuessingFurtherBoundaries()
+    {
+        // Operation 0: a complete, valid RopOpenFolder (RopFolderTableDecoders).
+        var op0 = Concat([0x02, 0x00, 0x00, 0x01], Le((ushort)0x0201), [0, 0, 0, 0, 0, 0], [0x00]);
+        // Operation 1: RopGetPropertiesAll (RopPropertyStoreDecoders) truncated after InputHandleIndex
+        // - PropertySizeLimit and WantUnicode are entirely missing.
+        byte[] truncatedOp1 = [0x08, 0x00, 0x02];
+
+        var ropList = Concat(op0, truncatedOp1);
+        var buffer = Frame(ropList, 0, 0, 0);
+        var warnings = new List<string>();
+        var nodes = RopBufferParser.Parse(buffer, 0, MapiDirection.Request, warnings, new MapiNodeBudget(), CancellationToken.None);
+
+        var ropListNode = Find(nodes, "ROP list");
+        Assert.Equal(2, ropListNode.Children.Length);
+        Assert.StartsWith("RopOpenFolder", ropListNode.Children[0].Value);
+        Assert.Equal("Operation 1 (malformed)", ropListNode.Children[1].Name);
+        Assert.Empty(ropListNode.Children[1].Children);
+        Assert.Contains(warnings, w => w.Contains("could not be parsed", StringComparison.Ordinal) && w.Contains("no further operations", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void HostileOversizedCountThroughTheDispatcherIsCaughtAsMalformedNotAnUnhandledException()
+    {
+        // RopGetPropertiesSpecific (0x07, RopPropertyStoreDecoders) declares 0xFFFF property tags
+        // but the list ends immediately afterwards - a classic hostile-input "claim more than exists"
+        // shape. The dispatcher must never let this escape as anything other than a contained
+        // MapiParseException-driven "(malformed)" fallback; it must not throw an unrelated .NET
+        // exception (e.g. OutOfMemoryException/OverflowException) or hang.
+        byte[] ropList = [0x07, 0x00, 0x00, .. Le((ushort)0xFFFF), 0x00, 0x00, .. Le((ushort)0xFFFF)];
+        var buffer = Frame(ropList);
+        var warnings = new List<string>();
+
+        var nodes = RopBufferParser.Parse(buffer, 0, MapiDirection.Request, warnings, new MapiNodeBudget(), CancellationToken.None);
+
+        var ropListNode = Find(nodes, "ROP list");
+        Assert.Single(ropListNode.Children);
+        Assert.Equal("Operation 0 (malformed)", ropListNode.Children[0].Name);
+        Assert.Contains(warnings, w => w.Contains("could not be parsed", StringComparison.Ordinal));
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // FastTransfer capture-local reassembly, through the real dispatcher/buffer path.
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void JoinsAFastTransferValueSplitAcrossTwoOperationsInTheSameRopListWhenAnAssemblerIsSupplied()
+    {
+        var value = Enumerable.Range(0, 20).Select(i => (byte)i).ToArray();
+        var head = Concat(Le((ushort)0x0102), Le((ushort)0x1000), Le((uint)value.Length), value[..8]);
+        var tail = Concat(value[8..], Le(0x400D0003u));
+
+        var op0 = BuildFastTransferGetBufferResponse(handleIndex: 3, status: 0x0001, transferBuffer: head);
+        var op1 = BuildFastTransferGetBufferResponse(handleIndex: 3, status: 0x0003, transferBuffer: tail);
+        var buffer = Frame(Concat(op0, op1));
+
+        var assembler = new FastTransferStreamAssembler();
+        var scope = "dispatcher-join-scope";
+        var joinedWarnings = new List<string>();
+        var joined = RopBufferParser.Parse(
+            buffer, 0, MapiDirection.Response, joinedWarnings, new MapiNodeBudget(), CancellationToken.None, assembler, scope);
+
+        var joinedList = Find(joined, "ROP list");
+        var joinedOp0Buffer = Find(joinedList.Children[0].Children, "TransferBuffer");
+        var joinedOp1Buffer = Find(joinedList.Children[1].Children, "TransferBuffer");
+        Assert.Contains("ends inside a value", joinedOp0Buffer.Value);
+        Assert.DoesNotContain("ends inside a value", joinedOp1Buffer.Value);
+        Assert.Equal("PartialValueContinuation", joinedOp1Buffer.Children[0].Name);
+        Assert.Contains("value complete", joinedOp1Buffer.Children[0].Value);
+
+        var key = new FastTransferStreamKey(scope, MapiDirection.Response, 0, 3);
+        Assert.Equal(2, assembler.StateFor(key).BufferCount);
+
+        // Without a shared assembler, each buffer is lexed independently (FastTransferStreamState.Initial
+        // every time), so the second buffer's tail bytes can never be recognized as a continuation -
+        // proving the assembler/captureScope threading, not the lexer alone, is what joined the value
+        // above.
+        var standaloneWarnings = new List<string>();
+        var standalone = RopBufferParser.Parse(
+            buffer, 0, MapiDirection.Response, standaloneWarnings, new MapiNodeBudget(), CancellationToken.None);
+        var standaloneOp1Buffer = Find(Find(standalone, "ROP list").Children[1].Children, "TransferBuffer");
+        Assert.NotEqual("PartialValueContinuation", standaloneOp1Buffer.Children.Length > 0 ? standaloneOp1Buffer.Children[0].Name : null);
+    }
+
+    [Fact]
+    public void ThreadsTheCaptureLocalAssemblerAndScopeThroughTheFullMapiHttpMessagePipeline()
+    {
+        var value = Enumerable.Range(0, 20).Select(i => (byte)i).ToArray();
+        var head = Concat(Le((ushort)0x0102), Le((ushort)0x1000), Le((uint)value.Length), value[..8]);
+        var tail = Concat(value[8..], Le(0x400D0003u));
+
+        var op0 = BuildFastTransferGetBufferResponse(handleIndex: 3, status: 0x0001, transferBuffer: head);
+        var op1 = BuildFastTransferGetBufferResponse(handleIndex: 3, status: 0x0003, transferBuffer: tail);
+        var ropBuf = Concat(Le((ushort)(op0.Length + op1.Length + 2)), op0, op1);
+
+        // RPC_HEADER_EXT wrapper: Version(0)+Flags(0)+Size+SizeActual, uncompressed/unencoded.
+        var extendedBuffer = Concat(Le((ushort)0), Le((ushort)0), Le((ushort)ropBuf.Length), Le((ushort)ropBuf.Length), ropBuf);
+
+        // EXECUTE response body: Flags + RopBufferSize + RopOutputBuffer (the extended buffer above).
+        var executeBody = Concat(Le((uint)0), Le((uint)extendedBuffer.Length), extendedBuffer);
+
+        // Full MAPI/HTTP response: a blank additional-headers line, StatusCode, ErrorCode, then body.
+        var message = Concat([(byte)'\n'], Le((uint)0), Le((uint)0), executeBody);
+
+        var context = new MapiCaptureContext();
+        var warnings = new List<string>();
+        var scope = "full-pipeline-scope";
+        var root = MapiHttpMessageParser.Parse(
+            message, "Execute", MapiDirection.Response, context, warnings, new MapiNodeBudget(), CancellationToken.None,
+            out var parsedBytes, scope);
+
+        Assert.Equal(message.Length, parsedBytes);
+        // The synthetic buffer omits a server object handle table (irrelevant to this test) and its
+        // FastTransfer payload ends on an EndMessage marker, so a couple of benign informational
+        // warnings are expected; no warning here may indicate a parse failure.
+        Assert.DoesNotContain(warnings, w => w.Contains("could not be parsed", StringComparison.Ordinal));
+        Assert.DoesNotContain(warnings, w => w.Contains("malformed", StringComparison.OrdinalIgnoreCase));
+
+        var ropOutputBuffer = Find(root.Children, "RopOutputBuffer");
+        var extended = Find(ropOutputBuffer.Children, "Extended buffer 0");
+        var ropPayload = Find(extended.Children, "ROP payload");
+        var ropListNode = Find(ropPayload.Children, "ROP list");
+        var op1Buffer = Find(ropListNode.Children[1].Children, "TransferBuffer");
+
+        Assert.Equal("PartialValueContinuation", op1Buffer.Children[0].Name);
+        Assert.Contains("value complete", op1Buffer.Children[0].Value);
+
+        // The assembler that actually accumulated this state must be the very instance the capture
+        // context exposes - proving MapiHttpMessageParser reads context.FastTransferAssembler (rather
+        // than constructing its own) and forwards it, together with the caller-supplied captureScope,
+        // all the way down to RopFastTransferDecoders.
+        var key = new FastTransferStreamKey(scope, MapiDirection.Response, 0, 3);
+        Assert.Equal(2, context.FastTransferAssembler.StateFor(key).BufferCount);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------------------------
+
+    private static byte[] BuildFastTransferGetBufferResponse(byte handleIndex, ushort status, byte[] transferBuffer) =>
+        Concat(
+            [0x4E, handleIndex],
+            Le((uint)0), // ReturnValue: Success
+            Le(status),  // TransferStatus
+            Le((ushort)0), // InProgressCount
+            Le((ushort)0), // TotalStepCount
+            [0x00],      // Reserved
+            Le((ushort)transferBuffer.Length), // TransferBufferSize
+            transferBuffer);
+
+    private static byte[] Le(ushort value)
+    {
+        var bytes = new byte[2];
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes, value);
+        return bytes;
+    }
+
+    private static byte[] Le(uint value)
+    {
+        var bytes = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
+        return bytes;
+    }
+
+    private static byte[] Concat(params byte[][] parts) => parts.SelectMany(p => p).ToArray();
+
+    private static byte[] Frame(byte[] ropList, params uint[] handles)
+    {
+        var bytes = new List<byte>();
+        bytes.AddRange(Le((ushort)(ropList.Length + 2)));
+        bytes.AddRange(ropList);
+        foreach (var handle in handles)
+        {
+            bytes.AddRange(Le(handle));
+        }
+        return bytes.ToArray();
+    }
+
+    private static MapiNode Find(IEnumerable<MapiNode> nodes, string name)
+    {
+        var found = FindAll(nodes, name).FirstOrDefault();
+        Assert.True(found is not null, $"Expected to find a node named '{name}'.");
+        return found!;
+    }
+
+    private static IEnumerable<MapiNode> FindAll(IEnumerable<MapiNode> nodes, string name)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Name == name) yield return node;
+            foreach (var match in FindAll(node.Children, name)) yield return match;
+        }
+    }
+}

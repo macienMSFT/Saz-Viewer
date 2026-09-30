@@ -14,10 +14,12 @@ internal static class MapiHttpMessageParser
         List<string> warnings,
         MapiNodeBudget budget,
         CancellationToken cancellationToken,
-        out long parsedBytes)
+        out long parsedBytes,
+        string? captureScope = null)
     {
         var reader = new MapiReader(bytes, cancellationToken);
         var children = ImmutableArray.CreateBuilder<MapiNode>();
+        var fastTransferAssembler = context.FastTransferAssembler;
         if (direction == MapiDirection.Response)
         {
             ParseResponsePrefix(ref reader, children, warnings, budget);
@@ -30,11 +32,11 @@ internal static class MapiHttpMessageParser
                 return new MapiNode(requestType, MapiNodeKind.Operation, 0, bytes.Length, "Response", children.ToImmutable());
             }
             ReadUInt32(ref reader, children, "ErrorCode", budget, hex: true);
-            ParseResponseOperation(ref reader, requestType, children, warnings, budget, cancellationToken);
+            ParseResponseOperation(ref reader, requestType, children, warnings, budget, cancellationToken, fastTransferAssembler, captureScope);
         }
         else
         {
-            ParseRequestOperation(ref reader, requestType, children, warnings, budget, cancellationToken);
+            ParseRequestOperation(ref reader, requestType, children, warnings, budget, cancellationToken, fastTransferAssembler, captureScope);
         }
 
         if (!reader.End)
@@ -63,7 +65,9 @@ internal static class MapiHttpMessageParser
         ImmutableArray<MapiNode>.Builder nodes,
         List<string> warnings,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FastTransferStreamAssembler? fastTransferAssembler = null,
+        string? captureScope = null)
     {
         switch (requestType.ToUpperInvariant())
         {
@@ -78,7 +82,9 @@ internal static class MapiHttpMessageParser
             case "EXECUTE":
                 ReadUInt32(ref reader, nodes, "Flags", budget, true);
                 var ropSize = ReadSize32(ref reader, nodes, "RopBufferSize", budget);
-                ParseExtended(ref reader, nodes, ropSize, "RopInputBuffer", true, MapiDirection.Request, warnings, budget, cancellationToken);
+                ParseExtended(
+                    ref reader, nodes, ropSize, "RopInputBuffer", true, MapiDirection.Request, warnings, budget, cancellationToken,
+                    fastTransferAssembler, captureScope);
                 ReadUInt32(ref reader, nodes, "MaxRopOut", budget);
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
@@ -263,7 +269,9 @@ internal static class MapiHttpMessageParser
         ImmutableArray<MapiNode>.Builder nodes,
         List<string> warnings,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FastTransferStreamAssembler? fastTransferAssembler = null,
+        string? captureScope = null)
     {
         switch (requestType.ToUpperInvariant())
         {
@@ -278,7 +286,9 @@ internal static class MapiHttpMessageParser
             case "EXECUTE":
                 ReadUInt32(ref reader, nodes, "Flags", budget, true);
                 var ropSize = ReadSize32(ref reader, nodes, "RopBufferSize", budget);
-                ParseExtended(ref reader, nodes, ropSize, "RopOutputBuffer", true, MapiDirection.Response, warnings, budget, cancellationToken);
+                ParseExtended(
+                    ref reader, nodes, ropSize, "RopOutputBuffer", true, MapiDirection.Response, warnings, budget, cancellationToken,
+                    fastTransferAssembler, captureScope);
                 if (!reader.End) ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
                 break;
             case "NOTIFICATIONWAIT":
@@ -488,7 +498,9 @@ internal static class MapiHttpMessageParser
         MapiDirection direction,
         List<string> warnings,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FastTransferStreamAssembler? fastTransferAssembler = null,
+        string? captureScope = null)
     {
         var start = reader.Position;
         var bytes = reader.ReadBytes(size, name);
@@ -499,7 +511,9 @@ internal static class MapiHttpMessageParser
             parseRops,
             direction,
             budget,
-            cancellationToken);
+            cancellationToken,
+            fastTransferAssembler,
+            captureScope);
         budget.Claim(0);
         nodes.Add(new MapiNode(name, MapiNodeKind.Array, start, size, null, children));
     }

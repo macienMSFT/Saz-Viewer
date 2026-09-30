@@ -10,7 +10,8 @@ internal static class NspiRestrictionParser
         MapiNodeBudget budget,
         int depth = 0,
         uint? codePage = null,
-        List<string>? warnings = null)
+        List<string>? warnings = null,
+        MapiWireWidthContext context = MapiWireWidthContext.Extended)
     {
         budget.Claim(depth);
         var start = reader.Position;
@@ -22,17 +23,32 @@ internal static class NspiRestrictionParser
             case 0x00:
             case 0x01:
             {
+                // [MS-OXCDATA] 2.11.3/2.11.4: AndRestriction/OrRestriction's RestrictCount is 16-bit
+                // in an MS-OXCROPS ROP buffer, but 32-bit in NSPI ([MS-OXNSPI]) and MS-OXORULE
+                // extended-rule buffers - the one field in this structure whose width is not
+                // identical between the two wire conventions.
                 var countOffset = reader.Position;
-                var count = reader.ReadCount32("RestrictionCount");
-                AddField(children, "RestrictionCount", countOffset, 4, count.ToString(CultureInfo.InvariantCulture), budget, depth);
+                int count;
+                int countLength;
+                if (context == MapiWireWidthContext.RopBuffer)
+                {
+                    count = reader.ReadCount16("RestrictionCount");
+                    countLength = 2;
+                }
+                else
+                {
+                    count = reader.ReadCount32("RestrictionCount");
+                    countLength = 4;
+                }
+                AddField(children, "RestrictionCount", countOffset, countLength, count.ToString(CultureInfo.InvariantCulture), budget, depth);
                 for (var index = 0; index < count; index++)
                 {
-                    children.Add(Parse(ref reader, budget, depth + 1, codePage, warnings) with { Name = $"Restriction[{index}]" });
+                    children.Add(Parse(ref reader, budget, depth + 1, codePage, warnings, context) with { Name = $"Restriction[{index}]" });
                 }
                 break;
             }
             case 0x02:
-                children.Add(Parse(ref reader, budget, depth + 1, codePage, warnings) with { Name = "Restriction" });
+                children.Add(Parse(ref reader, budget, depth + 1, codePage, warnings, context) with { Name = "Restriction" });
                 break;
             case 0x03:
                 ReadUInt16(ref reader, children, "FuzzyLevelLow", budget, depth, true);
@@ -45,7 +61,8 @@ internal static class NspiRestrictionParser
                     depth + 1,
                     RestrictionValueType(contentTag),
                     codePage,
-                    warnings));
+                    warnings,
+                    context));
                 break;
             case 0x04:
                 ReadByte(ref reader, children, "RelOp", budget, depth, true);
@@ -57,7 +74,8 @@ internal static class NspiRestrictionParser
                     depth + 1,
                     RestrictionValueType(propertyTag),
                     codePage,
-                    warnings));
+                    warnings,
+                    context));
                 break;
             case 0x05:
                 ReadByte(ref reader, children, "RelOp", budget, depth, true);
@@ -79,7 +97,7 @@ internal static class NspiRestrictionParser
                 break;
             case 0x09:
                 ReadPropertyTag(ref reader, children, "Subobject", budget, depth);
-                children.Add(Parse(ref reader, budget, depth + 1, codePage, warnings) with { Name = "Restriction" });
+                children.Add(Parse(ref reader, budget, depth + 1, codePage, warnings, context) with { Name = "Restriction" });
                 break;
             case 0x0A:
             {
@@ -94,20 +112,21 @@ internal static class NspiRestrictionParser
                         budget,
                         depth + 1,
                         codePage: codePage,
-                        warnings: warnings));
+                        warnings: warnings,
+                        context: context));
                 }
                 var presentOffset = reader.Position;
                 var present = reader.ReadByte("RestrictionPresent");
                 AddField(children, "RestrictionPresent", presentOffset, 1, present == 0 ? "false" : "true", budget, depth);
                 if (present != 0)
                 {
-                    children.Add(Parse(ref reader, budget, depth + 1, codePage, warnings) with { Name = "Restriction" });
+                    children.Add(Parse(ref reader, budget, depth + 1, codePage, warnings, context) with { Name = "Restriction" });
                 }
                 break;
             }
             case 0x0B:
                 ReadUInt32(ref reader, children, "Count", budget, depth, false);
-                children.Add(Parse(ref reader, budget, depth + 1, codePage, warnings) with { Name = "SubRestriction" });
+                children.Add(Parse(ref reader, budget, depth + 1, codePage, warnings, context) with { Name = "SubRestriction" });
                 break;
             default:
                 throw new MapiParseException(start, $"Unknown restriction type 0x{type:X2}; its extent cannot be determined safely.");

@@ -10,7 +10,9 @@ internal static class RopBufferParser
         MapiDirection direction,
         List<string> warnings,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FastTransferStreamAssembler? fastTransferAssembler = null,
+        string? captureScope = null)
     {
         var nodes = ImmutableArray.CreateBuilder<MapiNode>();
         var reader = new MapiReader(decoded, cancellationToken, checked((int)absoluteOffset));
@@ -48,7 +50,9 @@ internal static class RopBufferParser
                 warnings,
                 budget,
                 handleReferences,
-                cancellationToken);
+                cancellationToken,
+                fastTransferAssembler,
+                captureScope);
             budget.Claim(0);
             nodes.Add(new MapiNode(
                 "ROP list",

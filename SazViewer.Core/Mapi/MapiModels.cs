@@ -88,6 +88,13 @@ internal sealed class MapiCaptureContext
     public IReadOnlyDictionary<uint, ImmutableArray<uint>> TableColumns => tableColumns;
     public IReadOnlyDictionary<uint, string> Handles => handles;
 
+    /// <summary>
+    /// The single capture-local FastTransfer (MS-OXCFXICS) stream reassembler for this capture. It
+    /// is instance-scoped to this <see cref="MapiCaptureContext"/> - one per <c>MapiCaptureParser</c>
+    /// invocation - so streams from one parsed capture can never be joined to another.
+    /// </summary>
+    public FastTransferStreamAssembler FastTransferAssembler { get; } = new();
+
     public void SetLogon(uint id, string value)
     {
         if (logons.Count < MapiParseLimits.MaxStateEntries)

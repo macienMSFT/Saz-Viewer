@@ -16,7 +16,9 @@ internal static class ExtendedBufferParser
         bool parseRops,
         MapiDirection direction,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FastTransferStreamAssembler? fastTransferAssembler = null,
+        string? captureScope = null)
     {
         var nodes = ImmutableArray.CreateBuilder<MapiNode>();
         var reader = new MapiReader(bytes, cancellationToken, checked((int)absoluteOffset));
@@ -69,7 +71,7 @@ internal static class ExtendedBufferParser
             else
             {
                 var decodedChildren = parseRops
-                    ? RopBufferParser.Parse(decoded, transmittedOffset, direction, warnings, budget, cancellationToken)
+                    ? RopBufferParser.Parse(decoded, transmittedOffset, direction, warnings, budget, cancellationToken, fastTransferAssembler, captureScope)
                     : AuxiliaryPayloadParser.Parse(decoded, transmittedOffset, warnings, budget, cancellationToken);
                 children.Add(new MapiNode(
                     parseRops ? "ROP payload" : "Auxiliary payload",

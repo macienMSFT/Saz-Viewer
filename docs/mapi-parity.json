@@ -92,13 +92,28 @@
     "ropListAndHandleTableFraming": true,
     "individualRopSemanticDispatch": {
       "request": {
-        "count": 50,
-        "of": 128
+        "count": 125,
+        "of": 128,
+        "fixedWidthSchemas": 50,
+        "variableFamilyDispatch": 75
       },
       "response": {
-        "count": 52,
-        "of": 131
+        "count": 124,
+        "of": 131,
+        "fixedWidthSchemas": 52,
+        "variableFamilyDispatch": 72
       }
+    },
+    "variableRopFamilyDispatch": {
+      "families": {
+        "MS-OXCFOLD/MS-OXCTABL (RopFolderTableDecoders)": { "request": 19, "response": 27 },
+        "MS-OXCPRPT/MS-OXCSTOR (RopPropertyStoreDecoders)": { "request": 26, "response": 25 },
+        "MS-OXCMSG/MS-OXORULE/MS-OXCPERM/MS-OXCNOTIF (RopMessageRulesDecoders)": { "request": 14, "response": 13 },
+        "MS-OXCFXICS (RopFastTransferDecoders)": { "request": 16, "response": 7 }
+      },
+      "totalRequest": 75,
+      "totalResponse": 72,
+      "note": "Each family exposes disjoint Supports/Parse ROP-id-and-direction sets, verified pairwise and against the fixed-width schema catalog with no overlap; routed centrally by RopVariableDispatcher, which is invoked per-operation from RopSemanticParser.ParseOperations with capture-local FastTransfer reassembly state."
     },
     "auxiliaryPayloadSemanticDispatch": {
       "count": 40,
@@ -144,9 +159,9 @@
     "response": []
   },
   "remainingSemanticAreas": [
-    "Remaining 78 request and 79 response individual ROP dispatcher cases",
-    "FastTransfer and ICS lexical/syntactical grammars and partial-stream reconstruction",
-    "Capture-local logon, table-column, notification, and handle correlation beyond framing"
+    "Remaining 3 request and 7 response individual ROP dispatcher cases: request RopSetMessageReadFlag (0x11, state-dependent ClientData) and RopWritePerUserInformation (0x64, state-dependent ReplGuid); response RopGetPropertiesSpecific (0x07, state-dependent tags), RopLogon (0xFE, state-dependent shape), and RopBufferTooSmall (0xFF, state-dependent size); plus RopSeekStream (0x2E, both directions) and responses RopSetProperties (0x0A) and RopDeleteProperties (0x0B) and RopGetReceiveFolderTable (0x68), which are simply not yet claimed by any decoder family rather than being state-dependent",
+    "FastTransfer and ICS lexical/syntactical grammars and partial-stream reconstruction beyond the wired RopFastTransferDecoders/FastTransferStreamLexer boundary decoding; reassembly is capture-local and joins buffers only within the same MAPI/HTTP session, not across separate HTTP round-trips",
+    "Capture-local logon, table-column, notification, and handle correlation beyond framing (e.g. RopQueryRows/RopFindRow/RopExpandRow row data tied to an earlier RopSetColumns)"
   ],
   "safetyDivergences": [
     "Unknown operations, properties, restrictions, and auxiliary blocks are retained as bounded offset/length raw nodes with warnings.",

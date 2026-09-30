@@ -101,7 +101,9 @@ internal static class RopSemanticParser
         List<string> warnings,
         MapiNodeBudget budget,
         List<RopHandleReference> handleReferences,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        FastTransferStreamAssembler? fastTransferAssembler = null,
+        string? captureScope = null)
     {
         var schemas = direction == MapiDirection.Request ? RequestSchemas : ResponseSchemas;
         var operations = ImmutableArray.CreateBuilder<MapiNode>();
@@ -165,7 +167,10 @@ internal static class RopSemanticParser
                         direction,
                         handleReferences,
                         budget,
-                        cancellationToken);
+                        cancellationToken,
+                        warnings,
+                        fastTransferAssembler,
+                        captureScope);
                 if (reader.LocalPosition <= opStartLocal)
                 {
                     // Defensive: every schema consumes at least 3 bytes, so this should be unreachable.

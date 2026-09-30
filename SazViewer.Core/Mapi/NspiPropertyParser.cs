@@ -4,6 +4,28 @@ using System.Text;
 
 namespace SazViewer.Core;
 
+/// <summary>
+/// Selects which MS-OXCDATA/MS-OXORULE wire-width convention governs the handful of fields whose
+/// byte width (or, for PtypRuleAction's OP_MOVE/OP_COPY/OP_REPLY action data, entire shape) differs
+/// between NSPI/MS-OXORULE extended-rule buffers and MS-OXCROPS ROP buffers ("standard rules"):
+/// AndRestriction/OrRestriction's RestrictCount ([MS-OXCDATA] 2.11.3/2.11.4), PtypBinary's
+/// byte-count prefix ([MS-OXCDATA] 2.11.1.1), and PtypRuleAction's NoOfActions/ActionLength,
+/// OP_MOVE/OP_COPY/OP_REPLY action-data shapes, and OP_FORWARD/OP_DELEGATE's
+/// RecipientCount/NoOfProperties ([MS-OXORULE] 2.2.5, see <see cref="RuleActionParser"/>). Every
+/// other field parsed by <see cref="NspiPropertyParser"/>, <see cref="NspiRestrictionParser"/>, and
+/// <see cref="RuleActionParser"/> - including every PtypMultiple* element COUNT, which is always
+/// 32-bit regardless of context - has an identical wire shape in both conventions and is unaffected
+/// by this selector.
+/// </summary>
+internal enum MapiWireWidthContext
+{
+    /// <summary>NSPI ([MS-OXNSPI]) and MS-OXORULE extended-rule buffers: 32-bit counts/lengths. This is the default, preserving all pre-existing behavior.</summary>
+    Extended = 0,
+
+    /// <summary>MS-OXCROPS ROP buffers: 16-bit counts/lengths for the fields named above.</summary>
+    RopBuffer = 1,
+}
+
 internal static class NspiPropertyParser
 {
     private const ushort MultiValue = 0x1000;
@@ -14,7 +36,8 @@ internal static class NspiPropertyParser
         MapiNodeBudget budget,
         int depth = 0,
         uint? codePage = null,
-        List<string>? warnings = null)
+        List<string>? warnings = null,
+        MapiWireWidthContext context = MapiWireWidthContext.Extended)
     {
         budget.Claim(depth);
         var start = reader.Position;
@@ -23,7 +46,7 @@ internal static class NspiPropertyParser
         AddField(children, "PropertyValueCount", start, 4, count.ToString(CultureInfo.InvariantCulture), budget, depth);
         for (var index = 0; index < count; index++)
         {
-            children.Add(ParseTaggedValue(ref reader, $"PropertyValue[{index}]", budget, depth + 1, codePage, warnings));
+            children.Add(ParseTaggedValue(ref reader, $"PropertyValue[{index}]", budget, depth + 1, codePage, warnings, context));
         }
         return new MapiNode(name, MapiNodeKind.Array, start, reader.Position - start, null, children.ToImmutable());
     }
@@ -34,7 +57,8 @@ internal static class NspiPropertyParser
         MapiNodeBudget budget,
         int depth = 0,
         uint? codePage = null,
-        List<string>? warnings = null)
+        List<string>? warnings = null,
+        MapiWireWidthContext context = MapiWireWidthContext.Extended)
     {
         budget.Claim(depth);
         var start = reader.Position;
@@ -53,7 +77,8 @@ internal static class NspiPropertyParser
             depth + 1,
             includePresence: true,
             codePage,
-            warnings: warnings));
+            warnings: warnings,
+            context: context));
         return new MapiNode(
             name,
             MapiNodeKind.Property,
@@ -70,7 +95,8 @@ internal static class NspiPropertyParser
         MapiNodeBudget budget,
         int depth = 0,
         uint? codePage = null,
-        List<string>? warnings = null)
+        List<string>? warnings = null,
+        MapiWireWidthContext context = MapiWireWidthContext.Extended)
     {
         budget.Claim(depth);
         var start = reader.Position;
@@ -134,7 +160,8 @@ internal static class NspiPropertyParser
                 depth + 1,
                 includePresence: true,
                 codePage,
-                warnings: warnings));
+                warnings: warnings,
+                context: context));
             children.Add(new MapiNode(
                 $"Value[{index}]",
                 MapiNodeKind.Property,
@@ -155,7 +182,8 @@ internal static class NspiPropertyParser
         bool includePresence,
         uint? codePage = null,
         bool addressBookSemantics = true,
-        List<string>? warnings = null)
+        List<string>? warnings = null,
+        MapiWireWidthContext context = MapiWireWidthContext.Extended)
     {
         budget.Claim(depth);
         var start = reader.Position;
@@ -173,6 +201,8 @@ internal static class NspiPropertyParser
 
         if ((type & MultiValue) != 0)
         {
+            // The element COUNT is always 32-bit, in every context - only a base-typed element's own
+            // internal length field (e.g. PtypBinary's byte count, below) can differ by context.
             var baseType = (ushort)(type & ~MultiValue);
             var countOffset = reader.Position;
             var count = reader.ReadCount32($"{name}.Count");
@@ -188,7 +218,8 @@ internal static class NspiPropertyParser
                     includePresence: addressBookSemantics && HasPresenceIndicator(baseType),
                     codePage,
                     addressBookSemantics,
-                    warnings));
+                    warnings,
+                    context));
             }
             return new MapiNode(name, MapiNodeKind.Array, start, reader.Position - start, PropertyTypeName(type), children.ToImmutable());
         }
@@ -277,15 +308,17 @@ internal static class NspiPropertyParser
                 value = $"{serverIdLength:N0} bytes";
                 break;
             case 0x00FD:
-                children.Add(NspiRestrictionParser.Parse(ref reader, budget, depth + 1, codePage, warnings));
+                children.Add(NspiRestrictionParser.Parse(ref reader, budget, depth + 1, codePage, warnings, context));
                 value = "Restriction";
                 break;
             case 0x00FE:
-                children.Add(RuleActionParser.Parse(ref reader, budget, depth + 1, codePage, warnings));
+                children.Add(RuleActionParser.Parse(ref reader, budget, depth + 1, codePage, warnings, context));
                 value = "RuleAction";
                 break;
             case 0x0102:
-                var length = ReadLength32(ref reader, $"{name}.Length");
+                var length = context == MapiWireWidthContext.RopBuffer
+                    ? ReadLength16(ref reader, $"{name}.Length")
+                    : ReadLength32(ref reader, $"{name}.Length");
                 var payloadOffset = reader.Position;
                 var payload = reader.ReadBytes(length, name);
                 budget.Claim(depth);
@@ -314,6 +347,21 @@ internal static class NspiPropertyParser
         return (int)value;
     }
 
+    /// <summary>
+    /// MS-OXCROPS ROP-buffer form of a PtypBinary byte count ([MS-OXCDATA] 2.11.1.1): 16-bit, unlike
+    /// the 32-bit form used by NSPI and MS-OXORULE extended rules (<see cref="ReadLength32"/>).
+    /// </summary>
+    public static int ReadLength16(ref MapiReader reader, string field)
+    {
+        var offset = reader.Position;
+        var value = reader.ReadUInt16(field);
+        if (value > reader.Remaining)
+        {
+            throw new MapiParseException(offset, $"{field} length {value:N0} exceeds the remaining extent.");
+        }
+        return value;
+    }
+
     public static MapiNode ParseStandardTaggedValue(
         ref MapiReader reader,
         string name,
@@ -321,7 +369,8 @@ internal static class NspiPropertyParser
         int depth = 0,
         ushort? valueTypeOverride = null,
         uint? codePage = null,
-        List<string>? warnings = null)
+        List<string>? warnings = null,
+        MapiWireWidthContext context = MapiWireWidthContext.Extended)
     {
         budget.Claim(depth);
         var start = reader.Position;
@@ -342,7 +391,8 @@ internal static class NspiPropertyParser
             includePresence: false,
             codePage,
             addressBookSemantics: false,
-            warnings));
+            warnings,
+            context));
         return new MapiNode(
             name,
             MapiNodeKind.Property,

@@ -59,7 +59,12 @@ public sealed class MapiParserTests
     [Fact]
     public void ParsesExecuteExtendedBufferRopFramingAndHandles()
     {
-        byte[] ropPayload = [5, 0, 0xFE, 0, 0, 0x44, 0x33, 0x22, 0x11];
+        // 0x2E (RopSeekStream) is a real, named RopId that is intentionally implemented by none of
+        // the fixed schema catalog or the four self-contained variable-width decoder families, so it
+        // reliably exercises the "unimplemented RopId retained as raw" framing path exercised by this
+        // test (which is about extended buffer/handle table framing, not about decoding RopSeekStream
+        // itself).
+        byte[] ropPayload = [5, 0, 0x2E, 0, 0, 0x44, 0x33, 0x22, 0x11];
         var extended = ExtendedBuffer(ropPayload, flags: 0x0004);
         using var requestBody = new MemoryStream();
         WriteUInt32(requestBody, 0);
@@ -77,7 +82,7 @@ public sealed class MapiParserTests
 
         var request = Assert.Single(new SazParser().Parse(saz).Sessions).Mapi!.Request!;
 
-        Assert.Equal("RopLogon", Find(request.Root, "RopId").Value!.Split('(')[1].TrimEnd(')'));
+        Assert.Equal("RopSeekStream", Find(request.Root, "RopId").Value!.Split('(')[1].TrimEnd(')'));
         Assert.Equal("0x11223344", Find(request.Root, "[0]").Value);
         Assert.Contains(request.Warnings, warning => warning.Contains("individual ROP fields", StringComparison.Ordinal));
     }
@@ -1060,6 +1065,62 @@ public sealed class MapiParserTests
         Assert.False(response.Complete);
         Assert.Contains(response.Warnings, warning => warning.Contains("count", StringComparison.Ordinal));
         Assert.Equal(MapiNodeKind.Raw, response.Root.Kind);
+    }
+
+    /// <summary>
+    /// Regression proving OP_FORWARD/OP_DELEGATE's RecipientCount and each recipient's
+    /// NoOfProperties retain the pre-existing 32-bit width in the default (extended-rule) context -
+    /// resolved against current MS-OXORULE rather than the pinned upstream parser's narrower
+    /// (always-16-bit) reads for this structure - and that a nested PtypBinary property inside a
+    /// recipient's property list also keeps the 32-bit extended-rule length prefix.
+    /// </summary>
+    [Fact]
+    public void ParsesForwardActionRecipientWithExtendedThirtyTwoBitCountsAndNestedPtypBinaryProperty()
+    {
+        var binaryValue = new byte[] { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE };
+        using var data = new MemoryStream();
+        WriteUInt32(data, 1); // NoOfActions (32-bit, extended)
+        WriteAction(
+            data,
+            0x07,
+            payload =>
+            {
+                WriteUInt32(payload, 1); // RecipientCount (32-bit, extended)
+                payload.WriteByte(0); // Reserved
+                WriteUInt32(payload, 2); // Recipient.NoOfProperties (32-bit, extended)
+                WriteUInt16(payload, 0x0003);
+                WriteUInt16(payload, 0x3001);
+                WriteUInt32(payload, 42);
+                WriteUInt16(payload, 0x0102);
+                WriteUInt16(payload, 0x6684);
+                WriteUInt32(payload, checked((uint)binaryValue.Length)); // 32-bit PtypBinary length
+                payload.Write(binaryValue);
+            },
+            flavor: 0x03);
+        var reader = new MapiReader(data.ToArray());
+        var warnings = new List<string>();
+
+        var value = NspiPropertyParser.ParseValue(
+            ref reader,
+            0x00FE,
+            "Value",
+            new MapiNodeBudget(),
+            0,
+            includePresence: false,
+            warnings: warnings);
+
+        Assert.True(reader.End);
+        Assert.Empty(warnings);
+        Assert.Equal(4, Find(value, "RecipientCount").Length);
+        Assert.Equal("1", Find(value, "RecipientCount").Value);
+        Assert.Equal(4, Find(value, "NoOfProperties").Length);
+        Assert.Equal("2", Find(value, "NoOfProperties").Value);
+
+        var longProperty = Find(value, "PropertyValue[0]");
+        Assert.Equal("42", Find(longProperty, "PropertyValue").Value);
+
+        var binaryProperty = Find(value, "PropertyValue[1]");
+        Assert.Equal($"{binaryValue.Length:N0} bytes", Find(binaryProperty, "PropertyValue").Value);
     }
 
     private static MapiNode Find(MapiNode node, string name)

@@ -101,17 +101,17 @@ public sealed class RopSemanticParserTests
     [Fact]
     public void StopsAtKnownButUnimplementedRopIdWithoutGuessingFurtherOperationBoundaries()
     {
-        // RopOpenFolder (0x02) is a real, named RopId whose request is variable-length (a FolderId
-        // plus a boolean), so it is intentionally not in the fixed-width catalog. Bytes after it must
-        // never be interpreted as another operation.
-        byte[] ropList = [0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x01, 0x00];
+        // RopSeekStream (0x2E) is a real, named RopId that none of the fixed-width catalog or the
+        // four self-contained variable-width decoder families implement, so bytes after it must never
+        // be interpreted as another operation.
+        byte[] ropList = [0x01, 0x00, 0x00, 0x2E, 0x00, 0x00, 0x01, 0x00];
         var buffer = Frame(ropList);
         var warnings = new List<string>();
         var nodes = RopBufferParser.Parse(buffer, 0, MapiDirection.Request, warnings, new MapiNodeBudget(), CancellationToken.None);
 
         var ropListNode = Find(nodes, "ROP list");
         Assert.Equal(2, ropListNode.Children.Length);
-        Assert.Equal("0x02 (RopOpenFolder)", Find(ropListNode.Children[1].Children, "RopId").Value);
+        Assert.Equal("0x2E (RopSeekStream)", Find(ropListNode.Children[1].Children, "RopId").Value);
         Assert.Contains(
             warnings,
             w => w.Contains("no fixed-width request schema is implemented", StringComparison.Ordinal));
