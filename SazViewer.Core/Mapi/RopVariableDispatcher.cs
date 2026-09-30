@@ -85,7 +85,8 @@ internal static class RopVariableDispatcher
                 cancellationToken,
                 warnings,
                 fastTransferAssembler,
-                captureScope);
+                captureScope,
+                context);
         }
 
         throw new MapiParseException(

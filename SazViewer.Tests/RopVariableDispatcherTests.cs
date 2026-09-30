@@ -271,13 +271,24 @@ public sealed class RopVariableDispatcherTests
 
         var op0 = BuildFastTransferGetBufferResponse(handleIndex: 3, status: 0x0001, transferBuffer: head);
         var op1 = BuildFastTransferGetBufferResponse(handleIndex: 3, status: 0x0003, transferBuffer: tail);
-        var buffer = Frame(Concat(op0, op1));
+        const uint serverHandle = 0x11223344;
+        var buffer = Frame(Concat(op0, op1), 0, 0, 0, serverHandle);
 
         var assembler = new FastTransferStreamAssembler();
         var scope = "dispatcher-join-scope";
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope(scope, "logical-connection");
         var joinedWarnings = new List<string>();
         var joined = RopBufferParser.Parse(
-            buffer, 0, MapiDirection.Response, joinedWarnings, new MapiNodeBudget(), CancellationToken.None, assembler, scope);
+            buffer,
+            0,
+            MapiDirection.Response,
+            joinedWarnings,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            assembler,
+            scope,
+            context);
 
         var joinedList = Find(joined, "ROP list");
         var joinedOp0Buffer = Find(joinedList.Children[0].Children, "TransferBuffer");
@@ -287,7 +298,7 @@ public sealed class RopVariableDispatcherTests
         Assert.Equal("PartialValueContinuation", joinedOp1Buffer.Children[0].Name);
         Assert.Contains("value complete", joinedOp1Buffer.Children[0].Value);
 
-        var key = new FastTransferStreamKey(scope, MapiDirection.Response, 0, 3);
+        var key = new FastTransferStreamKey("logical-connection", serverHandle);
         Assert.Equal(2, assembler.StateFor(key).BufferCount);
 
         // Without a shared assembler, each buffer is lexed independently (FastTransferStreamState.Initial
@@ -310,7 +321,15 @@ public sealed class RopVariableDispatcherTests
 
         var op0 = BuildFastTransferGetBufferResponse(handleIndex: 3, status: 0x0001, transferBuffer: head);
         var op1 = BuildFastTransferGetBufferResponse(handleIndex: 3, status: 0x0003, transferBuffer: tail);
-        var ropBuf = Concat(Le((ushort)(op0.Length + op1.Length + 2)), op0, op1);
+        const uint serverHandle = 0x55667788;
+        var ropBuf = Concat(
+            Le((ushort)(op0.Length + op1.Length + 2)),
+            op0,
+            op1,
+            Le(0u),
+            Le(0u),
+            Le(0u),
+            Le(serverHandle));
 
         // RPC_HEADER_EXT wrapper: Version(0)+Flags(0)+Size+SizeActual, uncompressed/unencoded.
         var extendedBuffer = Concat(Le((ushort)0), Le((ushort)0), Le((ushort)ropBuf.Length), Le((ushort)ropBuf.Length), ropBuf);
@@ -324,6 +343,7 @@ public sealed class RopVariableDispatcherTests
         var context = new MapiCaptureContext();
         var warnings = new List<string>();
         var scope = "full-pipeline-scope";
+        context.RegisterLogonCorrelationScope(scope, "full-pipeline-connection");
         var root = MapiHttpMessageParser.Parse(
             message, "Execute", MapiDirection.Response, context, warnings, new MapiNodeBudget(), CancellationToken.None,
             out var parsedBytes, scope);
@@ -348,8 +368,336 @@ public sealed class RopVariableDispatcherTests
         // context exposes - proving MapiHttpMessageParser reads context.FastTransferAssembler (rather
         // than constructing its own) and forwards it, together with the caller-supplied captureScope,
         // all the way down to RopFastTransferDecoders.
-        var key = new FastTransferStreamKey(scope, MapiDirection.Response, 0, 3);
+        var key = new FastTransferStreamKey("full-pipeline-connection", serverHandle);
         Assert.Equal(2, context.FastTransferAssembler.StateFor(key).BufferCount);
+    }
+
+    [Fact]
+    public void JoinsFastTransferAcrossHttpRoundTripsByLogicalConnectionAndServerHandle()
+    {
+        var value = Enumerable.Range(0, 20).Select(i => (byte)i).ToArray();
+        var head = Concat(Le((ushort)0x0102), Le((ushort)0x1000), Le((uint)value.Length), value[..8]);
+        var tail = Concat(value[8..], Le(0x400D0003u));
+        const uint serverHandle = 0x10203040;
+
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("http-1", "logical-connection");
+        context.RegisterLogonCorrelationScope("http-2", "logical-connection");
+
+        var first = RopBufferParser.Parse(
+            Frame(BuildFastTransferGetBufferResponse(3, 0x0001, head), 0, 0, 0, serverHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-1",
+            context);
+        var second = RopBufferParser.Parse(
+            Frame(BuildFastTransferGetBufferResponse(1, 0x0003, tail), 0, serverHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-2",
+            context);
+
+        Assert.Contains("ends inside a value", Find(Find(first, "ROP list").Children[0].Children, "TransferBuffer").Value);
+        var continuation = Find(Find(second, "ROP list").Children[0].Children, "TransferBuffer");
+        Assert.Equal("PartialValueContinuation", continuation.Children[0].Name);
+        Assert.Contains("value complete", continuation.Children[0].Value);
+
+        var state = context.FastTransferAssembler.StateFor(
+            new FastTransferStreamKey("logical-connection", serverHandle));
+        Assert.Equal(2, state.BufferCount);
+        Assert.True(state.Complete);
+        Assert.Null(state.Pending);
+    }
+
+    [Fact]
+    public void DoesNotJoinEqualServerHandlesAcrossLogicalConnections()
+    {
+        var head = Concat(Le((ushort)0x0102), Le((ushort)0x1000), Le(8u), [0x01, 0x02]);
+        const uint serverHandle = 0x10203040;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("http-a", "connection-a");
+        context.RegisterLogonCorrelationScope("http-b", "connection-b");
+
+        RopBufferParser.Parse(
+            Frame(BuildFastTransferGetBufferResponse(0, 0x0001, head), serverHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-a",
+            context);
+        RopBufferParser.Parse(
+            Frame(BuildFastTransferGetBufferResponse(0, 0x0001, head), serverHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-b",
+            context);
+
+        Assert.Equal(2, context.FastTransferAssembler.Snapshot.Count);
+        Assert.NotNull(context.FastTransferAssembler.StateFor(
+            new FastTransferStreamKey("connection-a", serverHandle)).Pending);
+        Assert.NotNull(context.FastTransferAssembler.StateFor(
+            new FastTransferStreamKey("connection-b", serverHandle)).Pending);
+    }
+
+    [Fact]
+    public void ReleaseForgetsFastTransferStateBeforeAHandleCanBeReused()
+    {
+        var head = Concat(Le((ushort)0x0102), Le((ushort)0x1000), Le(8u), [0x01, 0x02]);
+        const uint serverHandle = 0x10203040;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("http-get", "logical-connection");
+        context.RegisterLogonCorrelationScope("http-release", "logical-connection");
+
+        RopBufferParser.Parse(
+            Frame(BuildFastTransferGetBufferResponse(0, 0x0001, head), serverHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-get",
+            context);
+        Assert.Single(context.FastTransferAssembler.Snapshot);
+
+        RopBufferParser.Parse(
+            Frame([0x01, 0x00, 0x00], serverHandle),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-release",
+            context);
+
+        Assert.Empty(context.FastTransferAssembler.Snapshot);
+    }
+
+    [Fact]
+    public void ResolvesSameRequestUploadStateWhenTheCreationResponseAssignsItsHandle()
+    {
+        var value = Enumerable.Range(0, 20).Select(i => (byte)i).ToArray();
+        var head = Concat(Le((ushort)0x0102), Le((ushort)0x1000), Le((uint)value.Length), value[..8]);
+        var tail = Concat(value[8..], Le(0x400D0003u));
+        const uint ownerHandle = 0x01020304;
+        const uint uploadHandle = 0x50607080;
+
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("http-create", "logical-connection");
+        context.RegisterLogonCorrelationScope("http-continue", "logical-connection");
+
+        var configure = new byte[] { 0x53, 0x00, 0x00, 0x01, 0x01, 0x00 };
+        var firstPut = Concat([0x54, 0x00, 0x01], Le((ushort)head.Length), head);
+        RopBufferParser.Parse(
+            Frame(Concat(configure, firstPut), ownerHandle, uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-create",
+            context);
+
+        var provisional = new FastTransferStreamKey("http-create", 1, Provisional: true);
+        Assert.Null(context.FastTransferAssembler.StateFor(provisional).Pending);
+
+        var firstPutResponse = Concat(
+            [0x54, 0x01],
+            Le(0u),
+            Le((ushort)0),
+            Le((ushort)0),
+            Le((ushort)0),
+            [0x00],
+            Le((ushort)head.Length));
+        RopBufferParser.Parse(
+            Frame(
+                Concat([0x53, 0x01, 0x00, 0x00, 0x00, 0x00], firstPutResponse),
+                ownerHandle,
+                uploadHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-create",
+            context);
+        context.CompleteHttpSession("http-create");
+
+        var resolved = new FastTransferStreamKey("logical-connection", uploadHandle);
+        Assert.Null(context.FastTransferAssembler.StateFor(provisional).Pending);
+        Assert.NotNull(context.FastTransferAssembler.StateFor(resolved).Pending);
+
+        var second = RopBufferParser.Parse(
+            Frame(Concat([0x54, 0x00, 0x00], Le((ushort)tail.Length), tail), uploadHandle),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-continue",
+            context);
+
+        var continuation = Find(Find(second, "ROP list").Children[0].Children, "TransferData");
+        Assert.Equal("PartialValueContinuation", continuation.Children[0].Name);
+        Assert.Contains("value complete", continuation.Children[0].Value);
+
+        RopBufferParser.Parse(
+            Frame(
+                Concat(
+                    [0x54, 0x00],
+                    Le(0u),
+                    Le((ushort)0),
+                    Le((ushort)0),
+                    Le((ushort)0),
+                    [0x00],
+                    Le((ushort)tail.Length)),
+                uploadHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-continue",
+            context);
+        Assert.Equal(2, context.FastTransferAssembler.StateFor(resolved).BufferCount);
+    }
+
+    [Fact]
+    public void DiscardsUnexecutedUploadStateSoAResentBufferIsFoldedOnlyOnce()
+    {
+        var head = Concat(
+            Le((ushort)0x0102),
+            Le((ushort)0x1000),
+            Le(8u),
+            [0x01, 0x02]);
+        const uint uploadHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("http-dropped", "logical-connection");
+        context.RegisterLogonCorrelationScope("http-resend", "logical-connection");
+        var request = Frame(
+            Concat([0x54, 0x00, 0x00], Le((ushort)head.Length), head),
+            uploadHandle);
+
+        RopBufferParser.Parse(
+            request,
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-dropped",
+            context);
+        context.CompleteHttpSession("http-dropped");
+
+        var key = new FastTransferStreamKey("logical-connection", uploadHandle);
+        Assert.Equal(0, context.FastTransferAssembler.StateFor(key).BufferCount);
+
+        RopBufferParser.Parse(
+            request,
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-resend",
+            context);
+        RopBufferParser.Parse(
+            Frame(
+                Concat(
+                    [0x54, 0x00],
+                    Le(0u),
+                    Le((ushort)0),
+                    Le((ushort)0),
+                    Le((ushort)0),
+                    [0x00],
+                    Le((ushort)head.Length)),
+                uploadHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-resend",
+            context);
+
+        var state = context.FastTransferAssembler.StateFor(key);
+        Assert.Equal(1, state.BufferCount);
+        Assert.NotNull(state.Pending);
+        Assert.Equal(6, state.Pending!.Value.RemainingLength);
+    }
+
+    [Fact]
+    public void FailedUploadDoesNotCommitAnExchangeStyleFullBufferUsedSize()
+    {
+        var head = Concat(
+            Le((ushort)0x0102),
+            Le((ushort)0x1000),
+            Le(8u),
+            [0x01, 0x02]);
+        const uint uploadHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("http-failed", "logical-connection");
+
+        RopBufferParser.Parse(
+            Frame(
+                Concat([0x54, 0x00, 0x00], Le((ushort)head.Length), head),
+                uploadHandle),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-failed",
+            context);
+
+        var warnings = new List<string>();
+        RopBufferParser.Parse(
+            Frame(
+                Concat(
+                    [0x54, 0x00],
+                    Le(0x80040115u),
+                    Le((ushort)0),
+                    Le((ushort)0),
+                    Le((ushort)0),
+                    [0x00],
+                    Le((ushort)head.Length)),
+                uploadHandle),
+            0,
+            MapiDirection.Response,
+            warnings,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "http-failed",
+            context);
+
+        Assert.Empty(context.FastTransferAssembler.Snapshot);
+        Assert.Contains(warnings, warning =>
+            warning.Contains("BufferUsedSize is not reliable on failure", StringComparison.Ordinal));
     }
 
     // ---------------------------------------------------------------------------------------------

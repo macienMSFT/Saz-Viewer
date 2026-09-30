@@ -108,6 +108,7 @@ internal sealed class MapiCaptureContext
     private readonly Dictionary<
         string,
         Queue<(uint HandleIndex, (string Scope, uint Handle)? RequestHandle)>> pendingResetTables = [];
+    private readonly Dictionary<string, Queue<PendingFastTransferUpload>> pendingFastTransferUploads = [];
 
     // RopGetPropertiesSpecific's request PropertyTags, queued per (HTTP session, handle index) so the
     // matching response - always in the very same Execute round-trip - can look up the tag list its
@@ -132,6 +133,17 @@ internal sealed class MapiCaptureContext
     /// invocation - so streams from one parsed capture can never be joined to another.
     /// </summary>
     public FastTransferStreamAssembler FastTransferAssembler { get; } = new();
+
+    private sealed class PendingFastTransferUpload
+    {
+        public required uint HandleIndex { get; init; }
+        public required FastTransferStreamKey Key { get; set; }
+        public required FastTransferStreamState BaseState { get; init; }
+        public required FastTransferStreamState State { get; init; }
+        public required byte[] Buffer { get; init; }
+        public required long AbsoluteOffset { get; init; }
+        public bool Invalidated { get; set; }
+    }
 
     public void SetLogon(uint id, string value)
     {
@@ -341,6 +353,8 @@ internal sealed class MapiCaptureContext
 
         propertySpecificTags.Remove(captureScope);
         requestRopLists.Remove(captureScope);
+        pendingFastTransferUploads.Remove(captureScope);
+        FastTransferAssembler.ForgetProvisional(captureScope);
         sessionHandles.Remove(captureScope);
         logonCorrelationScopes.Remove(captureScope);
     }
@@ -361,6 +375,189 @@ internal sealed class MapiCaptureContext
         if (captureScope is not null && TryResolveServerHandle(captureScope, handleIndex, out var handle))
         {
             tableColumns.Remove(handle);
+        }
+    }
+
+    public bool TryGetFastTransferStreamKey(
+        string? captureScope,
+        uint handleIndex,
+        bool allowProvisional,
+        out FastTransferStreamKey key)
+    {
+        key = default;
+        if (captureScope is null)
+        {
+            return false;
+        }
+
+        if (TryResolveServerHandle(captureScope, handleIndex, out var handle))
+        {
+            key = new FastTransferStreamKey(handle.Scope, handle.Handle);
+            return true;
+        }
+
+        if (allowProvisional)
+        {
+            key = new FastTransferStreamKey(captureScope, handleIndex, Provisional: true);
+            return true;
+        }
+
+        return false;
+    }
+
+    public void InvalidateHandleState(string? captureScope, uint handleIndex)
+    {
+        if (captureScope is null)
+        {
+            return;
+        }
+
+        FastTransferAssembler.Forget(new FastTransferStreamKey(captureScope, handleIndex, Provisional: true));
+        if (TryResolveServerHandle(captureScope, handleIndex, out var handle))
+        {
+            tableColumns.Remove(handle);
+            FastTransferAssembler.Forget(new FastTransferStreamKey(handle.Scope, handle.Handle));
+        }
+    }
+
+    public void CompleteSuccessfulOutputHandle(string? captureScope, uint handleIndex)
+    {
+        if (captureScope is null)
+        {
+            return;
+        }
+
+        var provisional = new FastTransferStreamKey(captureScope, handleIndex, Provisional: true);
+        if (!TryResolveServerHandle(captureScope, handleIndex, out var handle))
+        {
+            FastTransferAssembler.Forget(provisional);
+            return;
+        }
+
+        tableColumns.Remove(handle);
+        var resolved = new FastTransferStreamKey(handle.Scope, handle.Handle);
+        FastTransferAssembler.ResolveProvisional(provisional, resolved);
+        if (pendingFastTransferUploads.TryGetValue(captureScope, out var pending))
+        {
+            foreach (var upload in pending)
+            {
+                if (upload.Key == provisional)
+                {
+                    upload.Key = resolved;
+                }
+            }
+        }
+    }
+
+    public FastTransferLexResult StageFastTransferUpload(
+        string captureScope,
+        uint handleIndex,
+        FastTransferStreamKey key,
+        ReadOnlySpan<byte> buffer,
+        long absoluteOffset,
+        MapiNodeBudget budget,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        if (!pendingFastTransferUploads.TryGetValue(captureScope, out var queue))
+        {
+            queue = [];
+            pendingFastTransferUploads[captureScope] = queue;
+        }
+        if (queue.Count >= MapiParseLimits.MaxStateEntries)
+        {
+            throw new MapiParseException(
+                absoluteOffset,
+                $"FastTransfer upload staging exceeds the safe limit of {MapiParseLimits.MaxStateEntries:N0} operations.");
+        }
+
+        var baseState = queue.LastOrDefault(upload => upload.Key == key)?.State
+            ?? FastTransferAssembler.StateFor(key);
+        var result = FastTransferStreamLexer.Lex(
+            buffer,
+            absoluteOffset,
+            baseState,
+            budget,
+            depth,
+            cancellationToken);
+        queue.Enqueue(new PendingFastTransferUpload
+        {
+            HandleIndex = handleIndex,
+            Key = key,
+            BaseState = baseState,
+            State = result.State,
+            Buffer = buffer.ToArray(),
+            AbsoluteOffset = absoluteOffset,
+        });
+        return result;
+    }
+
+    public string? CompleteFastTransferUpload(
+        string? captureScope,
+        uint handleIndex,
+        bool success,
+        uint bufferUsedSize)
+    {
+        if (captureScope is null
+            || !pendingFastTransferUploads.TryGetValue(captureScope, out var queue)
+            || queue.Count == 0)
+        {
+            return null;
+        }
+
+        var pending = queue.Dequeue();
+        var matchingHandle = pending.HandleIndex == handleIndex;
+        if (!matchingHandle || pending.Invalidated)
+        {
+            InvalidateLaterUploads(queue, pending.Key);
+            return "FastTransfer upload response could not be paired safely with its staged request; " +
+                "the staged stream state was discarded.";
+        }
+
+        if (!success)
+        {
+            FastTransferAssembler.Forget(pending.Key);
+            InvalidateLaterUploads(queue, pending.Key);
+            return "FastTransfer upload failed; BufferUsedSize is not reliable on failure, so the staged " +
+                "request and prior reconstructed state for this upload context were discarded.";
+        }
+
+        if (bufferUsedSize > pending.Buffer.Length)
+        {
+            InvalidateLaterUploads(queue, pending.Key);
+            return $"FastTransfer upload response reports BufferUsedSize {bufferUsedSize:N0}, which exceeds " +
+                $"the staged {pending.Buffer.Length:N0}-byte request buffer; the staged stream state was discarded.";
+        }
+
+        if (bufferUsedSize == pending.Buffer.Length)
+        {
+            FastTransferAssembler.Commit(pending.Key, pending.State);
+            return null;
+        }
+
+        if (bufferUsedSize > 0)
+        {
+            var accepted = FastTransferStreamLexer.Lex(
+                pending.Buffer.AsSpan(0, checked((int)bufferUsedSize)),
+                pending.AbsoluteOffset,
+                pending.BaseState,
+                new MapiNodeBudget(),
+                0,
+                CancellationToken.None);
+            FastTransferAssembler.Commit(pending.Key, accepted.State);
+        }
+        InvalidateLaterUploads(queue, pending.Key);
+        return $"FastTransfer upload accepted {bufferUsedSize:N0} of {pending.Buffer.Length:N0} staged byte(s); " +
+            "only the accepted prefix was committed and later same-round-trip state was discarded.";
+    }
+
+    private static void InvalidateLaterUploads(
+        Queue<PendingFastTransferUpload> queue,
+        FastTransferStreamKey key)
+    {
+        foreach (var later in queue.Where(upload => upload.Key == key))
+        {
+            later.Invalidated = true;
         }
     }
 

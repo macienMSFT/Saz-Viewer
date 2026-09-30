@@ -31,22 +31,18 @@ internal static class FastTransferLimits
     /// <summary>Maximum declared length accepted for one varSizeValue lexeme.</summary>
     public const long MaxVarValueBytes = MapiParseLimits.MaxPayloadBytes;
 
-    /// <summary>Maximum bytes accumulated across the buffers of one reconstructed stream.</summary>
-    public const long MaxReconstructedStreamBytes = 64L * 1024 * 1024;
 }
 
 /// <summary>
-/// Identifies one logical FastTransfer stream <em>within a single capture</em>. The key is composed
-/// only of values that are observable inside the capture being parsed (an opaque caller-supplied
-/// scope such as the HTTP session id or the MAPI session context cookie, the ROP direction, the
-/// LogonId and the Server object handle index). It deliberately carries no process, machine or
-/// clock-derived component, so reconstruction can never reach outside the capture.
+/// Identifies one logical FastTransfer stream <em>within a single capture</em>. Server object handle
+/// table indices are local to one ROP buffer, while the resolved 32-bit handle value remains stable
+/// for the object's lifetime. The connection scope prevents equal handle values on unrelated MAPI
+/// connections from being joined.
 /// </summary>
 internal readonly record struct FastTransferStreamKey(
-    string CaptureScope,
-    MapiDirection Direction,
-    byte LogonId,
-    byte HandleIndex);
+    string ConnectionScope,
+    uint ServerObjectHandle,
+    bool Provisional = false);
 
 /// <summary>
 /// The tail of a varSizeValue lexeme that a transfer buffer ended inside. MS-OXCFXICS 2.2.4.1 allows
@@ -129,7 +125,7 @@ internal sealed record FastTransferStreamState
         Pending = null,
     };
 
-    public FastTransferStreamState AsComplete() => this with { Complete = true, Pending = null };
+    public FastTransferStreamState AsComplete() => this with { Complete = true };
 }
 
 /// <summary>
@@ -163,13 +159,9 @@ internal sealed record FastTransferLexResult(
 /// <c>RopSemanticParser.ParseOperations</c>, which passes them to
 /// <see cref="RopVariableDispatcher.Parse"/>. The dispatcher routes every MS-OXCFXICS RopId to
 /// <see cref="RopFastTransferDecoders.Parse(ref MapiReader, int, MapiDirection, List{RopHandleReference}, MapiNodeBudget, CancellationToken, List{string}?, FastTransferStreamAssembler?, string?)"/>,
-/// which builds the <see cref="FastTransferStreamKey"/> from that capture scope plus the
-/// operation's direction, LogonId and handle index and calls into this assembler via
-/// <see cref="Continue"/>/<see cref="Complete"/>/<see cref="Forget"/>. Because the key's
-/// <see cref="FastTransferStreamKey.CaptureScope"/> is the HTTP session id, reassembly only ever
-/// joins buffers that appear within the same MAPI/HTTP session; joining buffers across separate
-/// HTTP round-trips is an intentionally unaddressed gap (see <c>MapiCaptureParser</c>'s
-/// <c>MapiCoverage.KnownGaps</c>).
+/// which resolves each operation's buffer-local handle index through <c>MapiCaptureContext</c> to a
+/// stable logical-connection/server-handle key before calling <see cref="Continue"/>,
+/// <see cref="Complete"/>, or <see cref="Forget"/>.
 /// </para>
 /// <para>
 /// <see cref="Snapshot"/> is surfaced so partially reconstructed streams can be reported as partial
@@ -189,6 +181,14 @@ internal sealed class FastTransferStreamAssembler
 
     public FastTransferStreamState StateFor(FastTransferStreamKey key) =>
         states.TryGetValue(key, out var state) ? state : FastTransferStreamState.Initial;
+
+    public void Commit(FastTransferStreamKey key, FastTransferStreamState state)
+    {
+        if (states.ContainsKey(key) || !AtCapacity)
+        {
+            states = states.SetItem(key, state);
+        }
+    }
 
     /// <summary>
     /// Lexes <paramref name="buffer"/> as the next slice of the stream identified by
@@ -238,4 +238,25 @@ internal sealed class FastTransferStreamAssembler
 
     /// <summary>Forgets a stream entirely, e.g. when its Server object handle is released.</summary>
     public void Forget(FastTransferStreamKey key) => states = states.Remove(key);
+
+    /// <summary>
+    /// Resolves same-request state accumulated under an output-slot sentinel to the server-assigned
+    /// handle returned by a successful context-creation response. Any old state for the reused
+    /// handle is discarded before the provisional state is moved.
+    /// </summary>
+    public void ResolveProvisional(FastTransferStreamKey provisional, FastTransferStreamKey resolved)
+    {
+        states = states.Remove(resolved);
+        if (states.TryGetValue(provisional, out var state))
+        {
+            states = states.Remove(provisional).SetItem(resolved, state);
+        }
+    }
+
+    /// <summary>Discards any provisional stream state that belongs only to one HTTP round trip.</summary>
+    public void ForgetProvisional(string captureScope)
+    {
+        states = states.RemoveRange(states.Keys.Where(
+            key => key.Provisional && StringComparer.Ordinal.Equals(key.ConnectionScope, captureScope)));
+    }
 }

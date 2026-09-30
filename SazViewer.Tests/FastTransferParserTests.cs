@@ -500,7 +500,7 @@ public sealed class FastTransferParserTests
     }
 
     [Fact]
-    public void RefusesAFailedGetBufferResponseThatStillDeclaresATransferBuffer()
+    public void RetainsAFailedGetBufferResponseThatStillDeclaresATransferBuffer()
     {
         var bytes = Concat(
             [0x4E, 0x01],
@@ -509,14 +509,10 @@ public sealed class FastTransferParserTests
             Le((ushort)4),
             [0x01, 0x02, 0x03, 0x04]);
 
-        var thrown = Assert.Throws<MapiParseException>(() =>
-        {
-            var reader = new MapiReader(bytes, CancellationToken.None);
-            RopFastTransferDecoders.Parse(
-                ref reader, 0, MapiDirection.Response, [], new MapiNodeBudget(), CancellationToken.None,
-                null, null, null);
-        });
-        Assert.Contains("boundary is not determinable", thrown.Message);
+        var (node, warnings, _) = ParseResponse(bytes);
+
+        Assert.Equal("01020304", Find(node.Children, "TransferBuffer (failed operation)").Value);
+        Assert.Contains(warnings, warning => warning.Contains("retained as raw", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -531,7 +527,7 @@ public sealed class FastTransferParserTests
         var (node, warnings, _) = ParseResponse(bytes);
 
         Assert.Empty(warnings);
-        Assert.Equal("0x0003 Done", Find(node.Children, "TransferStatus").Value);
+        Assert.Equal("0x0003 (clients MUST ignore)", Find(node.Children, "TransferStatus").Value);
         Assert.Equal("512", Find(node.Children, "BufferUsedSize").Value);
         Assert.Equal(15, node.Length);
     }
@@ -550,7 +546,7 @@ public sealed class FastTransferParserTests
         var (node, warnings, _) = ParseResponse(bytes);
 
         Assert.Empty(warnings);
-        Assert.Equal("0x0002 NoRoom", Find(node.Children, "TransferStatus").Value);
+        Assert.Equal("0x0002 (clients MUST ignore)", Find(node.Children, "TransferStatus").Value);
         Assert.Equal("70000", Find(node.Children, "InProgressCount").Value);
         Assert.Equal("90000", Find(node.Children, "TotalStepCount").Value);
         Assert.Equal("1024", Find(node.Children, "BufferUsedSize").Value);
@@ -891,7 +887,7 @@ public sealed class FastTransferParserTests
         var tail = Concat(value[8..], Le(0x400D0003u));
 
         var assembler = new FastTransferStreamAssembler();
-        var key = new FastTransferStreamKey("session-1", MapiDirection.Response, 0, 3);
+        var key = new FastTransferStreamKey("connection-1", 0x1003);
         var budget = new MapiNodeBudget();
 
         var first = assembler.Continue(key, head, 0, budget, 0, CancellationToken.None);
@@ -923,7 +919,7 @@ public sealed class FastTransferParserTests
         var tail = Concat(first[4..], Le((uint)tailText.Length), tailText);
 
         var assembler = new FastTransferStreamAssembler();
-        var key = new FastTransferStreamKey("session-2", MapiDirection.Request, 1, 0);
+        var key = new FastTransferStreamKey("connection-2", 0x2000);
         var budget = new MapiNodeBudget();
 
         var head1 = assembler.Continue(key, head, 0, budget, 0, CancellationToken.None);
@@ -943,8 +939,8 @@ public sealed class FastTransferParserTests
     {
         var head = Concat(Le((ushort)0x0102), Le((ushort)0x1000), Le(8u), [0x01, 0x02]);
         var assembler = new FastTransferStreamAssembler();
-        var a = new FastTransferStreamKey("session-a", MapiDirection.Response, 0, 0);
-        var b = new FastTransferStreamKey("session-b", MapiDirection.Response, 0, 0);
+        var a = new FastTransferStreamKey("connection-a", 0x3000);
+        var b = new FastTransferStreamKey("connection-b", 0x3000);
         var budget = new MapiNodeBudget();
 
         assembler.Continue(a, head, 0, budget, 0, CancellationToken.None);
@@ -961,7 +957,7 @@ public sealed class FastTransferParserTests
     public void RetainsEveryLaterBufferAsRawOnceAStreamIsDesynchronized()
     {
         var assembler = new FastTransferStreamAssembler();
-        var key = new FastTransferStreamKey("session-3", MapiDirection.Response, 0, 0);
+        var key = new FastTransferStreamKey("connection-3", 0x4000);
         var budget = new MapiNodeBudget();
 
         var bad = assembler.Continue(key, Le((ushort)0x0009).Concat(Le((ushort)0x1234)).ToArray(), 0, budget, 0, CancellationToken.None);

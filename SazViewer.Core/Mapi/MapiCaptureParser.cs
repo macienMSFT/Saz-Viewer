@@ -109,12 +109,13 @@ internal static class MapiCaptureParser
                 "Property/stream/store operations (MS-OXCPRPT/MS-OXCSTOR)",
                 "Message/rule/permission/notification operations (MS-OXCMSG/MS-OXORULE/MS-OXCPERM/MS-OXCNOTIF)",
                 "Bulk data transfer / incremental change synchronization (MS-OXCFXICS)",
-                "Capture-local table columns and row/notification reconstruction"
+                "Capture-local table columns and row/notification reconstruction",
+                "Cross-HTTP FastTransfer stream reconstruction by logical MAPI connection and server object handle"
             ],
             [
                 "RopReadRecipients response RecipientRow property internals remain bounded raw because that response carries no RecipientColumns array and the protocol does not identify a deterministic external column source",
                 "In the property/stream/store family's generic property-value arrays (RopGetPropertiesSpecific/RopSetProperties and similar), PtypRestriction/PtypRuleAction values and any property type outside the fixed MS-OXCDATA 2.11.1 table are intentionally refused rather than guessed; the message/rule/permission family's own RuleData/PermissionData arrays and the folder/table family's own restrictions do fully decode both types with an explicit ROP-buffer-vs-extended-rule width boundary",
-                "FastTransfer reconstruction spans multiple operations within the same MAPI/HTTP session only; joining buffers across separate HTTP round-trips is not attempted"
+                "FastTransfer lexical elements and partial varSizeValue continuations are decoded, but production-level MS-OXCFXICS syntactical grouping and root selection remain incomplete"
             ]);
         return new MapiCapture(
             resultSessions,

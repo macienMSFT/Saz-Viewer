@@ -81,16 +81,6 @@ internal static class FastTransferStreamLexer
             return new FastTransferLexResult(nodes.ToImmutable(), next, [.. warnings], buffer.Length, 0, false);
         }
 
-        if (next.TotalBytes > FastTransferLimits.MaxReconstructedStreamBytes)
-        {
-            nodes.Add(ExtendedBufferParser.RawNode("Oversized stream bytes", buffer, absoluteOffset, budget));
-            warnings.Add(
-                $"Reconstructed FastTransfer stream exceeds {FastTransferLimits.MaxReconstructedStreamBytes:N0} bytes; " +
-                $"{buffer.Length:N0} byte(s) were retained as raw and the stream is no longer tracked.");
-            return new FastTransferLexResult(
-                nodes.ToImmutable(), next.AsDesynchronized(), [.. warnings], buffer.Length, 0, false);
-        }
-
         var reader = new MapiReader(buffer, cancellationToken, checked((int)absoluteOffset));
         var elementStart = reader;
         var markerDepth = next.MarkerDepth;

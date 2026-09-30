@@ -201,14 +201,14 @@ internal static class RopSemanticParser
                 {
                     foreach (var output in newReferences.Where(reference => reference.FieldName == "OutputHandleIndex"))
                     {
-                        context?.InvalidateTableColumns(captureScope, output.Index);
+                        context?.CompleteSuccessfulOutputHandle(captureScope, output.Index);
                     }
                 }
                 if (ropId == 0x01)
                 {
                     var releaseHandle = newReferences.LastOrDefault(
                         reference => reference.FieldName == "InputHandleIndex");
-                    context?.InvalidateTableColumns(captureScope, releaseHandle.Index);
+                    context?.InvalidateHandleState(captureScope, releaseHandle.Index);
                     if (checkpoints is not null)
                     {
                         checkpoints[^1] = reader.LocalPosition;

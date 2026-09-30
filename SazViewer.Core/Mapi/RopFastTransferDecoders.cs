@@ -24,6 +24,9 @@ internal sealed class FastTransferParseContext
 
     /// <summary>Opaque capture-local scope (e.g. the HTTP session id) used to key streams.</summary>
     public string? CaptureScope { get; init; }
+
+    /// <summary>Capture state used to resolve buffer-local handle indices to stable server handles.</summary>
+    public MapiCaptureContext? CaptureContext { get; init; }
 }
 
 /// <summary>
@@ -31,7 +34,7 @@ internal sealed class FastTransferParseContext
 /// ROP family. This class exposes the same <c>Supports</c>/<c>Parse</c> pair as
 /// <see cref="RopVariableDispatcher"/> and is registered there: every RopId in
 /// <see cref="SupportedRequestRopIds"/>/<see cref="SupportedResponseRopIds"/> is routed to this
-/// family's <see cref="Parse(ref MapiReader, int, MapiDirection, List{RopHandleReference}, MapiNodeBudget, CancellationToken, List{string}?, FastTransferStreamAssembler?, string?)"/>
+/// family's extended <c>Parse</c> overload
 /// overload, together with the capture-local <see cref="FastTransferStreamAssembler"/> and capture
 /// scope threaded down from <c>MapiCaptureContext</c>/<c>MapiCaptureParser</c>, so transfer buffers
 /// split across several RopFastTransferSourceGetBuffer/RopFastTransferDestinationPutBuffer
@@ -84,7 +87,7 @@ internal static class RopFastTransferDecoders
         List<RopHandleReference> handleReferences,
         MapiNodeBudget budget,
         CancellationToken cancellationToken) =>
-        Parse(ref reader, operationIndex, direction, handleReferences, budget, cancellationToken, null, null, null);
+        Parse(ref reader, operationIndex, direction, handleReferences, budget, cancellationToken, null, null, null, null);
 
     /// <summary>
     /// The extended entry point. <paramref name="assembler"/> and <paramref name="captureScope"/> are
@@ -100,7 +103,8 @@ internal static class RopFastTransferDecoders
         CancellationToken cancellationToken,
         List<string>? warnings,
         FastTransferStreamAssembler? assembler,
-        string? captureScope)
+        string? captureScope,
+        MapiCaptureContext? captureContext = null)
     {
         ArgumentNullException.ThrowIfNull(handleReferences);
         ArgumentNullException.ThrowIfNull(budget);
@@ -123,6 +127,7 @@ internal static class RopFastTransferDecoders
             Warnings = warnings,
             Assembler = assembler,
             CaptureScope = captureScope,
+            CaptureContext = captureContext,
         };
 
         var start = reader.Position;
@@ -155,7 +160,7 @@ internal static class RopFastTransferDecoders
         FastTransferParseContext context)
     {
         ReadRopId(ref reader, children, context);
-        var logonId = ReadLogonId(ref reader, children, context);
+        ReadLogonId(ref reader, children, context);
         var inputHandle = ReadHandle(ref reader, children, "InputHandleIndex", context);
 
         switch (ropId)
@@ -229,7 +234,7 @@ internal static class RopFastTransferDecoders
                 var size = reader.ReadUInt16("TransferDataSize");
                 AddField(children, "TransferDataSize", sizeOffset, 2, Count(size), context);
                 RequireRemaining(ref reader, size, "TransferData", sizeOffset);
-                children.Add(LexTransfer(ref reader, size, "TransferData", context, logonId, inputHandle));
+                children.Add(LexTransfer(ref reader, size, "TransferData", context, inputHandle));
                 break;
             }
             case 0x70: // RopSynchronizationConfigure (MS-OXCROPS 2.2.13.1.1).
@@ -335,7 +340,7 @@ internal static class RopFastTransferDecoders
         {
             case 0x4E: // RopFastTransferSourceGetBuffer (MS-OXCROPS 2.2.12.4.2/2.2.12.4.3).
             {
-                ReadEnumUInt16(ref reader, children, "TransferStatus", TransferStatuses, context);
+                var transferStatus = ReadEnumUInt16(ref reader, children, "TransferStatus", TransferStatuses, context);
                 ReadUInt16Field(ref reader, children, "InProgressCount", context);
                 ReadUInt16Field(ref reader, children, "TotalStepCount", context);
                 ReadByteField(ref reader, children, "Reserved", context);
@@ -345,7 +350,20 @@ internal static class RopFastTransferDecoders
                 if (returnValue == 0)
                 {
                     RequireRemaining(ref reader, bufferSize, "TransferBuffer", sizeOffset);
-                    children.Add(LexTransfer(ref reader, bufferSize, "TransferBuffer", context, 0, handleIndex));
+                    children.Add(LexTransfer(ref reader, bufferSize, "TransferBuffer", context, handleIndex));
+                    if (transferStatus == 0x0003
+                        && TryResolveStreamKey(context, handleIndex, out var completedKey))
+                    {
+                        var completedState = context.Assembler!.StateFor(completedKey);
+                        if (completedState.Pending is not null || completedState.MarkerDepth != 0)
+                        {
+                            Warn(
+                                context,
+                                "RopFastTransferSourceGetBuffer reported Done while the reconstructed stream " +
+                                "still has an incomplete value or unclosed syntactical markers.");
+                        }
+                        context.Assembler!.Complete(completedKey);
+                    }
                 }
                 else if (returnValue == ServerBusy)
                 {
@@ -354,30 +372,48 @@ internal static class RopFastTransferDecoders
                     AddField(
                         children, "BackoffTime", backoffOffset, 4, $"{backoff:N0} ms", context);
                 }
-                else if (bufferSize != 0)
+                else
                 {
-                    // A non-busy failure response carries no TransferBuffer, so a non-zero size means
-                    // the operation boundary is not self-contained. Refuse rather than guess.
-                    throw new MapiParseException(
-                        sizeOffset,
-                        $"RopFastTransferSourceGetBuffer failed with 0x{returnValue:X8} but declares a " +
-                        $"TransferBufferSize of {bufferSize:N0}; the operation boundary is not determinable.");
+                    if (bufferSize != 0)
+                    {
+                        RequireRemaining(ref reader, bufferSize, "TransferBuffer", sizeOffset);
+                        var bufferOffset = reader.Position;
+                        var buffer = reader.ReadBytes(bufferSize, "TransferBuffer");
+                        children.Add(ExtendedBufferParser.RawNode(
+                            "TransferBuffer (failed operation)", buffer, bufferOffset, context.Budget));
+                        Warn(
+                            context,
+                            $"RopFastTransferSourceGetBuffer failed with 0x{returnValue:X8} but carried " +
+                            $"{bufferSize:N0} transfer byte(s); they were retained as raw.");
+                    }
+                    if (TryResolveStreamKey(context, handleIndex, out var failedKey))
+                    {
+                        context.Assembler!.Forget(failedKey);
+                    }
                 }
                 break;
             }
             case 0x54: // RopFastTransferDestinationPutBuffer (MS-OXCROPS 2.2.12.2.2).
-                ReadEnumUInt16(ref reader, children, "TransferStatus", TransferStatuses, context);
+                ReadIgnoredUInt16(ref reader, children, "TransferStatus", context);
                 ReadUInt16Field(ref reader, children, "InProgressCount", context);
                 ReadUInt16Field(ref reader, children, "TotalStepCount", context);
                 ReadByteField(ref reader, children, "Reserved", context);
-                ReadUInt16Field(ref reader, children, "BufferUsedSize", context);
+                var used = ReadUInt16Field(ref reader, children, "BufferUsedSize", context);
+                WarnIfPresent(
+                    context,
+                    context.CaptureContext?.CompleteFastTransferUpload(
+                        context.CaptureScope, handleIndex, returnValue == 0, used));
                 break;
             case 0x9D: // RopFastTransferDestinationPutBufferExtended (MS-OXCROPS 2.2.12.3.2).
-                ReadEnumUInt16(ref reader, children, "TransferStatus", TransferStatuses, context);
+                ReadIgnoredUInt16(ref reader, children, "TransferStatus", context);
                 ReadUInt32Field(ref reader, children, "InProgressCount", context);
                 ReadUInt32Field(ref reader, children, "TotalStepCount", context);
                 ReadByteField(ref reader, children, "Reserved", context);
-                ReadUInt16Field(ref reader, children, "BufferUsedSize", context);
+                var extendedUsed = ReadUInt16Field(ref reader, children, "BufferUsedSize", context);
+                WarnIfPresent(
+                    context,
+                    context.CaptureContext?.CompleteFastTransferUpload(
+                        context.CaptureScope, handleIndex, returnValue == 0, extendedUsed));
                 break;
             case 0x72: // RopSynchronizationImportMessageChange (MS-OXCROPS 2.2.13.2.2).
                 if (returnValue == 0)
@@ -421,16 +457,30 @@ internal static class RopFastTransferDecoders
         int length,
         string name,
         FastTransferParseContext context,
-        byte logonId,
         byte handleIndex)
     {
         var offset = reader.Position;
         var bytes = reader.ReadBytes(length, name);
         FastTransferLexResult result;
-        if (context.Assembler is { } assembler && context.CaptureScope is { } scope)
+        if (TryResolveStreamKey(context, handleIndex, out var key)
+            && context.Direction == MapiDirection.Request
+            && context.CaptureContext is { } captureContext
+            && context.CaptureScope is { } captureScope)
         {
-            result = assembler.Continue(
-                new FastTransferStreamKey(scope, context.Direction, logonId, handleIndex),
+            result = captureContext.StageFastTransferUpload(
+                captureScope,
+                handleIndex,
+                key,
+                bytes,
+                offset,
+                context.Budget,
+                2,
+                context.CancellationToken);
+        }
+        else if (TryResolveStreamKey(context, handleIndex, out key))
+        {
+            result = context.Assembler!.Continue(
+                key,
                 bytes,
                 offset,
                 context.Budget,
@@ -439,6 +489,13 @@ internal static class RopFastTransferDecoders
         }
         else
         {
+            if (context.Assembler is not null && context.CaptureContext is not null)
+            {
+                Warn(
+                    context,
+                    $"FastTransfer buffer handle index {handleIndex} could not be resolved to a server object " +
+                    "handle; this slice was decoded independently and was not joined to later buffers.");
+            }
             result = FastTransferStreamLexer.Lex(
                 bytes,
                 offset,
@@ -466,6 +523,29 @@ internal static class RopFastTransferDecoders
         var summary = $"{length:N0} byte(s), {result.ElementCount:N0} lexical element(s)" +
             (result.EndedInsideValue ? ", ends inside a value" : string.Empty);
         return new MapiNode(name, MapiNodeKind.Structure, offset, length, summary, children.ToImmutable());
+    }
+
+    private static bool TryResolveStreamKey(
+        FastTransferParseContext context,
+        byte handleIndex,
+        out FastTransferStreamKey key)
+    {
+        key = default;
+        return context.Assembler is not null
+            && context.CaptureContext is not null
+            && context.CaptureContext.TryGetFastTransferStreamKey(
+                context.CaptureScope,
+                handleIndex,
+                allowProvisional: context.Direction == MapiDirection.Request,
+                out key);
+    }
+
+    private static void WarnIfPresent(FastTransferParseContext context, string? warning)
+    {
+        if (warning is not null)
+        {
+            Warn(context, warning);
+        }
     }
 
     private static MapiNode ParseRestriction(ref MapiReader reader, int size, FastTransferParseContext context)
@@ -809,7 +889,7 @@ internal static class RopFastTransferDecoders
         AddField(children, name, offset, 1, $"0x{value:X2}", context);
     }
 
-    private static void ReadUInt16Field(
+    private static ushort ReadUInt16Field(
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder children,
         string name,
@@ -818,6 +898,7 @@ internal static class RopFastTransferDecoders
         var offset = reader.Position;
         var value = reader.ReadUInt16(name);
         AddField(children, name, offset, 2, value.ToString(CultureInfo.InvariantCulture), context);
+        return value;
     }
 
     private static void ReadUInt32Field(
@@ -855,7 +936,7 @@ internal static class RopFastTransferDecoders
         AddField(children, name, offset, 1, Enumerated(value, table, 2), context);
     }
 
-    private static void ReadEnumUInt16(
+    private static ushort ReadEnumUInt16(
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder children,
         string name,
@@ -865,6 +946,18 @@ internal static class RopFastTransferDecoders
         var offset = reader.Position;
         var value = reader.ReadUInt16(name);
         AddField(children, name, offset, 2, Enumerated(value, table, 4), context);
+        return value;
+    }
+
+    private static void ReadIgnoredUInt16(
+        ref MapiReader reader,
+        ImmutableArray<MapiNode>.Builder children,
+        string name,
+        FastTransferParseContext context)
+    {
+        var offset = reader.Position;
+        var value = reader.ReadUInt16(name);
+        AddField(children, name, offset, 2, $"0x{value:X4} (clients MUST ignore)", context);
     }
 
     private static void AddField(
