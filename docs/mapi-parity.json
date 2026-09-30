@@ -105,8 +105,23 @@
       "of": 40
     },
     "propertyValueSemanticDispatch": {
-      "count": 31,
+      "count": 32,
       "of": 32
+    },
+    "ruleActionTypesRecognized": {
+      "count": 11,
+      "of": 11
+    },
+    "ruleActionPayloadSemanticDispatch": {
+      "count": 7,
+      "of": 11,
+      "partial": [
+        "OP_MOVE",
+        "OP_COPY",
+        "OP_REPLY",
+        "OP_OOF_REPLY"
+      ],
+      "note": "Partial action types decode their complete bounded envelopes but retain nested folder/message EntryID semantic fields as raw nodes with warnings."
     },
     "restrictionSemanticDispatch": {
       "count": 12,
@@ -133,7 +148,7 @@
   },
   "remainingSemanticAreas": [
     "All 128 request and 131 response individual ROP dispatchers",
-    "PtypRuleAction",
+    "Nested EntryID semantic fields for OP_MOVE, OP_COPY, OP_REPLY, and OP_OOF_REPLY rule actions",
     "All 40 auxiliary payload semantic layouts",
     "FastTransfer and ICS lexical/syntactical grammars and partial-stream reconstruction",
     "Capture-local logon, table-column, notification, and handle correlation beyond framing"
@@ -141,6 +156,7 @@
   "safetyDivergences": [
     "Unknown operations, properties, restrictions, and auxiliary blocks are retained as bounded offset/length raw nodes with warnings.",
     "Malformed XOR/compression/framing is transactional and never exposed as successful decoded data.",
+    "Extended-rule EntryID sizes and recipient/property counts use the 32-bit widths required by MS-OXORULE rather than the pinned upstream parser's narrower reads.",
     "All declared lengths, counts, strings, allocations, recursion, nodes, and payloads are explicitly bounded.",
     "Parser state is per capture rather than upstream static global state."
   ]

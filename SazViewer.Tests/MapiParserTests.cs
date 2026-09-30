@@ -757,7 +757,275 @@ public sealed class MapiParserTests
     }
 
     [Fact]
-    public void ReportsUnsupportedRuleActionsAsPartialWithoutConsumingRawData()
+    public void ParsesAllRuleActionTypesWithBoundedPartialEntryIds()
+    {
+        using var data = new MemoryStream();
+        WriteUInt32(data, 11);
+        WriteAction(data, 0x01, payload => { WriteUInt32(payload, 0); WriteUInt32(payload, 0); });
+        WriteAction(data, 0x02, payload => { WriteUInt32(payload, 0); WriteUInt32(payload, 0); });
+        WriteAction(data, 0x03, payload => { WriteUInt32(payload, 0); payload.Write(new byte[16]); }, flavor: 0x02);
+        WriteAction(data, 0x04, payload => { WriteUInt32(payload, 0); payload.Write(new byte[16]); });
+        WriteAction(data, 0x05, payload => payload.Write([0xDE, 0xAD]));
+        WriteAction(data, 0x06, payload => WriteUInt32(payload, 0x0000000D));
+        WriteAction(
+            data,
+            0x07,
+            payload =>
+            {
+                WriteUInt32(payload, 1);
+                payload.WriteByte(0);
+                WriteUInt32(payload, 1);
+                WriteUInt16(payload, 0x0003);
+                WriteUInt16(payload, 0x3001);
+                WriteUInt32(payload, 42);
+            },
+            flavor: 0x03);
+        WriteAction(
+            data,
+            0x08,
+            payload =>
+            {
+                WriteUInt32(payload, 1);
+                payload.WriteByte(0);
+                WriteUInt32(payload, 1);
+                WriteUInt16(payload, 0x0003);
+                WriteUInt16(payload, 0x3001);
+                WriteUInt32(payload, 43);
+            });
+        WriteAction(
+            data,
+            0x09,
+            payload =>
+            {
+                WriteUInt16(payload, 0x0003);
+                WriteUInt16(payload, 0x3001);
+                WriteUInt32(payload, 44);
+            });
+        WriteAction(data, 0x0A, _ => { });
+        WriteAction(data, 0x0B, _ => { });
+        var reader = new MapiReader(data.ToArray());
+        var warnings = new List<string>();
+
+        var value = NspiPropertyParser.ParseValue(
+            ref reader,
+            0x00FE,
+            "Value",
+            new MapiNodeBudget(),
+            0,
+            includePresence: false,
+            warnings: warnings);
+
+        Assert.True(reader.End);
+        foreach (var name in new[]
+                 {
+                     "OP_MOVE", "OP_COPY", "OP_REPLY", "OP_OOF_REPLY", "OP_DEFER_ACTION",
+                     "OP_BOUNCE", "OP_FORWARD", "OP_DELEGATE", "OP_TAG", "OP_DELETE", "OP_MARK_AS_READ"
+                 })
+        {
+            Assert.Contains(Flatten(value), node => node.Value == name);
+        }
+        Assert.Equal("0x0000000D RejectedMessageTooLarge", Find(value, "BounceCode").Value);
+        Assert.Contains("0x00000002 (ST=1, NS=0)", Flatten(value).Select(node => node.Value));
+        Assert.Contains("0x00000003 (TM=0, AT=0, NC=1, PR=1)", Flatten(value).Select(node => node.Value));
+        Assert.Contains("44", Flatten(value).Select(node => node.Value));
+        Assert.Equal(4, warnings.Count(warning => warning.Contains("semantic fields", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData(0x01, 0x00000001)]
+    [InlineData(0x03, 0x00000003)]
+    [InlineData(0x07, 0x00000005)]
+    [InlineData(0x07, 0x0000000C)]
+    [InlineData(0x07, 0x80000000)]
+    public void WarnsForInvalidRuleActionFlavors(byte type, uint flavor)
+    {
+        using var data = new MemoryStream();
+        WriteUInt32(data, 1);
+        WriteAction(
+            data,
+            type,
+            payload =>
+            {
+                if (type == 0x01)
+                {
+                    WriteUInt32(payload, 0);
+                    WriteUInt32(payload, 0);
+                }
+                else if (type == 0x03)
+                {
+                    WriteUInt32(payload, 0);
+                    payload.Write(new byte[16]);
+                }
+                else
+                {
+                    WriteUInt32(payload, 0);
+                }
+            },
+            flavor);
+        var reader = new MapiReader(data.ToArray());
+        var warnings = new List<string>();
+
+        _ = NspiPropertyParser.ParseValue(
+            ref reader,
+            0x00FE,
+            "Value",
+            new MapiNodeBudget(),
+            0,
+            includePresence: false,
+            warnings: warnings);
+
+        Assert.True(reader.End);
+        Assert.Contains(warnings, warning => warning.Contains("invalid ActionFlavor", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RejectsZeroMandatoryRuleActionCounts()
+    {
+        static void ParseRuleAction(byte[] bytes)
+        {
+            var reader = new MapiReader(bytes);
+            _ = NspiPropertyParser.ParseValue(
+                ref reader,
+                0x00FE,
+                "Value",
+                new MapiNodeBudget(),
+                0,
+                includePresence: false);
+        }
+
+        Assert.Throws<MapiParseException>(() => ParseRuleAction(new byte[4]));
+
+        var zeroNestedCounts = new Action<MemoryStream>[]
+        {
+            payload => WriteUInt32(payload, 0),
+            payload =>
+            {
+                WriteUInt32(payload, 1);
+                payload.WriteByte(0);
+                WriteUInt32(payload, 0);
+            }
+        };
+        foreach (var writePayload in zeroNestedCounts)
+        {
+            using var data = new MemoryStream();
+            WriteUInt32(data, 1);
+            WriteAction(data, 0x07, writePayload);
+            var reader = new MapiReader(data.ToArray());
+            var warnings = new List<string>();
+
+            var value = NspiPropertyParser.ParseValue(
+                ref reader,
+                0x00FE,
+                "Value",
+                new MapiNodeBudget(),
+                0,
+                includePresence: false,
+                warnings: warnings);
+
+            Assert.True(reader.End);
+            Assert.Contains(warnings, warning => warning.Contains("greater than zero", StringComparison.Ordinal));
+            Assert.Contains(Flatten(value), node => node.Kind == MapiNodeKind.Raw);
+        }
+    }
+
+    [Fact]
+    public void WarnsForInvalidRuleActionBounceCode()
+    {
+        using var data = new MemoryStream();
+        WriteUInt32(data, 1);
+        WriteAction(data, 0x06, payload => WriteUInt32(payload, 0x12345678));
+        var reader = new MapiReader(data.ToArray());
+        var warnings = new List<string>();
+
+        _ = NspiPropertyParser.ParseValue(
+            ref reader,
+            0x00FE,
+            "Value",
+            new MapiNodeBudget(),
+            0,
+            includePresence: false,
+            warnings: warnings);
+
+        Assert.True(reader.End);
+        Assert.Contains(warnings, warning => warning.Contains("invalid BounceCode", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ReportsTruncatedRuleActionSizeAndCountFieldsWithoutEscapingActionBounds()
+    {
+        var malformedActions = new (byte Type, Action<MemoryStream> Payload)[]
+        {
+            (0x01, payload => payload.WriteByte(1)),
+            (0x01, payload => { WriteUInt32(payload, 0); payload.WriteByte(1); }),
+            (0x03, payload => payload.WriteByte(1)),
+            (0x07, payload => payload.WriteByte(1)),
+            (0x07, payload => { WriteUInt32(payload, 1); payload.WriteByte(0); payload.WriteByte(1); })
+        };
+
+        foreach (var (type, writePayload) in malformedActions)
+        {
+            using var data = new MemoryStream();
+            WriteUInt32(data, 1);
+            WriteAction(data, type, writePayload);
+            var reader = new MapiReader(data.ToArray());
+            var warnings = new List<string>();
+
+            var value = NspiPropertyParser.ParseValue(
+                ref reader,
+                0x00FE,
+                "Value",
+                new MapiNodeBudget(),
+                0,
+                includePresence: false,
+                warnings: warnings);
+
+            Assert.True(reader.End);
+            Assert.Contains(warnings, warning => warning.Contains("malformed", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(Flatten(value), node => node.Kind == MapiNodeKind.Raw);
+        }
+    }
+
+    [Fact]
+    public void EnforcesRuleActionEntryIdAndRecipientLimits()
+    {
+        var malformedActions = new (byte Type, Action<MemoryStream> Payload)[]
+        {
+            (0x01, payload => WriteUInt32(payload, uint.MaxValue)),
+            (0x03, payload => WriteUInt32(payload, uint.MaxValue)),
+            (0x07, payload => WriteUInt32(payload, uint.MaxValue)),
+            (0x07, payload =>
+            {
+                WriteUInt32(payload, 1);
+                payload.WriteByte(0);
+                WriteUInt32(payload, uint.MaxValue);
+            })
+        };
+
+        foreach (var (type, writePayload) in malformedActions)
+        {
+            using var data = new MemoryStream();
+            WriteUInt32(data, 1);
+            WriteAction(data, type, writePayload);
+            var reader = new MapiReader(data.ToArray());
+            var warnings = new List<string>();
+
+            var value = NspiPropertyParser.ParseValue(
+                ref reader,
+                0x00FE,
+                "Value",
+                new MapiNodeBudget(),
+                0,
+                includePresence: false,
+                warnings: warnings);
+
+            Assert.True(reader.End);
+            Assert.Contains(warnings, warning => warning.Contains("exceeds", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(Flatten(value), node => node.Kind == MapiNodeKind.Raw);
+        }
+    }
+
+    [Fact]
+    public void ReportsMalformedRuleActionsAsPartialWithoutConsumingRawData()
     {
         using var saz = Fixture(
             ("raw/13_c.txt", Http(
@@ -782,7 +1050,7 @@ public sealed class MapiParserTests
                         WriteUInt32(stream, 1);
                         WriteUInt16(stream, 0x00FE);
                         WriteUInt16(stream, 0x6680);
-                        stream.Write([0xDE, 0xAD, 0xBE, 0xEF]);
+                        stream.Write([0xFF, 0xFF, 0xFF, 0xFF]);
                     }),
                 ("Content-Type", "application/mapi-http"),
                 ("X-ResponseCode", "0"))));
@@ -790,7 +1058,7 @@ public sealed class MapiParserTests
         var response = Assert.Single(new SazParser().Parse(saz).Sessions).Mapi!.Response!;
 
         Assert.False(response.Complete);
-        Assert.Contains(response.Warnings, warning => warning.Contains("Unsupported property type 0x00FE", StringComparison.Ordinal));
+        Assert.Contains(response.Warnings, warning => warning.Contains("count", StringComparison.Ordinal));
         Assert.Equal(MapiNodeKind.Raw, response.Root.Kind);
     }
 
@@ -946,6 +1214,22 @@ public sealed class MapiParserTests
         Span<byte> bytes = stackalloc byte[2];
         BinaryPrimitives.WriteUInt16LittleEndian(bytes, value);
         stream.Write(bytes);
+    }
+
+    private static void WriteAction(
+        Stream stream,
+        byte type,
+        Action<MemoryStream> writePayload,
+        uint flavor = 0)
+    {
+        using var action = new MemoryStream();
+        action.WriteByte(type);
+        WriteUInt32(action, flavor);
+        WriteUInt32(action, 0);
+        writePayload(action);
+        WriteUInt32(stream, checked((uint)action.Length));
+        action.Position = 0;
+        action.CopyTo(stream);
     }
 
     private static void WriteAsciiZ(Stream stream, string value)

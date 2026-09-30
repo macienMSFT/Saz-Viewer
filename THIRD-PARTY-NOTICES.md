@@ -6,7 +6,9 @@ Project: https://github.com/OfficeDev/Office-Inspectors-for-Fiddler
 
 Reference commit: `c18dd66c99f3b5a96c2e1d31698c5cf2deb828e7`
 
-SAZ Viewer independently adapts protocol names, MAPI/HTTP and NSPI field order, MS-OXCRPC extended-buffer framing, auxiliary-buffer framing, ROP identifiers, the PidTag/PidLid/string-named property maps, and the Direct2/LZ77 and XOR algorithms from repository-authored source. The implementation replaces the upstream Fiddler, FiddlerCore, WinForms, HexBox, native-marshalling, and global-state architecture with bounded .NET 8 readers and a local HTML report.
+SAZ Viewer independently adapts protocol names, MAPI/HTTP and NSPI field order, MS-OXCRPC extended-buffer framing, auxiliary-buffer framing, ROP identifiers, rule-action layouts, the PidTag/PidLid/string-named property maps, and the Direct2/LZ77 and XOR algorithms from repository-authored source. The implementation replaces the upstream Fiddler, FiddlerCore, WinForms, HexBox, native-marshalling, and global-state architecture with bounded .NET 8 readers and a local HTML report.
+
+The extended-rule action parser intentionally follows the 32-bit EntryID size, recipient count, and property count fields specified by MS-OXORULE sections 2.2.5.1.2.1 through 2.2.5.1.2.4.1 rather than the narrower reads in the pinned upstream source.
 
 The upstream MIT notice follows:
 

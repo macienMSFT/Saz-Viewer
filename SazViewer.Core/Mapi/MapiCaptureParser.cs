@@ -99,10 +99,10 @@ internal static class MapiCaptureParser
             resultSessions.Count(item => item.Response?.Complete == true),
             supportedRequestTypes,
             NspiOperations.Order(StringComparer.Ordinal).ToImmutableArray(),
-            ["Envelope", "Auxiliary framing", "Extended buffers", "ROP framing"],
+            ["Envelope", "NSPI properties/restrictions", "Rule actions", "Auxiliary framing", "Extended buffers", "ROP framing"],
             [
                 "Semantic decoding for all 132 individual ROP request/response payloads",
-                "PtypRuleAction, full property-name mapping, and FastTransfer lexical coverage",
+                "Move/copy/reply rule-action EntryID semantic fields and FastTransfer lexical coverage",
                 "Cross-session FastTransfer reconstruction"
             ]);
         return new MapiCapture(

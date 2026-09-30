@@ -280,6 +280,10 @@ internal static class NspiPropertyParser
                 children.Add(NspiRestrictionParser.Parse(ref reader, budget, depth + 1, codePage, warnings));
                 value = "Restriction";
                 break;
+            case 0x00FE:
+                children.Add(RuleActionParser.Parse(ref reader, budget, depth + 1, codePage, warnings));
+                value = "RuleAction";
+                break;
             case 0x0102:
                 var length = ReadLength32(ref reader, $"{name}.Length");
                 var payloadOffset = reader.Position;
