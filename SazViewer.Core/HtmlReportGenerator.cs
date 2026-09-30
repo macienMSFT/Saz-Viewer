@@ -2,12 +2,31 @@ using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Xml;
 
 namespace SazViewer.Core;
 
 public sealed class HtmlReportGenerator
 {
     private readonly BodyFormatter bodyFormatter = new();
+
+    private const int TreeMaxNodes = 4000;
+    private const int TreeMaxDepth = 40;
+    private const int TreeMaxChildrenPerNode = 300;
+    private const int TreeMaxScalarLength = 300;
+
+    // Each tree level round-trips through two JSON.NET-serializer nesting levels (an object, then
+    // its "children" array before the next object), so a TreeMaxDepth-limited document can need
+    // roughly double that many levels here. Give a generous safety margin above 2*TreeMaxDepth so
+    // serialization itself never silently fails (and thereby disables the Tree toggle) for content
+    // that our own depth budget is specifically designed to still show, truncated, in the tree.
+    private static readonly JsonSerializerOptions TreePayloadOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        MaxDepth = (2 * TreeMaxDepth) + 32
+    };
 
     public string Generate(SazReport report)
     {
@@ -21,8 +40,9 @@ public sealed class HtmlReportGenerator
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
 <title>SAZ capture</title>
 <style>
-:root{color-scheme:light dark;--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--warn:#d29922;--selected:#1f6feb55;--detail-height:38vh}
+:root{color-scheme:light dark;--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--warn:#d29922;--selected:#1f6feb55}
 *{box-sizing:border-box}html{scrollbar-gutter:stable}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
+body.inspector-open{overflow:hidden}
 main{width:100%;padding:4px}h2,h3,h4{margin:.25em 0}.muted,.format-status{color:var(--muted)}
 .controls{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 4px}input,select,button{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:7px 10px}
 input{min-width:280px;flex:1}button{cursor:pointer}
@@ -32,52 +52,76 @@ th,td{padding:8px;border:1px solid var(--line);vertical-align:top}tbody tr:hover
 #httpTable .http-url{width:52%;min-width:420px;word-break:normal;overflow-wrap:anywhere}#httpTable .http-status{width:140px}#httpTable .http-bytes{width:72px}
 #httpTable tbody tr{cursor:pointer}
 #httpTable tbody tr:focus{outline:2px solid var(--accent);outline-offset:-2px}#httpTable tbody tr.selected{background:var(--selected);box-shadow:inset 4px 0 var(--accent)}
-.url{max-width:560px;overflow-wrap:anywhere}.num{text-align:right;white-space:nowrap}.badge,.format-badge{padding:2px 7px;border:1px solid var(--line);border-radius:10px;white-space:nowrap}
+.num{text-align:right;white-space:nowrap}.badge,.format-badge{padding:2px 7px;border:1px solid var(--line);border-radius:10px;white-space:nowrap}
 details{margin:4px 0}summary{cursor:pointer;color:var(--accent)}pre{white-space:pre-wrap;overflow:auto;background:var(--bg);border:1px solid var(--line);padding:10px;word-break:break-word;tab-size:2}
 .warning{border-left:4px solid var(--warn);padding:6px 10px;margin:5px 0;background:#2b2111}.hidden{display:none!important}
-.http-workspace{height:calc(100vh - 8px);height:calc(100dvh - 8px);min-height:420px;display:flex;flex-direction:column}.http-table-scroll{min-height:180px;flex:1;overflow:auto;border:1px solid var(--line)}
-.detail-pane{position:sticky;bottom:0;z-index:5;flex:0 0 64px;min-height:64px;background:var(--panel);border:1px solid var(--line);box-shadow:0 -8px 22px #0008;overflow:hidden}
-.detail-pane.has-selection{flex-basis:var(--detail-height)}.detail-resizer{height:9px;cursor:row-resize;touch-action:none;background:linear-gradient(transparent 3px,var(--line) 3px,var(--line) 5px,transparent 5px)}
-.detail-resizer:focus{outline:2px solid var(--accent);outline-offset:-2px}.detail-content{height:calc(100% - 9px);overflow:auto;padding:10px 14px}.detail-placeholder{display:flex;height:100%;align-items:center;justify-content:center;color:var(--muted)}
-.session-heading{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}.session-heading .url{font-weight:600}
-.message-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}.message-panel{display:flex;flex-direction:column;min-width:0;border:1px solid var(--line);border-radius:7px;padding:10px;background:var(--bg)}
+.http-workspace{min-height:420px}.http-table-scroll{min-height:180px;overflow:auto;border:1px solid var(--line)}
+dialog#httpInspector{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh;margin:0;padding:0;border:none;background:var(--bg);color:var(--text)}
+dialog#httpInspector::backdrop{background:#000c}
+dialog#httpInspector[open]{display:flex;flex-direction:column}
+.inspector-header{display:flex;align-items:flex-start;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel2);flex-wrap:wrap}
+.inspector-heading{flex:1;min-width:220px;margin:0;font-size:16px;overflow-wrap:anywhere}
+.inspector-nav{display:flex;align-items:center;gap:6px}
+.inspector-position{color:var(--muted);font-size:12px;white-space:nowrap;min-width:70px;text-align:center}
+.inspector-close{font-size:16px;line-height:1;padding:6px 10px}
+.session-details{flex-basis:100%;margin:2px 0 0}.session-details summary{font-size:12px}
+.inspector-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.primary-tab-strip{padding:0 14px;background:var(--panel2);flex:0 0 auto}
+.primary-panels{flex:1;min-height:0}
+.primary-panel{flex:1;min-height:0;display:flex;flex-direction:column;padding:10px 14px;overflow:hidden}
+.message-panel{display:flex;flex-direction:column;flex:1;min-height:0}
 .headers{white-space:pre-wrap}
-.tab-strip{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:8px 0 0}
+.tab-strip{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:8px 0 0;flex:0 0 auto}
 .tab-strip [role=tab]{background:transparent;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;padding:6px 12px;color:var(--muted);cursor:pointer;font:inherit}
 .tab-strip [role=tab][aria-selected=true]{color:var(--text);background:var(--panel);border-color:var(--line);border-bottom:2px solid var(--accent);margin-bottom:-1px}
 .tab-strip [role=tab]:disabled{color:#4b535c;cursor:not-allowed;opacity:.5}
 .tab-strip [role=tab]:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;z-index:1}
-.tab-panels{flex:1;min-height:260px;max-height:58vh;overflow:auto;border:1px solid var(--line);border-top:none;background:var(--panel);padding:10px 12px;margin-bottom:2px}
+.tab-panels{flex:1;min-height:0;overflow:auto;border:1px solid var(--line);border-top:none;background:var(--panel);padding:10px 12px}
 .tab-panel.hidden{display:none!important}.tab-empty{color:var(--muted);padding:14px 4px}
 .format-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 6px}.format-meta .format-status{flex:1;min-width:180px}
 .captured-bytes{margin-top:8px}.captured-bytes summary{cursor:pointer;color:var(--accent)}
-.body-view{margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:#13233a}.session-meta{margin-top:10px}.session-meta pre{max-height:180px}.empty-message{color:var(--muted);padding:18px;text-align:center}
+.body-view{margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:#13233a}.session-meta pre{max-height:180px}
 .protocol-meta{margin-bottom:6px}.protocol-block{margin-top:6px}.protocol-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}.protocol-toolbar input{min-width:160px}.protocol-tree{overflow:visible;border:1px solid var(--line);padding:6px;background:var(--panel)}.protocol-node{margin-left:14px}.protocol-node>summary{display:flex;gap:7px;align-items:baseline}.protocol-field{display:flex;gap:7px;margin-left:16px;padding:2px 0}.protocol-offset{color:var(--muted);font:12px ui-monospace,Consolas,monospace}.protocol-value{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}.protocol-kind{color:var(--accent);font-size:12px}.protocol-hidden{display:none!important}
 .syn-key{color:#79c0ff}.syn-string{color:#a5d6ff}.syn-number{color:#ffa657}.syn-literal{color:#ff7b72}.syn-punct{color:#8b949e}.syn-tag{color:#7ee787}.syn-attr{color:#d2a8ff}.syn-comment{color:#8b949e;font-style:italic}.syn-value{color:#a5d6ff}
-.ws-table-scroll{max-height:70vh;overflow:auto;border:1px solid var(--line);margin-bottom:24px}.ws-table-scroll pre{max-height:320px}
-@media(max-width:900px){main{padding:2px}.message-grid{grid-template-columns:1fr}.detail-pane.has-selection{--detail-height:52vh}.tab-panels{max-height:44vh}.http-workspace{height:calc(100vh - 4px);height:calc(100dvh - 4px);min-height:360px}}
+.tree-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 6px}.view-toggle{display:flex;gap:2px}.view-toggle button[aria-pressed=true]{border-color:var(--accent);color:var(--text)}
+.tree-view{font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
+.tree-item{margin:1px 0}.tree-row{display:flex;gap:6px;align-items:baseline;cursor:default;border-radius:4px;padding:1px 4px}
+.tree-item[role=treeitem]{outline:none}.tree-item[role=treeitem]:focus-visible>.tree-row,.tree-status:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tree-caret{width:1em;display:inline-block;color:var(--muted)}.tree-caret-leaf{visibility:hidden}
+.tree-group{margin-left:16px;padding-left:8px;border-left:1px dotted var(--line)}.tree-group[hidden]{display:none}
+.tree-label-object,.tree-label-array,.tree-label-element{color:var(--accent)}.tree-label-string,.tree-label-text,.tree-label-cdata{color:#a5d6ff}.tree-label-number,.tree-label-boolean{color:#ffa657}.tree-label-null{color:#ff7b72}.tree-label-attribute{color:#d2a8ff}.tree-label-comment{color:#8b949e;font-style:italic}
+.tree-truncated{color:var(--warn);font-size:11px}.tree-status{color:var(--muted);font-style:italic;padding:2px 4px}
+@media(max-width:900px){main{padding:2px}}
 </style>
 </head>
 <body><main>
 """);
         AppendHttpSection(html, report.Sessions);
-        AppendWarnings(html, report.Warnings);
-        AppendWebSocketSection(html, report.WebSocketMessages);
         html.Append("""
 </main>
+<dialog id="httpInspector" aria-labelledby="inspectorTitle" aria-modal="true">
+<header class="inspector-header">
+<h2 id="inspectorTitle" class="inspector-heading"></h2>
+<div class="inspector-nav">
+<button type="button" id="inspectorPrev" aria-label="Previous session">&#9664; Previous</button>
+<span id="inspectorPosition" class="inspector-position" aria-live="polite"></span>
+<button type="button" id="inspectorNext" aria-label="Next session">Next &#9654;</button>
+</div>
+<button type="button" id="inspectorClose" class="inspector-close" aria-label="Close session inspector">&#10005;</button>
+</header>
+<div id="inspectorBody" class="inspector-body"></div>
+</dialog>
 <script>
 (()=>{
 const httpRows=[...document.querySelectorAll('#httpTable tbody tr')];
-const detailPane=document.getElementById('httpDetails');
-const detailContent=document.getElementById('httpDetailContent');
-let selectedRow=null;
-function showPlaceholder(message){
-  detailContent.replaceChildren();
-  const placeholder=document.createElement('div');
-  placeholder.className='detail-placeholder';
-  placeholder.textContent=message;
-  detailContent.append(placeholder);
-}
+const inspector=document.getElementById('httpInspector');
+const inspectorBody=document.getElementById('inspectorBody');
+const inspectorTitle=document.getElementById('inspectorTitle');
+const inspectorPrev=document.getElementById('inspectorPrev');
+const inspectorNext=document.getElementById('inspectorNext');
+const inspectorPosition=document.getElementById('inspectorPosition');
+const inspectorClose=document.getElementById('inspectorClose');
+let currentRow=null,originRow=null,renderGeneration=0;
 function renderProtocolTrees(root){
   root.querySelectorAll('[data-protocol]').forEach(host=>{
     let data;
@@ -117,28 +161,252 @@ function renderProtocolTrees(root){
     collapse.addEventListener('click',()=>tree.querySelectorAll('details').forEach(item=>item.open=false));
   });
 }
-function clearSelection(message){
-  if(selectedRow){selectedRow.classList.remove('selected');selectedRow.setAttribute('aria-selected','false')}
-  selectedRow=null;detailPane.classList.remove('has-selection');
-  resizer?.setAttribute('aria-disabled','true');resizer?.setAttribute('aria-valuenow','180');
-  showPlaceholder(message||'Select an HTTP session to inspect its request and response.');
+function appendStatus(parent,text){
+  const status=document.createElement('div');status.className='tree-status';status.setAttribute('role','treeitem');status.tabIndex=-1;status.textContent=text;
+  parent.append(status);
+  return status;
 }
-function selectRow(row){
-  const template=document.getElementById(row.dataset.detail);
-  if(!template)return;
-  if(selectedRow){selectedRow.classList.remove('selected');selectedRow.setAttribute('aria-selected','false')}
-  selectedRow=row;row.classList.add('selected');row.setAttribute('aria-selected','true');
-  detailContent.replaceChildren(template.content.cloneNode(true));detailPane.classList.add('has-selection');
-  highlightSelected(detailContent);renderProtocolTrees(detailContent);setupTabs(detailContent);resizer.setAttribute('aria-disabled','false');
-  requestAnimationFrame(updateResizeAria);
+function treeLabelText(node,kind){
+  if(kind==='json'){
+    const prefix=node.isIndex?`[${node.name}] `:(node.name!==null&&node.name!==undefined?`${node.name}: `:'');
+    if(node.kind==='object')return `${prefix}{} (${node.count??0} propert${node.count===1?'y':'ies'})`;
+    if(node.kind==='array')return `${prefix}[] (${node.count??0} item${node.count===1?'':'s'})`;
+    if(node.kind==='string')return `${prefix}"${node.value??''}"`;
+    if(node.kind==='null')return `${prefix}null`;
+    return `${prefix}${node.value}`;
+  }
+  if(node.kind==='attribute')return `@${node.name}="${node.value??''}"`;
+  if(node.kind==='element'){
+    const suffix=node.count!==null&&node.count!==undefined?` (${node.count} child${node.count===1?'':'ren'})`:'';
+    return `<${node.name}>${suffix}`;
+  }
+  if(node.kind==='text')return `"${node.value??''}"`;
+  if(node.kind==='cdata')return `CDATA[[${node.value??''}]]`;
+  if(node.kind==='comment')return `<!--${node.value??''}-->`;
+  return node.kind;
 }
-httpRows.forEach(row=>{
-  row.addEventListener('click',()=>selectRow(row));
-  row.addEventListener('keydown',event=>{
-    if(event.key==='Enter'||event.key===' '){event.preventDefault();selectRow(row)}
+function buildTree(host,rootNode,kind,generation){
+  const tree=document.createElement('div');tree.className='tree-view';tree.setAttribute('role','tree');
+  tree.setAttribute('aria-label',kind==='json'?'JSON structure':'XML structure');
+  host.replaceChildren(tree);
+  // True roving tabindex: exactly one treeitem/status stop in this tree has tabIndex 0 at a
+  // time (the rest are -1, still individually focusable programmatically for arrow-key
+  // traversal, but out of the page Tab order). This keeps trees with thousands of nodes (or many
+  // truncation/status entries) from creating thousands of Tab stops.
+  let activeItem=null;
+  function isVisible(el){
+    let node=el.parentElement;
+    while(node&&node!==tree){
+      if(node.classList.contains('tree-group')&&node.hidden)return false;
+      node=node.parentElement;
+    }
+    return true;
+  }
+  function stops(){return [...tree.querySelectorAll('.tree-item,.tree-status')]}
+  function visibleStops(){return stops().filter(isVisible)}
+  function ownerItem(el){
+    const container=el.parentElement;
+    return container&&container.classList.contains('tree-group')?container.parentElement:null;
+  }
+  function setActive(item,focus){
+    if(!item)return;
+    if(activeItem&&activeItem!==item)activeItem.tabIndex=-1;
+    item.tabIndex=0;activeItem=item;
+    if(focus)item.focus();
+  }
+  function restoreVisibleActive(focus){
+    if(activeItem&&isVisible(activeItem))return;
+    let candidate=activeItem;
+    while(candidate&&!isVisible(candidate))candidate=ownerItem(candidate);
+    if(!candidate)candidate=visibleStops()[0];
+    setActive(candidate,focus);
+  }
+  // Desired expansion state is consulted by appendItem for nodes that haven't been created yet
+  // (still queued for a future batch), so Expand/Collapse all takes effect immediately for
+  // already-rendered nodes and is honored by the rest of a still-streaming large tree too.
+  let desiredExpanded=true;
+  host._setDesiredExpanded=value=>{
+    const focusWasInTree=tree.contains(document.activeElement);
+    desiredExpanded=value;
+    tree.querySelectorAll('.tree-item[aria-expanded]').forEach(item=>{
+      item.setAttribute('aria-expanded',String(value));
+      const group=item.querySelector(':scope>.tree-group');if(group)group.hidden=!value;
+      const caret=item.querySelector(':scope>.tree-row>.tree-caret');if(caret)caret.textContent=value?'\u25be':'\u25b8';
+    });
+    if(!value)restoreVisibleActive(focusWasInTree);
+  };
+  function handleTreeKeydown(event,item){
+    const key=event.key;
+    if(key==='Enter'||key===' '){
+      if(item._toggle){event.preventDefault();item._toggle()}
+      return;
+    }
+    if(event.altKey||event.ctrlKey||event.metaKey||event.shiftKey)return;
+    if(key==='ArrowDown'){
+      const list=visibleStops(),index=list.indexOf(item);
+      if(index>=0&&index<list.length-1){event.preventDefault();setActive(list[index+1],true)}
+      return;
+    }
+    if(key==='ArrowUp'){
+      const list=visibleStops(),index=list.indexOf(item);
+      if(index>0){event.preventDefault();setActive(list[index-1],true)}
+      return;
+    }
+    if(key==='ArrowRight'){
+      if(!item._toggle)return;
+      event.preventDefault();
+      const expanded=item.getAttribute('aria-expanded')==='true';
+      if(!expanded){item._toggle();return}
+      const group=item.querySelector(':scope>.tree-group');
+      const first=group&&[...group.children].find(child=>child.classList.contains('tree-item')||child.classList.contains('tree-status'));
+      if(first)setActive(first,true);
+      return;
+    }
+    if(key==='ArrowLeft'){
+      event.preventDefault();
+      if(item._toggle&&item.getAttribute('aria-expanded')==='true'){item._toggle();return}
+      const owner=ownerItem(item);
+      if(owner)setActive(owner,true);
+      return;
+    }
+    if(key==='Home'){
+      const list=visibleStops();
+      if(list.length){event.preventDefault();setActive(list[0],true)}
+      return;
+    }
+    if(key==='End'){
+      const list=visibleStops();
+      if(list.length){event.preventDefault();setActive(list[list.length-1],true)}
+    }
+  }
+  const queue=[];
+  if(rootNode.kind==='document'){
+    (rootNode.children||[]).forEach(child=>queue.push({node:child,parent:tree,depth:0}));
+    if(rootNode.omitted>0)queue.push({status:true,parent:tree,text:`+${rootNode.omitted} more not shown here \u2014 use Pretty Text to view the full content.`});
+  }else{
+    queue.push({node:rootNode,parent:tree,depth:0});
+  }
+  const BATCH=150;
+  function pushChildren(node,group,depth){
+    const kids=[];
+    if(Array.isArray(node.attrs))kids.push(...node.attrs);
+    if(Array.isArray(node.children))kids.push(...node.children);
+    kids.forEach(kid=>queue.push({node:kid,parent:group,depth:depth+1}));
+    // Status entries are queued (not appended immediately) so they always land after their real
+    // sibling nodes in the DOM, even though those siblings are themselves appended later, in a
+    // future batch.
+    if(node.omitted>0)queue.push({status:true,parent:group,text:`+${node.omitted} more not shown here \u2014 use Pretty Text to view the full content.`});
+    if(node.depthLimited)queue.push({status:true,parent:group,text:'Maximum nesting depth reached; deeper content is not shown here \u2014 use Pretty Text to view the full content.'});
+  }
+  function appendStatusEntry(parent,text){
+    const status=appendStatus(parent,text);
+    status.addEventListener('keydown',event=>{if(event.target===status)handleTreeKeydown(event,status)});
+    status.addEventListener('click',()=>setActive(status,true));
+    if(!activeItem)setActive(status,false);
+  }
+  function appendItem(node,parent,depth){
+    const hasKids=(Array.isArray(node.children)&&node.children.length>0)||(Array.isArray(node.attrs)&&node.attrs.length>0)||node.omitted>0||node.depthLimited;
+    const item=document.createElement('div');item.className='tree-item';item.setAttribute('role','treeitem');item.tabIndex=-1;
+    if(hasKids)item.setAttribute('aria-expanded',String(desiredExpanded));
+    const row=document.createElement('div');row.className='tree-row';
+    const caret=document.createElement('span');caret.className='tree-caret'+(hasKids?'':' tree-caret-leaf');caret.setAttribute('aria-hidden','true');caret.textContent=hasKids?(desiredExpanded?'\u25be':'\u25b8'):'\u2022';
+    row.append(caret);
+    const label=document.createElement('span');label.className='tree-label tree-label-'+node.kind;label.textContent=treeLabelText(node,kind);
+    row.append(label);
+    if(node.truncated){const truncated=document.createElement('span');truncated.className='tree-truncated';truncated.textContent=' (truncated)';row.append(truncated)}
+    item.append(row);
+    let group=null;
+    if(hasKids){
+      group=document.createElement('div');group.className='tree-group';group.setAttribute('role','group');
+      group.hidden=!desiredExpanded;
+      item.append(group);
+      pushChildren(node,group,depth);
+    }
+    parent.append(item);
+    if(!activeItem)setActive(item,false);
+    if(hasKids){
+      const toggle=()=>{
+        const expanded=item.getAttribute('aria-expanded')==='true';
+        item.setAttribute('aria-expanded',String(!expanded));
+        group.hidden=expanded;
+        caret.textContent=expanded?'\u25b8':'\u25be';
+      };
+      item._toggle=toggle;
+      row.addEventListener('click',event=>{event.stopPropagation();setActive(item,true);toggle()});
+    }else{
+      row.addEventListener('click',event=>{event.stopPropagation();setActive(item,true)});
+    }
+    item.addEventListener('keydown',event=>{
+      if(event.target!==item)return;
+      handleTreeKeydown(event,item);
+    });
+  }
+  function step(){
+    if(generation!==renderGeneration)return;
+    let processed=0;
+    while(processed<BATCH&&queue.length){
+      const entry=queue.shift();
+      if(entry.status)appendStatusEntry(entry.parent,entry.text);
+      else appendItem(entry.node,entry.parent,entry.depth);
+      processed++;
+    }
+    if(queue.length&&generation===renderGeneration)requestAnimationFrame(step);
+  }
+  step();
+}
+function setAllExpanded(container,expanded){
+  if(!container)return;
+  if(typeof container._setDesiredExpanded==='function'){container._setDesiredExpanded(expanded);return}
+  const focusWasInTree=container.contains(document.activeElement);
+  container.querySelectorAll('.tree-item[aria-expanded]').forEach(item=>{
+    item.setAttribute('aria-expanded',String(expanded));
+    const group=item.querySelector(':scope>.tree-group');
+    if(group)group.hidden=!expanded;
+    const caret=item.querySelector(':scope>.tree-row>.tree-caret');
+    if(caret)caret.textContent=expanded?'\u25be':'\u25b8';
   });
-});
-function bindFilter(inputId,selectId,tableId,onFiltered){
+  if(!expanded){
+    const current=container.querySelector('.tree-item[tabindex="0"],.tree-status[tabindex="0"]');
+    if(current&&current.closest('.tree-group[hidden]')){
+      let candidate=current.parentElement?.closest('.tree-item');
+      while(candidate&&candidate.closest('.tree-group[hidden]'))candidate=candidate.parentElement?.closest('.tree-item');
+      candidate??=container.querySelector('.tree-view>.tree-item,.tree-view>.tree-status');
+      current.tabIndex=-1;
+      if(candidate){candidate.tabIndex=0;if(focusWasInTree)candidate.focus()}
+    }
+  }
+}
+function renderValueTrees(root,generation){
+  root.querySelectorAll('[data-json-tree],[data-xml-tree]').forEach(host=>{
+    const isJson=host.hasAttribute('data-json-tree');
+    const raw=host.getAttribute(isJson?'data-json-tree':'data-xml-tree');
+    host.removeAttribute('data-json-tree');host.removeAttribute('data-xml-tree');
+    let payload;
+    try{payload=JSON.parse(raw)}
+    catch{host.textContent='Tree view could not be loaded; use Pretty Text.';host.className='tab-empty';return}
+    buildTree(host,payload,isJson?'json':'xml',generation);
+  });
+}
+function setupTreeToggles(root){
+  root.querySelectorAll('.structured-body').forEach(container=>{
+    const toolbar=container.querySelector('.tree-toolbar');
+    const treeView=container.querySelector('.tree-subview');
+    const prettyView=container.querySelector('.pretty-subview');
+    if(!toolbar)return;
+    toolbar.querySelectorAll('.view-toggle button').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        if(btn.disabled)return;
+        const showTree=btn.dataset.view==='tree';
+        treeView.classList.toggle('hidden',!showTree);
+        prettyView.classList.toggle('hidden',showTree);
+        toolbar.querySelectorAll('.view-toggle button').forEach(other=>other.setAttribute('aria-pressed',String(other===btn)));
+      });
+    });
+    toolbar.querySelector('.tree-expand-all')?.addEventListener('click',()=>setAllExpanded(treeView,true));
+    toolbar.querySelector('.tree-collapse-all')?.addEventListener('click',()=>setAllExpanded(treeView,false));
+  });
+}
+function bindFilter(inputId,selectId,tableId){
   const input=document.getElementById(inputId),select=document.getElementById(selectId),rows=document.querySelectorAll(`#${tableId} tbody tr`);
   function apply(){
     const query=input.value.toLowerCase(),filter=select.value;
@@ -147,16 +415,10 @@ function bindFilter(inputId,selectId,tableId,onFiltered){
       const visible=(!query||row.dataset.search.includes(query))&&filterMatch;
       row.classList.toggle('hidden',!visible);
     });
-    if(onFiltered)onFiltered();
   }
   input.addEventListener('input',apply);select.addEventListener('change',apply);
 }
-bindFilter('httpSearch','httpFilter','httpTable',()=>{
-  if(selectedRow&&selectedRow.classList.contains('hidden')){
-    clearSelection('The selected session is hidden by the active filter. Select a visible session to inspect it.');
-  }
-});
-bindFilter('wsSearch','wsFilter','wsTable');
+bindFilter('httpSearch','httpFilter','httpTable');
 const preferredTab={};
 function tabsOf(tablist){return [...tablist.querySelectorAll('[role="tab"]')]}
 function activateTab(tablist,key,options){
@@ -173,7 +435,7 @@ function initialTabFor(tablist){
   const enabled=key=>tabs.some(tab=>tab.dataset.tab===key&&!tab.disabled);
   const remembered=preferredTab[tablist.dataset.side];
   if(remembered&&enabled(remembered))return remembered;
-  for(const key of ['mapi','json','xml','raw','headers']){if(enabled(key))return key}
+  for(const key of tablist.dataset.priority.split(',')){if(enabled(key))return key}
   return null;
 }
 function setupTabList(tablist){
@@ -185,6 +447,7 @@ function setupTabList(tablist){
     activateTab(tablist,tab.dataset.tab,{remember:true});
   });
   tablist.addEventListener('keydown',event=>{
+    if(event.altKey||event.ctrlKey||event.metaKey)return;
     if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
     const enabledTabs=tabsOf(tablist).filter(tab=>!tab.disabled);
     if(enabledTabs.length===0)return;
@@ -199,7 +462,6 @@ function setupTabList(tablist){
   });
 }
 function setupTabs(root){root.querySelectorAll('[role="tablist"]').forEach(setupTabList)}
-const resizer=document.getElementById('detailResizer');
 function appendSpan(fragment,className,text){
   const span=document.createElement('span');span.className=className;span.textContent=text;fragment.append(span);
 }
@@ -258,63 +520,97 @@ function highlightSelected(root){
     else if(pre.dataset.format==='xml')highlightXml(pre);
   });
 }
-function updateResizeAria(){
-  const maximum=Math.max(180,Math.round(window.innerHeight*.75));
-  const current=detailPane.classList.contains('has-selection')?Math.round(detailPane.getBoundingClientRect().height):180;
-  resizer.setAttribute('aria-valuemax',String(maximum));resizer.setAttribute('aria-valuenow',String(current));
+function visibleRows(){return httpRows.filter(row=>!row.classList.contains('hidden'))}
+function updateNavState(){
+  const rows=visibleRows();
+  const index=rows.indexOf(currentRow);
+  const prevDisabled=index<=0;
+  const nextDisabled=index<0||index>=rows.length-1;
+  const activeWasPrev=document.activeElement===inspectorPrev;
+  const activeWasNext=document.activeElement===inspectorNext;
+  if((activeWasPrev&&prevDisabled)||(activeWasNext&&nextDisabled)){
+    if(activeWasPrev&&!nextDisabled)inspectorNext.focus();
+    else if(activeWasNext&&!prevDisabled)inspectorPrev.focus();
+    else focusStableInspectorControl();
+  }
+  inspectorPrev.disabled=prevDisabled;
+  inspectorNext.disabled=nextDisabled;
+  inspectorPosition.textContent=index<0?'':`${index+1} of ${rows.length}`;
 }
-function resizeTo(height){
-  const limited=Math.max(180,Math.min(Math.max(180,window.innerHeight*.75),height));
-  detailPane.style.setProperty('--detail-height',`${limited}px`);updateResizeAria();
+function focusStableInspectorControl(){
+  const primaryRequestTab=inspectorBody.querySelector('.primary-tab-strip [role="tab"][aria-selected="true"]');
+  if(primaryRequestTab&&!primaryRequestTab.disabled){primaryRequestTab.focus();return}
+  inspectorClose.focus();
 }
-resizer.addEventListener('pointerdown',event=>{
-  if(!detailPane.classList.contains('has-selection'))return;
-  const startY=event.clientY,startHeight=detailPane.getBoundingClientRect().height;
-  resizer.setPointerCapture(event.pointerId);
-  const move=moveEvent=>resizeTo(startHeight+startY-moveEvent.clientY);
-  const stop=()=>{resizer.removeEventListener('pointermove',move);resizer.removeEventListener('pointerup',stop);resizer.removeEventListener('pointercancel',stop)};
-  resizer.addEventListener('pointermove',move);resizer.addEventListener('pointerup',stop);resizer.addEventListener('pointercancel',stop);
+function loadRow(row){
+  const template=document.getElementById(row.dataset.detail);
+  if(!template)return false;
+  const focusWasInBody=inspectorBody.contains(document.activeElement);
+  if(currentRow){currentRow.classList.remove('selected');currentRow.setAttribute('aria-selected','false')}
+  currentRow=row;row.classList.add('selected');row.setAttribute('aria-selected','true');
+  row.scrollIntoView({block:'nearest'});
+  inspectorTitle.textContent=row.dataset.summary||'';
+  Object.keys(preferredTab).forEach(key=>delete preferredTab[key]);
+  renderGeneration++;
+  const generation=renderGeneration;
+  inspectorBody.replaceChildren(template.content.cloneNode(true));
+  highlightSelected(inspectorBody);
+  renderProtocolTrees(inspectorBody);
+  renderValueTrees(inspectorBody,generation);
+  setupTabs(inspectorBody);
+  setupTreeToggles(inspectorBody);
+  updateNavState();
+  // Request is always the default-selected primary tab after (re)loading a row (see
+  // initialTabFor's "request,response" priority and the preferredTab reset above), so it is a
+  // stable, guaranteed-enabled place to land focus when the previously focused element lived
+  // inside the body content we just discarded (e.g. a secondary tab or tree item reached via the
+  // Alt+Arrow inspector-navigation shortcut).
+  if(focusWasInBody){
+    const primaryRequestTab=inspectorBody.querySelector('.primary-tab-strip [role="tab"][aria-selected="true"]');
+    primaryRequestTab?.focus();
+  }
+  return true;
+}
+function openInspector(row){
+  if(!loadRow(row))return;
+  originRow=row;
+  document.body.classList.add('inspector-open');
+  inspector.showModal();
+}
+function closeInspector(){inspector.close()}
+inspector.addEventListener('close',()=>{
+  document.body.classList.remove('inspector-open');
+  if(currentRow){currentRow.classList.remove('selected');currentRow.setAttribute('aria-selected','false')}
+  currentRow=null;
+  originRow?.focus();
 });
-resizer.addEventListener('keydown',event=>{
-  if(!detailPane.classList.contains('has-selection')||!['ArrowUp','ArrowDown'].includes(event.key))return;
-  event.preventDefault();const delta=event.key==='ArrowUp'?24:-24;resizeTo(detailPane.getBoundingClientRect().height+delta);
+inspectorClose.addEventListener('click',closeInspector);
+function navigate(delta){
+  const rows=visibleRows();
+  const index=rows.indexOf(currentRow);
+  if(index<0)return;
+  const nextIndex=index+delta;
+  if(nextIndex<0||nextIndex>=rows.length)return;
+  loadRow(rows[nextIndex]);
+}
+inspectorPrev.addEventListener('click',()=>navigate(-1));
+inspectorNext.addEventListener('click',()=>navigate(1));
+inspector.addEventListener('keydown',event=>{
+  if(!event.altKey)return;
+  if(event.key==='ArrowLeft'){event.preventDefault();navigate(-1)}
+  else if(event.key==='ArrowRight'){event.preventDefault();navigate(1)}
 });
-window.addEventListener('resize',()=>{
-  if(detailPane.classList.contains('has-selection'))resizeTo(detailPane.getBoundingClientRect().height);
-  else updateResizeAria();
+httpRows.forEach(row=>{
+  row.addEventListener('click',()=>openInspector(row));
+  row.addEventListener('keydown',event=>{
+    if(event.key==='Enter'||event.key===' '){event.preventDefault();openInspector(row)}
+  });
 });
-clearSelection();
 })();
 </script>
 </body></html>
 """);
         return html.ToString();
-    }
-
-    private static void AppendWarnings(StringBuilder html, IReadOnlyList<string> warnings)
-    {
-        if (warnings.Count == 0)
-        {
-            return;
-        }
-
-        html.Append("<section><h2>Warnings</h2><details");
-        if (warnings.Count <= 5)
-        {
-            html.Append(" open");
-        }
-        html.Append("><summary>").Append(warnings.Count).Append(" warning(s)</summary>");
-        foreach (var warning in warnings.Take(500))
-        {
-            html.Append("<div class=\"warning\">");
-            Text(html, warning);
-            html.Append("</div>");
-        }
-        if (warnings.Count > 500)
-        {
-            html.Append("<div class=\"warning\">Additional warnings omitted from display.</div>");
-        }
-        html.Append("</details></section>");
     }
 
     private void AppendHttpSection(StringBuilder html, IReadOnlyList<HttpSession> sessions)
@@ -329,14 +625,7 @@ clearSelection();
         {
             AppendHttpRow(html, sessions[index], index);
         }
-        html.Append("""
-</tbody></table></div>
-<aside id="httpDetails" class="detail-pane" aria-label="Selected HTTP session details">
-<div id="detailResizer" class="detail-resizer" role="separator" aria-label="Resize HTTP detail pane" aria-orientation="horizontal" aria-valuemin="180" aria-valuemax="900" aria-valuenow="320" aria-disabled="true" tabindex="0"></div>
-<div id="httpDetailContent" class="detail-content" aria-live="polite"></div>
-</aside>
-<div class="session-templates" hidden>
-""");
+        html.Append("</tbody></table></div>\n<div class=\"session-templates\" hidden>\n");
         for (var index = 0; index < sessions.Count; index++)
         {
             AppendSessionTemplate(html, sessions[index], index);
@@ -355,11 +644,14 @@ clearSelection();
             session.StatusText, session.ContentType, session.ClientEndpoint, session.ServerEndpoint,
             session.Mapi?.RequestType, session.Mapi?.Endpoint.ToString()
         }.Where(value => !string.IsNullOrWhiteSpace(value))).ToLowerInvariant();
+        var summary = $"Session {session.Id}: {session.Method ?? "-"} {session.Url ?? "-"}";
         html.Append("<tr tabindex=\"0\" aria-selected=\"false\" aria-label=\"Inspect HTTP session ");
         Attribute(html, session.Id);
         html.Append("\" data-detail=\"http-detail-").Append(index).Append("\" data-filter=\"")
             .Append(filter).Append("\" data-mapi=\"").Append(session.Mapi is not null ? "true" : "false")
-            .Append("\" data-search=\"");
+            .Append("\" data-summary=\"");
+        Attribute(html, summary);
+        html.Append("\" data-search=\"");
         Attribute(html, search);
         html.Append("\"><td class=\"http-time\">");
         AppendHttpTimestamp(html, session.Timestamp);
@@ -394,17 +686,30 @@ clearSelection();
 
     private void AppendSessionTemplate(StringBuilder html, HttpSession session, int index)
     {
-        html.Append("<template id=\"http-detail-").Append(index).Append("\"><div class=\"session-heading\"><h3>Session ");
-        Text(html, session.Id);
-        html.Append("</h3><span class=\"badge\">");
-        Text(html, session.Method ?? "-");
-        html.Append("</span><span class=\"url\">");
-        Text(html, session.Url ?? "-");
-        html.Append("</span></div><div class=\"message-grid\">");
+        html.Append("<template id=\"http-detail-").Append(index).Append("\">");
+        AppendSessionDetails(html, session);
+        html.Append("<div class=\"primary-tab-strip tab-strip\" role=\"tablist\" aria-label=\"Request or response\" data-side=\"primary\" data-priority=\"request,response\">");
+        AppendTabButton(html, "primary", "request", "Request", true, true);
+        AppendTabButton(html, "primary", "response", "Response", true, false);
+        html.Append("</div><div class=\"primary-panels tab-panels\">");
+        html.Append("<div role=\"tabpanel\" id=\"primary-panel-request\" aria-labelledby=\"primary-tab-request\" tabindex=\"0\" class=\"tab-panel primary-panel\">");
         AppendMessagePanel(html, "Request", "request", session.Request, session.Mapi?.Request);
+        html.Append("</div>");
+        html.Append("<div role=\"tabpanel\" id=\"primary-panel-response\" aria-labelledby=\"primary-tab-response\" tabindex=\"0\" class=\"tab-panel primary-panel hidden\">");
         AppendMessagePanel(html, "Response", "response", session.Response, session.Mapi?.Response);
-        html.Append("</div><div class=\"session-meta\">");
-        if (session.ClientEndpoint is not null || session.ServerEndpoint is not null)
+        html.Append("</div></div></template>");
+    }
+
+    private static void AppendSessionDetails(StringBuilder html, HttpSession session)
+    {
+        var hasEndpoints = session.ClientEndpoint is not null || session.ServerEndpoint is not null;
+        if (!hasEndpoints && session.Timers.Count == 0 && session.Warnings.Count == 0)
+        {
+            return;
+        }
+
+        html.Append("<details class=\"session-details\"><summary>Session details</summary>");
+        if (hasEndpoints)
         {
             html.Append("<p><b>Endpoints:</b> ");
             Text(html, $"{session.ClientEndpoint ?? "?"} -> {session.ServerEndpoint ?? "?"}");
@@ -425,7 +730,7 @@ clearSelection();
             Text(html, warning);
             html.Append("</div>");
         }
-        html.Append("</div></template>");
+        html.Append("</details>");
     }
 
     private void AppendMessagePanel(
@@ -435,7 +740,7 @@ clearSelection();
         HttpMessage? message,
         MapiMessageParse? protocol)
     {
-        html.Append("<section class=\"message-panel\"><h3>").Append(title).Append("</h3>");
+        html.Append("<section class=\"message-panel\">");
 
         var lowerTitle = title.ToLowerInvariant();
         var body = message is null ? null : bodyFormatter.Format(message.Body, message.Header("Content-Type"));
@@ -464,11 +769,11 @@ clearSelection();
         AppendTabPanel(
             html, side, "json", initial == "json", jsonEnabled,
             $"JSON view is not available: the {lowerTitle} body is not recognized, valid JSON.",
-            jsonEnabled ? inner => AppendFormattedBody(inner, body!, "json") : null);
+            jsonEnabled ? inner => AppendStructuredBody(inner, body!, "json") : null);
         AppendTabPanel(
             html, side, "xml", initial == "xml", xmlEnabled,
             $"XML view is not available: the {lowerTitle} body is not recognized, valid XML.",
-            xmlEnabled ? inner => AppendFormattedBody(inner, body!, "xml") : null);
+            xmlEnabled ? inner => AppendStructuredBody(inner, body!, "xml") : null);
         AppendTabPanel(
             html, side, "mapi", initial == "mapi", mapiEnabled,
             $"MAPI view is not available: no protocol tree was parsed for this {lowerTitle}.",
@@ -502,7 +807,7 @@ clearSelection();
         string? initial)
     {
         html.Append("<div class=\"tab-strip\" role=\"tablist\" aria-label=\"").Append(title)
-            .Append(" detail views\" data-side=\"").Append(side).Append("\">");
+            .Append(" detail views\" data-side=\"").Append(side).Append("\" data-priority=\"mapi,json,xml,raw,headers\">");
         AppendTabButton(html, side, "json", "JSON", jsonEnabled, initial == "json");
         AppendTabButton(html, side, "xml", "XML", xmlEnabled, initial == "xml");
         AppendTabButton(html, side, "mapi", "MAPI", mapiEnabled, initial == "mapi");
@@ -572,16 +877,55 @@ clearSelection();
         html.Append("</pre>");
     }
 
-    private static void AppendFormattedBody(StringBuilder html, BodyPresentation body, string format)
+    private static void AppendStructuredBody(StringBuilder html, BodyPresentation body, string format)
     {
+        var treePayload = format == "json" ? BuildJsonTreePayload(body.Formatted) : BuildXmlTreePayload(body.Formatted);
+        var treeAvailable = treePayload is not null;
+
+        html.Append("<div class=\"structured-body\" data-format=\"").Append(format).Append("\">");
         html.Append("<div class=\"format-meta\"><span class=\"format-badge\">");
         Text(html, body.Label);
         html.Append("</span><span class=\"format-status\">");
         Text(html, body.Status);
-        html.Append("</span></div><pre class=\"body-view formatted-view\" data-format=\"")
-            .Append(format).Append("\">");
+        html.Append("</span></div>");
+
+        html.Append("<div class=\"tree-toolbar\"><div class=\"view-toggle\" role=\"group\" aria-label=\"")
+            .Append(format == "json" ? "JSON" : "XML").Append(" view mode\">")
+            .Append("<button type=\"button\" data-view=\"tree\" aria-pressed=\"").Append(treeAvailable ? "true" : "false").Append('"');
+        if (!treeAvailable)
+        {
+            html.Append(" disabled");
+        }
+        html.Append(">Tree</button>")
+            .Append("<button type=\"button\" data-view=\"pretty\" aria-pressed=\"").Append(treeAvailable ? "false" : "true").Append("\">Pretty Text</button></div>");
+        if (treeAvailable)
+        {
+            html.Append("<button type=\"button\" class=\"tree-expand-all\">Expand all</button>")
+                .Append("<button type=\"button\" class=\"tree-collapse-all\">Collapse all</button>");
+        }
+        html.Append("</div>");
+
+        html.Append("<div class=\"tree-subview\"");
+        if (treeAvailable)
+        {
+            html.Append(" data-").Append(format).Append("-tree=\"");
+            Attribute(html, treePayload);
+            html.Append('"');
+        }
+        else
+        {
+            html.Append(" hidden");
+        }
+        html.Append('>');
+        html.Append(treeAvailable
+            ? "<span class=\"muted\">Tree loads when this session is selected.</span>"
+            : "<div class=\"tab-empty\">Tree view is not available for this body; showing Pretty Text.</div>");
+        html.Append("</div>");
+
+        html.Append("<div class=\"pretty-subview").Append(treeAvailable ? " hidden" : "")
+            .Append("\"><pre class=\"body-view formatted-view\" data-format=\"").Append(format).Append("\">");
         Text(html, body.Formatted);
-        html.Append("</pre>");
+        html.Append("</pre></div></div>");
     }
 
     private static void AppendRawView(StringBuilder html, HttpMessage message, BodyPresentation body)
@@ -657,43 +1001,301 @@ clearSelection();
         children = node.Children.Select(ToProtocolData).ToArray()
     };
 
-    private static void AppendWebSocketSection(StringBuilder html, IReadOnlyList<WebSocketMessage> messages)
+    private sealed class TreeNode
     {
-        html.Append("""
-<section><h2>WebSocket messages</h2>
-<div class="controls"><input id="wsSearch" type="search" aria-label="Search WebSocket messages" placeholder="Search WebSocket session, direction, type, preview...">
-<select id="wsFilter" aria-label="Filter WebSocket direction"><option value="">All directions</option><option value="Client">Client to server</option><option value="Server">Server to client</option><option value="Unknown">Unknown</option></select></div>
-<div class="ws-table-scroll"><table id="wsTable"><thead><tr><th>Time</th><th>Session</th><th>#</th><th>Direction</th><th>Type</th><th class="num">Length</th><th>Preview</th></tr></thead><tbody>
-""");
-        foreach (var message in messages)
-        {
-            var search = $"{message.SessionId} {message.Direction} {message.Type} {message.Preview}".ToLowerInvariant();
-            html.Append("<tr data-filter=\"");
-            Attribute(html, message.Direction);
-            html.Append("\" data-search=\"");
-            Attribute(html, search);
-            html.Append("\"><td>");
-            Text(html, FormatTimestamp(message.Timestamp));
-            html.Append("</td><td>");
-            Text(html, message.SessionId);
-            html.Append("</td><td>").Append(message.RecordIndex).Append("</td><td>");
-            Text(html, message.Direction);
-            html.Append("</td><td>");
-            Text(html, message.Type);
-            html.Append("</td><td class=\"num\">").Append(FormatBytes(message.PayloadLength))
-                .Append("</td><td><pre>");
-            Text(html, message.Preview);
-            html.Append("</pre>");
-            if (message.Warning is not null)
-            {
-                html.Append("<div class=\"warning\">");
-                Text(html, message.Warning);
-                html.Append("</div>");
-            }
-            html.Append("</td></tr>");
-        }
-        html.Append("</tbody></table></div></section>");
+        public required string Kind { get; init; }
+        public string? Name { get; init; }
+        public bool IsIndex { get; init; }
+        public string? Value { get; init; }
+        public int? Count { get; init; }
+        public int Omitted { get; init; }
+        public bool Truncated { get; init; }
+        public bool DepthLimited { get; init; }
+        public List<TreeNode>? Attrs { get; init; }
+        public List<TreeNode>? Children { get; init; }
     }
+
+    private sealed class TreeBudget
+    {
+        public int NodeCount;
+    }
+
+    private static string? BuildJsonTreePayload(string formattedJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(formattedJson);
+            var budget = new TreeBudget();
+            var root = BuildJsonNode(document.RootElement, null, false, 0, budget);
+            return JsonSerializer.Serialize(root, TreePayloadOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static TreeNode BuildJsonNode(JsonElement element, string? name, bool isIndex, int depth, TreeBudget budget)
+    {
+        budget.NodeCount++;
+
+        if (depth >= TreeMaxDepth && element.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+        {
+            // The subtree itself is not descended into (that's the whole point of the depth
+            // limit), but the immediate property/item count is cheap to report accurately here
+            // (no recursion needed) so the truncated label doesn't falsely read "0 properties"/
+            // "0 items".
+            var immediateCount = element.ValueKind == JsonValueKind.Object
+                ? element.EnumerateObject().Count()
+                : element.GetArrayLength();
+            return new TreeNode
+            {
+                Kind = element.ValueKind == JsonValueKind.Object ? "object" : "array",
+                Name = name,
+                IsIndex = isIndex,
+                Count = immediateCount,
+                DepthLimited = true
+            };
+        }
+
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+            {
+                var properties = element.EnumerateObject().ToList();
+                var children = new List<TreeNode>();
+                var omitted = 0;
+                foreach (var property in properties)
+                {
+                    if (children.Count >= TreeMaxChildrenPerNode || budget.NodeCount >= TreeMaxNodes)
+                    {
+                        omitted = properties.Count - children.Count;
+                        break;
+                    }
+                    children.Add(BuildJsonNode(property.Value, property.Name, false, depth + 1, budget));
+                }
+                return new TreeNode { Kind = "object", Name = name, IsIndex = isIndex, Count = properties.Count, Omitted = omitted, Children = children };
+            }
+            case JsonValueKind.Array:
+            {
+                var items = element.EnumerateArray().ToList();
+                var children = new List<TreeNode>();
+                var omitted = 0;
+                for (var i = 0; i < items.Count; i++)
+                {
+                    if (children.Count >= TreeMaxChildrenPerNode || budget.NodeCount >= TreeMaxNodes)
+                    {
+                        omitted = items.Count - children.Count;
+                        break;
+                    }
+                    children.Add(BuildJsonNode(items[i], i.ToString(CultureInfo.InvariantCulture), true, depth + 1, budget));
+                }
+                return new TreeNode { Kind = "array", Name = name, IsIndex = isIndex, Count = items.Count, Omitted = omitted, Children = children };
+            }
+            case JsonValueKind.String:
+            {
+                var (value, truncated) = BoundScalar(element.GetString() ?? string.Empty);
+                return new TreeNode { Kind = "string", Name = name, IsIndex = isIndex, Value = value, Truncated = truncated };
+            }
+            case JsonValueKind.Number:
+            {
+                var (value, truncated) = BoundScalar(element.GetRawText());
+                return new TreeNode { Kind = "number", Name = name, IsIndex = isIndex, Value = value, Truncated = truncated };
+            }
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+                return new TreeNode { Kind = "boolean", Name = name, IsIndex = isIndex, Value = element.GetRawText() };
+            default:
+                return new TreeNode { Kind = "null", Name = name, IsIndex = isIndex, Value = "null" };
+        }
+    }
+
+    private static (string Value, bool Truncated) BoundScalar(string raw) =>
+        raw.Length <= TreeMaxScalarLength ? (raw, false) : (raw[..TreeMaxScalarLength], true);
+
+    private static string? BuildXmlTreePayload(string formattedXml)
+    {
+        try
+        {
+            using var textReader = new StringReader(formattedXml);
+            var settings = new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null
+            };
+            using var reader = XmlReader.Create(textReader, settings);
+            var budget = new TreeBudget();
+            var children = new List<TreeNode>();
+            var count = 0;
+            var omitted = 0;
+            while (reader.Read())
+            {
+                if (!IsRenderableXmlNode(reader))
+                {
+                    continue;
+                }
+                count++;
+                if (children.Count >= TreeMaxChildrenPerNode || budget.NodeCount >= TreeMaxNodes)
+                {
+                    omitted++;
+                    if (reader.NodeType == XmlNodeType.Element && !reader.IsEmptyElement)
+                    {
+                        SkipElementSubtree(reader);
+                    }
+                    continue;
+                }
+                children.Add(BuildXmlNode(reader, 0, budget));
+            }
+            var root = new TreeNode { Kind = "document", Count = count, Omitted = omitted, Children = children };
+            return JsonSerializer.Serialize(root, TreePayloadOptions);
+        }
+        catch (XmlException)
+        {
+            return null;
+        }
+    }
+
+    private static TreeNode BuildXmlNode(XmlReader reader, int depth, TreeBudget budget)
+    {
+        budget.NodeCount++;
+        switch (reader.NodeType)
+        {
+            case XmlNodeType.Comment:
+            {
+                var (value, truncated) = BoundScalar(reader.Value);
+                return new TreeNode { Kind = "comment", Value = value, Truncated = truncated };
+            }
+            case XmlNodeType.CDATA:
+            {
+                var (value, truncated) = BoundScalar(reader.Value);
+                return new TreeNode { Kind = "cdata", Value = value, Truncated = truncated };
+            }
+            case XmlNodeType.Text:
+            case XmlNodeType.SignificantWhitespace:
+            {
+                var (value, truncated) = BoundScalar(reader.Value);
+                return new TreeNode { Kind = "text", Value = value, Truncated = truncated };
+            }
+            case XmlNodeType.Element:
+                return BuildXmlElement(reader, depth, budget);
+            default:
+                return new TreeNode { Kind = "unknown" };
+        }
+    }
+
+    private static TreeNode BuildXmlElement(XmlReader reader, int depth, TreeBudget budget)
+    {
+        var name = string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : $"{reader.Prefix}:{reader.LocalName}";
+        List<TreeNode>? attrs = null;
+        if (reader.HasAttributes)
+        {
+            attrs = new List<TreeNode>();
+            reader.MoveToFirstAttribute();
+            do
+            {
+                var attrName = string.IsNullOrEmpty(reader.Prefix) ? reader.LocalName : $"{reader.Prefix}:{reader.LocalName}";
+                var (attrValue, attrTruncated) = BoundScalar(reader.Value);
+                attrs.Add(new TreeNode { Kind = "attribute", Name = attrName, Value = attrValue, Truncated = attrTruncated });
+            } while (reader.MoveToNextAttribute());
+            reader.MoveToElement();
+        }
+
+        if (reader.IsEmptyElement)
+        {
+            return new TreeNode { Kind = "element", Name = name, Attrs = attrs, Count = 0, Children = [] };
+        }
+
+        if (depth >= TreeMaxDepth)
+        {
+            // As with the JSON depth limit, report the true immediate child count while skipping
+            // the (not descended into) subtree, instead of leaving it unset and rendering a
+            // misleading "0 children" label.
+            var immediateCount = SkipElementSubtreeCountingImmediateChildren(reader);
+            return new TreeNode { Kind = "element", Name = name, Attrs = attrs, Count = immediateCount, DepthLimited = true };
+        }
+
+        var children = new List<TreeNode>();
+        var count = 0;
+        var omitted = 0;
+        while (reader.Read() && reader.NodeType != XmlNodeType.EndElement)
+        {
+            if (!IsRenderableXmlNode(reader))
+            {
+                continue;
+            }
+            count++;
+            if (children.Count >= TreeMaxChildrenPerNode || budget.NodeCount >= TreeMaxNodes)
+            {
+                omitted++;
+                if (reader.NodeType == XmlNodeType.Element && !reader.IsEmptyElement)
+                {
+                    SkipElementSubtree(reader);
+                }
+                continue;
+            }
+            children.Add(BuildXmlNode(reader, depth + 1, budget));
+        }
+
+        return new TreeNode { Kind = "element", Name = name, Attrs = attrs, Count = count, Omitted = omitted, Children = children };
+    }
+
+    private static void SkipElementSubtree(XmlReader reader)
+    {
+        var depth = 0;
+        while (reader.Read())
+        {
+            if (reader.NodeType == XmlNodeType.Element && !reader.IsEmptyElement)
+            {
+                depth++;
+            }
+            else if (reader.NodeType == XmlNodeType.EndElement)
+            {
+                if (depth == 0)
+                {
+                    return;
+                }
+                depth--;
+            }
+        }
+    }
+
+    private static int SkipElementSubtreeCountingImmediateChildren(XmlReader reader)
+    {
+        var depth = 0;
+        var immediateCount = 0;
+        while (reader.Read())
+        {
+            if (reader.NodeType == XmlNodeType.EndElement)
+            {
+                if (depth == 0)
+                {
+                    return immediateCount;
+                }
+                depth--;
+                continue;
+            }
+            if (depth == 0 && IsRenderableXmlNode(reader))
+            {
+                immediateCount++;
+            }
+            if (reader.NodeType == XmlNodeType.Element && !reader.IsEmptyElement)
+            {
+                depth++;
+            }
+        }
+        return immediateCount;
+    }
+
+    private static bool IsRenderableXmlNode(XmlReader reader) => reader.NodeType switch
+    {
+        XmlNodeType.Element or XmlNodeType.Comment or XmlNodeType.CDATA => true,
+        // Without a DTD/schema, XmlReader cannot tell whether inter-element whitespace is
+        // significant, so pretty-printed indentation is reported as (Significant)Whitespace.
+        // Skip whitespace-only text so it doesn't flood the tree with indentation noise;
+        // Pretty Text remains available for exact formatting fidelity.
+        XmlNodeType.Text or XmlNodeType.SignificantWhitespace or XmlNodeType.Whitespace => !string.IsNullOrWhiteSpace(reader.Value),
+        _ => false
+    };
 
     private static string FormatTimestamp(DateTimeOffset? value) =>
         value?.ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture) ?? "-";
