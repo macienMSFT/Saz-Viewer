@@ -54,7 +54,7 @@ public sealed class HtmlReportGeneratorTests
             html,
             StringComparison.Ordinal);
         Assert.Contains("inspectorClose.addEventListener('click',closeInspector)", html, StringComparison.Ordinal);
-        Assert.Contains("originRow?.focus()", html, StringComparison.Ordinal);
+        Assert.Contains("focusRow?.focus()", html, StringComparison.Ordinal);
 
         // Both sides render the always-visible five-tab secondary strip with correct roles.
         Assert.Contains("role=\"tablist\" aria-label=\"Request detail views\"", html, StringComparison.Ordinal);
@@ -191,6 +191,11 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("return hash.length<=MAX_INSPECTOR_HASH_LENGTH?hash:null", html, StringComparison.Ordinal);
         Assert.Contains("url.hash=state.slice(1)", html, StringComparison.Ordinal);
         Assert.Contains("popup.opener=null", html, StringComparison.Ordinal);
+        Assert.Contains("try{popup=window.open(url,'_blank')}catch{}", html, StringComparison.Ordinal);
+        Assert.Contains("try{popup.opener=null}catch{}", html, StringComparison.Ordinal);
+        Assert.Contains("retainSelectionOnClose=true", html, StringComparison.Ordinal);
+        Assert.Contains("const focusRow=retainSelectionOnClose?currentRow:originRow", html, StringComparison.Ordinal);
+        Assert.Contains("  closeInspector();", html, StringComparison.Ordinal);
         Assert.Contains("The browser blocked the new tab.", html, StringComparison.Ordinal);
         Assert.Contains("httpSearch.value=state.query", html, StringComparison.Ordinal);
         Assert.Contains("httpFilter.value=state.filter", html, StringComparison.Ordinal);

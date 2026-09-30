@@ -32,6 +32,7 @@ public sealed class HtmlReportBrowserTests
             await VerifyInspectorAsync(browser, reportPath, 1440, exerciseAllControls: true);
             await VerifyInspectorAsync(browser, reportPath, 480, exerciseAllControls: false);
             await VerifyNewTabInspectorAsync(browser, reportPath);
+            await VerifyBlockedNewTabKeepsInspectorAsync(browser, reportPath);
             await VerifyInvalidInspectorStateAsync(browser, reportPath);
             await VerifyCopyModelFailureStatesAsync(browser, tempDirectory);
             await VerifyStructuralPayloadFailureStatesAsync(browser, reportPath);
@@ -201,14 +202,29 @@ public sealed class HtmlReportBrowserTests
             await page.Locator("#httpSearch").FillAsync(InjectionText);
             await page.Locator("#httpFilter").SelectOptionAsync("2");
             Assert.Equal(2, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
-            await page.Locator("#httpTable tbody tr:not(.hidden)").First.ClickAsync();
+            var originalRow = page.Locator("#httpTable tbody tr:not(.hidden)").First;
+            var tableScroll = page.Locator(".http-table-scroll");
+            await tableScroll.EvaluateAsync(
+                "element=>{element.style.height='40px';element.scrollTop=35}");
+            var originalScrollTop = await tableScroll.EvaluateAsync<double>("element=>element.scrollTop");
+            await originalRow.ClickAsync();
 
             var popupTask = page.WaitForPopupAsync();
-            await page.Locator("#inspectorOpenTab").ClickAsync();
+            await page.Locator("#inspectorOpenTab").FocusAsync();
+            await page.Keyboard.PressAsync("Enter");
             popup = await popupTask;
             CaptureErrors(popup, popupErrors);
             await popup.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
             await popup.Locator("#httpInspector[open]").WaitForAsync();
+
+            Assert.False(await page.Locator("#httpInspector").EvaluateAsync<bool>("dialog => dialog.open"));
+            Assert.True(await page.Locator("main").IsVisibleAsync());
+            Assert.Equal(InjectionText, await page.Locator("#httpSearch").InputValueAsync());
+            Assert.Equal("2", await page.Locator("#httpFilter").InputValueAsync());
+            Assert.Equal(originalScrollTop, await tableScroll.EvaluateAsync<double>("element=>element.scrollTop"));
+            Assert.Equal("http-detail-0", await page.EvaluateAsync<string>(
+                "() => document.activeElement?.getAttribute('data-detail') || ''"));
+            Assert.Equal("true", await originalRow.GetAttributeAsync("aria-selected"));
 
             Assert.StartsWith(reportUrl, popup.Url, StringComparison.Ordinal);
             Assert.Contains("#saz-inspector?", popup.Url, StringComparison.Ordinal);
@@ -241,11 +257,8 @@ public sealed class HtmlReportBrowserTests
             await popup.Locator("#inspectorPrev").ClickAsync();
             Assert.Equal("1 of 2", await popup.Locator("#inspectorPosition").InnerTextAsync());
 
-            Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>("dialog => dialog.open"));
             Assert.Equal(InjectionText, await page.Locator("#httpSearch").InputValueAsync());
             Assert.Equal("2", await page.Locator("#httpFilter").InputValueAsync());
-            await page.Locator("#primary-tab-response").ClickAsync();
-            Assert.Equal("true", await page.Locator("#primary-tab-response").GetAttributeAsync("aria-selected"));
 
             Assert.False(await popup.EvaluateAsync<bool>("() => Boolean(globalThis.pwned)"));
             Assert.False(await page.EvaluateAsync<bool>("() => Boolean(globalThis.pwned)"));
@@ -268,6 +281,37 @@ public sealed class HtmlReportBrowserTests
             {
                 await popup.CloseAsync();
             }
+            await page.CloseAsync();
+        }
+    }
+
+    private static async Task VerifyBlockedNewTabKeepsInspectorAsync(IBrowser browser, string reportPath)
+    {
+        var page = await browser.NewPageAsync();
+        var errors = new List<string>();
+        CaptureErrors(page, errors);
+        try
+        {
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.Locator("#httpSearch").FillAsync("example.test");
+            await page.Locator("#httpFilter").SelectOptionAsync("2");
+            await page.Locator("#httpTable tbody tr:not(.hidden)").First.ClickAsync();
+            await page.EvaluateAsync("window.open=()=>null");
+
+            await page.Locator("#inspectorOpenTab").ClickAsync();
+
+            Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>("dialog => dialog.open"));
+            Assert.Contains(
+                "The browser blocked the new tab.",
+                await page.Locator("#inspectorOpenStatus").InnerTextAsync());
+            Assert.Equal("example.test", await page.Locator("#httpSearch").InputValueAsync());
+            Assert.Equal("2", await page.Locator("#httpFilter").InputValueAsync());
+            Assert.Equal("true", await page.Locator("#httpTable tbody tr:not(.hidden)").First
+                .GetAttributeAsync("aria-selected"));
+            Assert.Empty(errors);
+        }
+        finally
+        {
             await page.CloseAsync();
         }
     }

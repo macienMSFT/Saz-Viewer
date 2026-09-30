@@ -155,7 +155,7 @@ const inspectorOpenTab=document.getElementById('inspectorOpenTab');
 const inspectorClose=document.getElementById('inspectorClose');
 const inspectorOpenStatus=document.getElementById('inspectorOpenStatus');
 const reportStatus=document.getElementById('reportStatus');
-let currentRow=null,originRow=null,renderGeneration=0,inspectorOnly=false;
+let currentRow=null,originRow=null,renderGeneration=0,inspectorOnly=false,retainSelectionOnClose=false;
 const PAYLOAD_VERSION='1';
 const PAYLOAD_LIMITS={
   'copy-model':{encoded:48*1024*1024,decoded:32*1024*1024},
@@ -926,13 +926,16 @@ function openInspectorInNewTab(){
     setInspectorStatus('The current search is too long to preserve safely in a new-tab link. Shorten it, then try again.',true);
     return;
   }
-  const popup=window.open(url,'_blank');
+  let popup=null;
+  try{popup=window.open(url,'_blank')}catch{}
   if(!popup){
     setInspectorStatus('The browser blocked the new tab. Allow popups for this local report, then try again.',true);
     return;
   }
   try{popup.opener=null}catch{}
-  setInspectorStatus('Opened this session in a new tab.',false);
+  retainSelectionOnClose=true;
+  originRow=currentRow;
+  closeInspector();
 }
 function leaveInspectorOnlyMode(){
   inspectorOnly=false;
@@ -949,9 +952,14 @@ function closeInspector(){inspector.close()}
 inspector.addEventListener('close',()=>{
   if(inspectorOnly)leaveInspectorOnlyMode();
   document.body.classList.remove('inspector-open');
-  if(currentRow){currentRow.classList.remove('selected');currentRow.setAttribute('aria-selected','false')}
-  currentRow=null;
-  originRow?.focus();
+  const focusRow=retainSelectionOnClose?currentRow:originRow;
+  if(currentRow&&!retainSelectionOnClose){
+    currentRow.classList.remove('selected');
+    currentRow.setAttribute('aria-selected','false');
+    currentRow=null;
+  }
+  retainSelectionOnClose=false;
+  focusRow?.focus();
 });
 inspectorOpenTab.addEventListener('click',openInspectorInNewTab);
 inspectorClose.addEventListener('click',closeInspector);
