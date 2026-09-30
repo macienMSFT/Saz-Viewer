@@ -6,14 +6,16 @@ using SazViewer.Core;
 namespace SazViewer.Tests;
 
 /// <summary>
-/// Exhaustive synthetic coverage for <see cref="RopPropertyStoreDecoders"/> - the standalone,
-/// not-yet-wired semantic decoder module for the [MS-OXCPRPT], [MS-OXCSTOR], and core
-/// [MS-OXCROPS] request/response ROP families. Every RopId reported by
-/// <see cref="RopPropertyStoreDecoders.Supports"/> is exercised directly against
-/// <see cref="RopPropertyStoreDecoders.Parse"/> (bypassing <c>RopBufferParser</c>/<c>RopSemanticParser</c>
-/// entirely, since this module is intentionally not wired into either) with an exact-boundary
+/// Exhaustive synthetic coverage for <see cref="RopPropertyStoreDecoders"/> - the [MS-OXCPRPT],
+/// [MS-OXCSTOR], and core [MS-OXCROPS] request/response variable-width semantic decoder module,
+/// wired into the shared <see cref="RopVariableDispatcher"/>/<see cref="RopSemanticParser"/>
+/// ROP-buffer path. Every RopId reported by <see cref="RopPropertyStoreDecoders.Supports"/> is
+/// exercised directly against <see cref="RopPropertyStoreDecoders.Parse"/> with an exact-boundary
 /// success case, plus targeted malformed/truncated/counted-mismatch/ReturnValue-gated/injection-safety
-/// cases for the trickiest layouts.
+/// cases for the trickiest layouts, including the four state-dependent cases (RopWritePerUserInformation
+/// request ReplGuid, RopGetPropertiesSpecific response tags, RopLogon response private/public shape and
+/// WrongServer redirection, and RopBufferTooSmall response RequestBuffersSize) that consult an optional
+/// <see cref="MapiCaptureContext"/> recorded transactionally by an earlier same-capture operation.
 /// </summary>
 public sealed class RopPropertyStoreDecodersTests
 {
@@ -25,19 +27,19 @@ public sealed class RopPropertyStoreDecodersTests
     private static readonly byte[] ExpectedRequestRopIds =
     [
         0x07, 0x08, 0x0A, 0x0B, 0x26, 0x27, 0x2B, 0x2C, 0x2D, 0x34, 0x39, 0x3A, 0x51, 0x55, 0x56,
-        0x5B, 0x5C, 0x5F, 0x63, 0x67, 0x6F, 0x79, 0x7A, 0x90, 0xA3, 0xFE
+        0x5B, 0x5C, 0x5F, 0x63, 0x64, 0x67, 0x6F, 0x79, 0x7A, 0x90, 0xA3, 0xFE
     ];
 
     private static readonly byte[] ExpectedResponseRopIds =
     [
-        0x08, 0x09, 0x0A, 0x0B, 0x27, 0x2B, 0x2C, 0x2D, 0x39, 0x3A, 0x42, 0x45, 0x49, 0x4A, 0x50,
-        0x55, 0x56, 0x5F, 0x60, 0x63, 0x67, 0x68, 0x6F, 0x79, 0x7A, 0x90, 0xA3, 0xF9
+        0x07, 0x08, 0x09, 0x0A, 0x0B, 0x27, 0x2B, 0x2C, 0x2D, 0x39, 0x3A, 0x42, 0x45, 0x49, 0x4A, 0x50,
+        0x55, 0x56, 0x5F, 0x60, 0x63, 0x67, 0x68, 0x6F, 0x79, 0x7A, 0x90, 0xA3, 0xF9, 0xFE, 0xFF
     ];
 
     [Fact]
-    public void SupportsReportsExactlyTwentySixRequestRopIds()
+    public void SupportsReportsExactlyTwentySevenRequestRopIds()
     {
-        Assert.Equal(26, ExpectedRequestRopIds.Length);
+        Assert.Equal(27, ExpectedRequestRopIds.Length);
         foreach (var ropId in ExpectedRequestRopIds)
         {
             Assert.True(RopPropertyStoreDecoders.Supports(MapiDirection.Request, ropId), $"Expected request 0x{ropId:X2} to be supported.");
@@ -47,9 +49,9 @@ public sealed class RopPropertyStoreDecodersTests
     }
 
     [Fact]
-    public void SupportsReportsExactlyTwentyEightResponseRopIds()
+    public void SupportsReportsExactlyThirtyOneResponseRopIds()
     {
-        Assert.Equal(28, ExpectedResponseRopIds.Length);
+        Assert.Equal(31, ExpectedResponseRopIds.Length);
         foreach (var ropId in ExpectedResponseRopIds)
         {
             Assert.True(RopPropertyStoreDecoders.Supports(MapiDirection.Response, ropId), $"Expected response 0x{ropId:X2} to be supported.");
@@ -57,18 +59,6 @@ public sealed class RopPropertyStoreDecodersTests
         var actual = Enumerable.Range(0, 256).Select(v => (byte)v).Where(v => RopPropertyStoreDecoders.Supports(MapiDirection.Response, v)).ToArray();
         Assert.Equal(ExpectedResponseRopIds.OrderBy(v => v), actual);
     }
-
-    [Theory]
-    [InlineData(0x64)] // RopWritePerUserInformation: trailing ReplGuid presence depends on the originating RopLogon's LogonFlags.
-    public void RequestGapsRemainUnsupported(byte ropId) =>
-        Assert.False(RopPropertyStoreDecoders.Supports(MapiDirection.Request, ropId));
-
-    [Theory]
-    [InlineData(0x07)] // RopGetPropertiesSpecific response: property tags are implied by the paired request, not visible in-band.
-    [InlineData(0xFE)] // RopLogon response: private-mailbox vs. public-folder shape depends on the request's LogonFlags.
-    [InlineData(0xFF)] // RopBufferTooSmall response: RequestBuffersSize depends on cross-message session state.
-    public void ResponseGapsRemainUnsupported(byte ropId) =>
-        Assert.False(RopPropertyStoreDecoders.Supports(MapiDirection.Response, ropId));
 
     [Fact]
     public void UnrelatedRopIdIsNotSupportedInEitherDirection()
@@ -78,9 +68,18 @@ public sealed class RopPropertyStoreDecodersTests
     }
 
     [Fact]
+    public void ResponseWritePerUserInformationIsNotClaimedBecauseItIsAFixedSixByteSchemaNotAVariableGap()
+    {
+        // Only the *request*'s trailing ReplGuid is state-dependent ([MS-OXCSTOR] 2.2.4.2); the
+        // response is a bare Header+ReturnValue already handled by RopSemanticParser's fixed schema
+        // catalog (Fixed6(0x64, ...)), so claiming it here would shadow that fixed schema.
+        Assert.False(RopPropertyStoreDecoders.Supports(MapiDirection.Response, 0x64));
+    }
+
+    [Fact]
     public void ParseThrowsForUnsupportedRequestRopId()
     {
-        var bytes = new byte[] { 0x64, 0x00, 0x00 };
+        var bytes = new byte[] { 0x11, 0x00, 0x00 }; // RopSetMessageReadFlag is owned by RopMessageRulesDecoders, not this family.
         AssertThrowsParse(bytes, MapiDirection.Request);
     }
 
@@ -346,6 +345,89 @@ public sealed class RopPropertyStoreDecodersTests
         AssertThrowsParse(bytes, MapiDirection.Request);
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // RopWritePerUserInformation (0x64) request: [MS-OXCSTOR] 2.2.4.7.1. The trailing 16-byte
+    // ReplGuid is present only when DataOffset == 0 AND the LogonId's originating RopLogon used
+    // LogonFlags.Private - state this operation's own bytes cannot reveal.
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void RequestWritePerUserInformationParsesExactBoundaryWithoutReplGuidWhenDataOffsetIsNonZero()
+    {
+        var folderId = LongTermId(Guid.NewGuid(), new byte[] { 1, 2, 3, 4, 5, 6 });
+        var data = new byte[] { 9, 9, 9 };
+        var bytes = Concat([0x64, 0x00, 0x00], folderId, [0x01], Le((uint)100), Le((ushort)data.Length), data);
+        var (node, _) = ParseOne(bytes, MapiDirection.Request); // no context needed: DataOffset != 0.
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.False(node.Children.Any(c => c.Name == "ReplGuid"));
+    }
+
+    [Fact]
+    public void RequestWritePerUserInformationParsesExactBoundaryWithReplGuidForAPrivateLogonWhenDataOffsetIsZero()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordLogonPrivacy("mailbox-a", logonId: 0, isPrivate: true);
+        var folderId = LongTermId(Guid.NewGuid(), new byte[] { 1, 2, 3, 4, 5, 6 });
+        var data = new byte[] { 1, 2 };
+        var bytes = Concat([0x64, 0x00, 0x00], folderId, [0x00], Le((uint)0), Le((ushort)data.Length), data, Guid.NewGuid().ToByteArray());
+        var (node, _) = ParseOne(bytes, MapiDirection.Request, context: context, captureScope: "mailbox-a");
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.True(node.Children.Any(c => c.Name == "ReplGuid"));
+    }
+
+    [Fact]
+    public void RequestWritePerUserInformationOmitsReplGuidForAPublicLogonWhenDataOffsetIsZero()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordLogonPrivacy("mailbox-a", logonId: 2, isPrivate: false);
+        var folderId = LongTermId(Guid.NewGuid(), new byte[] { 1, 2, 3, 4, 5, 6 });
+        var bytes = Concat([0x64, 0x02, 0x00], folderId, [0x00], Le((uint)0), Le((ushort)0));
+        var (node, _) = ParseOne(bytes, MapiDirection.Request, context: context, captureScope: "mailbox-a");
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.False(node.Children.Any(c => c.Name == "ReplGuid"));
+    }
+
+    [Fact]
+    public void RequestWritePerUserInformationThrowsWhenDataOffsetIsZeroAndNoLogonPrivacyIsRecorded()
+    {
+        var folderId = LongTermId(Guid.NewGuid(), new byte[] { 1, 2, 3, 4, 5, 6 });
+        var bytes = Concat([0x64, 0x09, 0x00], folderId, [0x00], Le((uint)0), Le((ushort)0));
+        AssertThrowsParse(bytes, MapiDirection.Request); // no context at all.
+        AssertThrowsParse(bytes, MapiDirection.Request, context: new MapiCaptureContext()); // context present but LogonId 0x09 never recorded.
+    }
+
+    [Fact]
+    public void RequestWritePerUserInformationThrowsWhenFolderIdIsTruncated()
+    {
+        var bytes = Concat([0x64, 0x00, 0x00], new byte[10]); // LongTermId needs 24 bytes.
+        AssertThrowsParse(bytes, MapiDirection.Request);
+    }
+
+    [Fact]
+    public void RequestWritePerUserInformationProvesFollowingOperationBoundary()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordLogonPrivacy("mailbox-a", logonId: 0, isPrivate: true);
+        var folderId = LongTermId(Guid.NewGuid(), new byte[] { 1, 2, 3, 4, 5, 6 });
+        var op1 = Concat([0x64, 0x00, 0x00], folderId, [0x00], Le((uint)0), Le((ushort)0), Guid.NewGuid().ToByteArray());
+        var op2 = Concat([0x67, 0x00, 0x01, 0x02, 0x01, 0x04], Le((ushort)0)); // RopCopyProperties
+        var buffer = Concat(op1, op2);
+
+        var reader = new MapiReader(buffer, CancellationToken.None);
+        var handles = new List<RopHandleReference>();
+        var budget = new MapiNodeBudget();
+        var node1 = RopPropertyStoreDecoders.Parse(
+            ref reader, 0, MapiDirection.Request, handles, budget, CancellationToken.None, context, "mailbox-a");
+        Assert.Equal(op1.Length, node1.Length);
+        Assert.Equal(op1.Length, reader.Position);
+
+        var node2 = RopPropertyStoreDecoders.Parse(
+            ref reader, 1, MapiDirection.Request, handles, budget, CancellationToken.None, context, "mailbox-a");
+        Assert.Equal(op2.Length, node2.Length);
+        Assert.True(reader.End);
+        Assert.Equal("0x04", Find(node2.Children, "CopyFlags").Value);
+    }
+
     [Fact]
     public void RequestCopyPropertiesParsesExactBoundary()
     {
@@ -458,6 +540,125 @@ public sealed class RopPropertyStoreDecodersTests
     // ---------------------------------------------------------------------------------------------
     // Responses
     // ---------------------------------------------------------------------------------------------
+
+    // ---------------------------------------------------------------------------------------------
+    // RopGetPropertiesSpecific (0x07) response: [MS-OXCPRPT] 2.2.4.1.2. The untyped PropertyRow that
+    // follows ReturnValue has no column list of its own - it is exactly the matching same-session
+    // request's PropertyTags, dequeued (FIFO) via MapiCaptureContext.
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ResponseGetPropertiesSpecificRendersRowDataAgainstTheMatchingRequestsTags()
+    {
+        var context = new MapiCaptureContext();
+        var request = Concat(
+            [0x07, 0x00, 0x04], Le((ushort)0xFFFF), Le((ushort)1), Le((ushort)1), Tag(0x0003, 0x0E08));
+        ParseOne(request, MapiDirection.Request, context: context, captureScope: "scope-props");
+
+        var response = Concat([0x07, 0x04], Le((uint)0), [0x00], Le((uint)42));
+        var (node, _) = ParseOne(response, MapiDirection.Response, context: context, captureScope: "scope-props");
+        Assert.Equal(response.Length, LastPosition);
+        var value = Find(node.Children, "Value[0]");
+        Assert.Equal("42", Find(value.Children, "Value").Value);
+    }
+
+    [Fact]
+    public void ResponseGetPropertiesSpecificOmitsRowDataOnFailureWithoutNeedingContext()
+    {
+        var response = Concat([0x07, 0x04], Le((uint)0x80000001));
+        var (node, _) = ParseOne(response, MapiDirection.Response); // no context needed: failure never reads RowData.
+        Assert.Equal(response.Length, LastPosition);
+        Assert.False(node.Children.Any(c => c.Kind == MapiNodeKind.Array));
+    }
+
+    [Fact]
+    public void ResponseGetPropertiesSpecificThrowsWithoutAMatchingRequestRecorded()
+    {
+        var response = Concat([0x07, 0x09], Le((uint)0), [0x00], Le((uint)42));
+        AssertThrowsParse(response, MapiDirection.Response); // no context at all.
+
+        var context = new MapiCaptureContext();
+        AssertThrowsParse(response, MapiDirection.Response, context: context, captureScope: "scope-never-recorded");
+    }
+
+    [Fact]
+    public void ResponseGetPropertiesSpecificHandlesMultipleQueuedCallsOnTheSameHandleIndexInOrder()
+    {
+        // The same handle index can issue more than one RopGetPropertiesSpecific call within one ROP
+        // list; the FIFO queue must match each response to its own request in issue order.
+        var context = new MapiCaptureContext();
+        var request1 = Concat([0x07, 0x00, 0x02], Le((ushort)0xFFFF), Le((ushort)1), Le((ushort)1), Tag(0x0003, 0x0E08));
+        var request2 = Concat([0x07, 0x00, 0x02], Le((ushort)0xFFFF), Le((ushort)1), Le((ushort)1), Tag(0x0003, 0x0E09));
+        ParseOne(request1, MapiDirection.Request, context: context, captureScope: "scope-fifo");
+        ParseOne(request2, MapiDirection.Request, context: context, captureScope: "scope-fifo");
+
+        var response1 = Concat([0x07, 0x02], Le((uint)0), [0x00], Le((uint)11));
+        var (node1, _) = ParseOne(response1, MapiDirection.Response, context: context, captureScope: "scope-fifo");
+        Assert.Equal("11", Find(Find(node1.Children, "Value[0]").Children, "Value").Value);
+
+        var response2 = Concat([0x07, 0x02], Le((uint)0), [0x00], Le((uint)22));
+        var (node2, _) = ParseOne(response2, MapiDirection.Response, context: context, captureScope: "scope-fifo");
+        Assert.Equal("22", Find(Find(node2.Children, "Value[0]").Children, "Value").Value);
+    }
+
+    [Fact]
+    public void FailedGetPropertiesSpecificResponseConsumesItsQueuedTagsBeforeTheNextResponse()
+    {
+        var context = new MapiCaptureContext();
+        var request1 = Concat([0x07, 0x00, 0x02], Le((ushort)0xFFFF), Le((ushort)1), Le((ushort)1), Tag(0x0003, 0x0E08));
+        var request2 = Concat([0x07, 0x00, 0x02], Le((ushort)0xFFFF), Le((ushort)1), Le((ushort)1), Tag(0x0002, 0x0E09));
+        ParseOne(request1, MapiDirection.Request, context: context, captureScope: "scope-failure-fifo");
+        ParseOne(request2, MapiDirection.Request, context: context, captureScope: "scope-failure-fifo");
+
+        var failedResponse = Concat([0x07, 0x02], Le((uint)0x80000001));
+        ParseOne(failedResponse, MapiDirection.Response, context: context, captureScope: "scope-failure-fifo");
+
+        var successfulResponse = Concat([0x07, 0x02], Le((uint)0), [0x00], Le((ushort)22));
+        var (node, _) = ParseOne(
+            successfulResponse,
+            MapiDirection.Response,
+            context: context,
+            captureScope: "scope-failure-fifo");
+
+        Assert.Equal(successfulResponse.Length, LastPosition);
+        Assert.Equal("22", Find(Find(node.Children, "Value[0]").Children, "Value").Value);
+    }
+
+    [Fact]
+    public void ResponseGetPropertiesSpecificCaptureScopeIsolationDifferentSessionsNeverLeak()
+    {
+        var context = new MapiCaptureContext();
+        var request = Concat([0x07, 0x00, 0x01], Le((ushort)0xFFFF), Le((ushort)1), Le((ushort)1), Tag(0x0003, 0x0E08));
+        ParseOne(request, MapiDirection.Request, context: context, captureScope: "session-a");
+
+        var response = Concat([0x07, 0x01], Le((uint)0), [0x00], Le((uint)42));
+        // A different HTTP session (captureScope) requesting the same handle index must not see session-a's queued tags.
+        AssertThrowsParse(response, MapiDirection.Response, context: context, captureScope: "session-b");
+    }
+
+    [Fact]
+    public void ResponseGetPropertiesSpecificProvesFollowingOperationBoundary()
+    {
+        var context = new MapiCaptureContext();
+        var request = Concat([0x07, 0x00, 0x00], Le((ushort)0xFFFF), Le((ushort)1), Le((ushort)1), Tag(0x0003, 0x0E08));
+        ParseOne(request, MapiDirection.Request, context: context, captureScope: "scope-boundary");
+
+        var op1 = Concat([0x07, 0x00], Le((uint)0), [0x00], Le((uint)42));
+        var op2 = Concat([0x08, 0x00], Le((uint)0), Le((ushort)1), TaggedInt32(1, 7));
+        var buffer = Concat(op1, op2);
+
+        var reader = new MapiReader(buffer, CancellationToken.None);
+        var handles = new List<RopHandleReference>();
+        var budget = new MapiNodeBudget();
+        var node1 = RopPropertyStoreDecoders.Parse(ref reader, 0, MapiDirection.Response, handles, budget, CancellationToken.None, context, "scope-boundary");
+        Assert.Equal(op1.Length, node1.Length);
+        Assert.Equal(op1.Length, reader.Position);
+
+        var node2 = RopPropertyStoreDecoders.Parse(ref reader, 1, MapiDirection.Response, handles, budget, CancellationToken.None);
+        Assert.Equal(op2.Length, node2.Length);
+        Assert.True(reader.End);
+        Assert.Single(Find(node2.Children, "PropertyValues").Children);
+    }
 
     [Fact]
     public void ResponseGetPropertiesAllParsesSuccessAndFailure()
@@ -806,6 +1007,203 @@ public sealed class RopPropertyStoreDecodersTests
     }
 
     // ---------------------------------------------------------------------------------------------
+    // RopLogon (0xFE) response: [MS-OXCSTOR] 2.2.2.1.1/2.2.2.1.2/2.2.2.1.3. Unlike the other three
+    // state-dependent gaps in this module, the private-vs-public branch is fully self-determined
+    // from the response's own in-band LogonFlags byte; no MapiCaptureContext is required for that
+    // choice. WrongServer (0x00000478, [MS-OXCDATA] 2.4.1) turns an ordinary failure into a
+    // redirect shape carrying LogonFlags/ServerNameSize/ServerName.
+    // ---------------------------------------------------------------------------------------------
+
+    private static byte[] ThirteenFolderIds() =>
+        Concat(Enumerable.Range(0, 13).Select(i => Fid((ushort)i, new byte[6])).ToArray());
+
+    [Fact]
+    public void ResponseLogonParsesPrivateMailboxSuccessExactBoundary()
+    {
+        var bytes = Concat(
+            [0xFE, 0x01], Le((uint)0), // OutputHandleIndex, ReturnValue = Success
+            [0x01], // LogonFlags: Private
+            ThirteenFolderIds(),
+            [0x00], // ResponseFlags
+            Guid.NewGuid().ToByteArray(), // MailboxGuid
+            Le((ushort)5), // ReplId
+            Guid.NewGuid().ToByteArray(), // ReplGuid
+            new byte[] { 0, 0, 0, 0, 1, 1, 0xE8, 0x07 }, // LogonTime (Year = 2024)
+            Le((ulong)123456), // GwartTime
+            Le((uint)0x00000010)); // StoreState
+        var (node, _) = ParseOne(bytes, MapiDirection.Response);
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.Equal("5", Find(node.Children, "ReplId").Value);
+        Assert.True(node.Children.Any(c => c.Name == "MailboxGuid"));
+        Assert.False(node.Children.Any(c => c.Name == "PerUserGuid"));
+    }
+
+    [Fact]
+    public void ResponseLogonParsesPublicFoldersSuccessExactBoundary()
+    {
+        var bytes = Concat(
+            [0xFE, 0x02], Le((uint)0),
+            [0x00], // LogonFlags: not Private
+            ThirteenFolderIds(),
+            Le((ushort)7), // ReplId
+            Guid.NewGuid().ToByteArray(), // ReplGuid
+            Guid.NewGuid().ToByteArray()); // PerUserGuid
+        var (node, _) = ParseOne(bytes, MapiDirection.Response);
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.Equal("7", Find(node.Children, "ReplId").Value);
+        Assert.True(node.Children.Any(c => c.Name == "PerUserGuid"));
+        Assert.False(node.Children.Any(c => c.Name == "MailboxGuid"));
+    }
+
+    [Fact]
+    public void ResponseLogonParsesOrdinaryFailureWithNoAdditionalFields()
+    {
+        var bytes = Concat([0xFE, 0x00], Le((uint)0x80000001));
+        var (node, _) = ParseOne(bytes, MapiDirection.Response);
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.False(node.Children.Any(c => c.Name == "LogonFlags"));
+    }
+
+    [Fact]
+    public void ResponseLogonParsesWrongServerRedirectionWithServerName()
+    {
+        var bytes = Concat([0xFE, 0x00], Le((uint)0x00000478), [0x00], [(byte)5], Ascii("host1"));
+        var (node, _) = ParseOne(bytes, MapiDirection.Response);
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.Equal("host1", Find(node.Children, "ServerName").Value);
+    }
+
+    [Fact]
+    public void ResponseLogonParsesWrongServerRedirectionWithoutServerName()
+    {
+        var bytes = Concat([0xFE, 0x00], Le((uint)0x00000478), [0x00], [(byte)0]);
+        var (node, _) = ParseOne(bytes, MapiDirection.Response);
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.False(node.Children.Any(c => c.Name == "ServerName"));
+    }
+
+    [Fact]
+    public void ResponseLogonThrowsWhenPrivateSuccessTruncatedBeforeStoreState()
+    {
+        var bytes = Concat(
+            [0xFE, 0x01], Le((uint)0),
+            [0x01],
+            ThirteenFolderIds(),
+            [0x00],
+            Guid.NewGuid().ToByteArray(),
+            Le((ushort)5),
+            Guid.NewGuid().ToByteArray(),
+            new byte[] { 0, 0, 0, 0, 1, 1, 0xE8, 0x07 },
+            Le((ulong)123456)); // missing trailing StoreState
+        AssertThrowsParse(bytes, MapiDirection.Response);
+    }
+
+    [Fact]
+    public void ResponseLogonProvesFollowingOperationBoundary()
+    {
+        var op1 = Concat([0xFE, 0x00], Le((uint)0x80000001)); // ordinary failure, minimal shape
+        var op2 = Concat([0x08, 0x00], Le((uint)0), Le((ushort)1), TaggedInt32(1, 7)); // RopGetPropertiesAll
+        var buffer = Concat(op1, op2);
+
+        var reader = new MapiReader(buffer, CancellationToken.None);
+        var handles = new List<RopHandleReference>();
+        var budget = new MapiNodeBudget();
+        var node1 = RopPropertyStoreDecoders.Parse(ref reader, 0, MapiDirection.Response, handles, budget, CancellationToken.None);
+        Assert.Equal(op1.Length, node1.Length);
+        Assert.Equal(op1.Length, reader.Position);
+
+        var node2 = RopPropertyStoreDecoders.Parse(ref reader, 1, MapiDirection.Response, handles, budget, CancellationToken.None);
+        Assert.Equal(op2.Length, node2.Length);
+        Assert.True(reader.End);
+        Assert.Single(Find(node2.Children, "PropertyValues").Children);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // RopBufferTooSmall (0xFF) response: [MS-OXCROPS] 2.2.15.1/2.2.15.2. Genuinely different shape -
+    // no HandleIndex, no ReturnValue at all - just SizeNeeded followed by the still-unexecuted tail
+    // of the matching same-session request's ROP list. RequestBuffers bytes are read straight from
+    // this response's own wire bytes; only their *length* needs the cross-message
+    // MapiCaptureContext.RecordRequestRopList/TryGetRequestRopList checkpoint state that
+    // RopSemanticParser records while walking the matching request's ROP list.
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ResponseBufferTooSmallParsesExactBoundaryUsingRecordedRequestCheckpoint()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordRequestRopList("scope-1", totalLength: 40, ImmutableArray.Create(0, 10, 25));
+        var requestBuffers = new byte[30]; // 40 - checkpoints[1] (10) = 30
+        var bytes = Concat([0xFF], Le((ushort)999), requestBuffers);
+
+        var (node, _) = ParseOne(bytes, MapiDirection.Response, operationIndex: 1, context: context, captureScope: "scope-1");
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.Equal("999", Find(node.Children, "SizeNeeded").Value);
+        Assert.Equal(30, Find(node.Children, "RequestBuffers").Length);
+    }
+
+    [Fact]
+    public void ResponseBufferTooSmallProvesFollowingOperationBoundary()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordRequestRopList("scope-2", totalLength: 12, ImmutableArray.Create(0, 12));
+        var op1 = Concat([0xFF], Le((ushort)10), new byte[0]); // 12 - checkpoints[1] (12) = 0 bytes of RequestBuffers.
+        var op2 = Concat([0x08, 0x00], Le((uint)0), Le((ushort)1), TaggedInt32(1, 7));
+        var buffer = Concat(op1, op2);
+
+        var reader = new MapiReader(buffer, CancellationToken.None);
+        var handles = new List<RopHandleReference>();
+        var budget = new MapiNodeBudget();
+        var node1 = RopPropertyStoreDecoders.Parse(ref reader, 1, MapiDirection.Response, handles, budget, CancellationToken.None, context, "scope-2");
+        Assert.Equal(op1.Length, node1.Length);
+        Assert.Equal(op1.Length, reader.Position);
+
+        var node2 = RopPropertyStoreDecoders.Parse(ref reader, 1, MapiDirection.Response, handles, budget, CancellationToken.None);
+        Assert.Equal(op2.Length, node2.Length);
+        Assert.True(reader.End);
+    }
+
+    [Fact]
+    public void ResponseBufferTooSmallThrowsWithoutAMatchingRecordedRequest()
+    {
+        var bytes = Concat([0xFF], Le((ushort)10), new byte[5]);
+        AssertThrowsParse(bytes, MapiDirection.Response); // no context at all.
+
+        var context = new MapiCaptureContext();
+        AssertThrowsParse(bytes, MapiDirection.Response, context: context, captureScope: "unknown-scope");
+    }
+
+    [Fact]
+    public void ResponseBufferTooSmallThrowsWhenOperationIndexHasNoCorrespondingCheckpoint()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordRequestRopList("scope-3", totalLength: 40, ImmutableArray.Create(0, 10, 25));
+        var bytes = Concat([0xFF], Le((ushort)10), new byte[5]);
+        AssertThrowsParse(bytes, MapiDirection.Response, context: context, captureScope: "scope-3", operationIndex: 5);
+    }
+
+    [Fact]
+    public void ResponseBufferTooSmallThrowsWhenComputedLengthWouldBeNegative()
+    {
+        // Deliberately fabricated inconsistent state (checkpoint exceeds total length) to prove the
+        // decoder refuses to read a negative-length RequestBuffers rather than throwing an
+        // unrelated/confusing lower-level exception.
+        var context = new MapiCaptureContext();
+        context.RecordRequestRopList("scope-4", totalLength: 5, ImmutableArray.Create(0, 10));
+        var bytes = Concat([0xFF], Le((ushort)10), new byte[5]);
+        AssertThrowsParse(bytes, MapiDirection.Response, context: context, captureScope: "scope-4", operationIndex: 1);
+    }
+
+    [Fact]
+    public void ResponseBufferTooSmallCaptureIsolationDifferentScopesNeverLeak()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordRequestRopList("scope-a", totalLength: 20, ImmutableArray.Create(0, 20));
+        // scope-b never recorded anything - must still throw, proving scope-a's state does not leak.
+        var bytes = Concat([0xFF], Le((ushort)10), new byte[3]);
+        AssertThrowsParse(bytes, MapiDirection.Response, context: context, captureScope: "scope-b", operationIndex: 1);
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // PropertyValue dispatch boundary/hostile-input coverage.
     // ---------------------------------------------------------------------------------------------
 
@@ -901,24 +1299,25 @@ public sealed class RopPropertyStoreDecodersTests
 
     private static int LastPosition { get; set; }
 
-    private static (MapiNode Node, List<RopHandleReference> Handles) ParseOne(byte[] bytes, MapiDirection direction, int operationIndex = 0)
+    private static (MapiNode Node, List<RopHandleReference> Handles) ParseOne(
+        byte[] bytes, MapiDirection direction, int operationIndex = 0, MapiCaptureContext? context = null, string? captureScope = null)
     {
         Assert.True(RopPropertyStoreDecoders.Supports(direction, bytes[0]), $"Expected 0x{bytes[0]:X2} to be supported for {direction}.");
         var reader = new MapiReader(bytes, CancellationToken.None);
         var handles = new List<RopHandleReference>();
         var budget = new MapiNodeBudget();
-        var node = RopPropertyStoreDecoders.Parse(ref reader, operationIndex, direction, handles, budget, CancellationToken.None);
+        var node = RopPropertyStoreDecoders.Parse(ref reader, operationIndex, direction, handles, budget, CancellationToken.None, context, captureScope);
         LastPosition = reader.Position;
         return (node, handles);
     }
 
-    private static void AssertThrowsParse(byte[] bytes, MapiDirection direction)
+    private static void AssertThrowsParse(byte[] bytes, MapiDirection direction, MapiCaptureContext? context = null, string? captureScope = null, int operationIndex = 0)
     {
         var reader = new MapiReader(bytes, CancellationToken.None);
         var threw = false;
         try
         {
-            RopPropertyStoreDecoders.Parse(ref reader, 0, direction, [], new MapiNodeBudget(), CancellationToken.None);
+            RopPropertyStoreDecoders.Parse(ref reader, operationIndex, direction, [], new MapiNodeBudget(), CancellationToken.None, context, captureScope);
         }
         catch (MapiParseException)
         {

@@ -15,12 +15,17 @@ namespace SazViewer.Core;
 /// (including cross-checking against <see cref="RopSemanticParser"/>'s fixed schema catalog, which
 /// always takes precedence and is never shadowed).
 /// <para>
-/// The trailing <paramref name="warnings"/>/<paramref name="fastTransferAssembler"/>/
-/// <paramref name="captureScope"/> parameters on <see cref="Parse"/> are optional and exist solely to
-/// let <see cref="RopFastTransferDecoders"/> reassemble a FastTransfer stream that spans several
-/// buffers within the same capture; every other family ignores them. When omitted, FastTransfer ROPs
-/// still decode correctly - each buffer is simply lexed independently instead of being joined to its
-/// capture-local predecessor.
+/// The trailing <paramref name="warnings"/>/<paramref name="fastTransferAssembler"/> parameters on
+/// <see cref="Parse"/> are optional and exist solely to let <see cref="RopFastTransferDecoders"/>
+/// reassemble a FastTransfer stream that spans several buffers within the same capture. The trailing
+/// <paramref name="captureScope"/>/<paramref name="context"/> parameters are likewise optional and
+/// forwarded to FastTransfer plus
+/// <see cref="RopPropertyStoreDecoders"/> (RopLogon-privacy, RopGetPropertiesSpecific tag
+/// correlation, and RopBufferTooSmall request-list correlation) and
+/// <see cref="RopMessageRulesDecoders"/> (RopSetMessageReadFlag's LogonId-privacy gate). When any of
+/// these are omitted, every ROP still decodes as far as its own bytes allow - FastTransfer buffers are
+/// simply lexed independently, and the handful of genuinely cross-operation shapes fall back to a raw
+/// node with an explanatory warning instead of guessing.
 /// </para>
 /// </summary>
 internal static class RopVariableDispatcher
@@ -40,7 +45,8 @@ internal static class RopVariableDispatcher
         CancellationToken cancellationToken,
         List<string>? warnings = null,
         FastTransferStreamAssembler? fastTransferAssembler = null,
-        string? captureScope = null)
+        string? captureScope = null,
+        MapiCaptureContext? context = null)
     {
         var ropId = reader.PeekByte("RopId");
         if (RopFolderTableDecoders.Supports(direction, ropId))
@@ -50,12 +56,13 @@ internal static class RopVariableDispatcher
 
         if (RopPropertyStoreDecoders.Supports(direction, ropId))
         {
-            return RopPropertyStoreDecoders.Parse(ref reader, operationIndex, direction, handleReferences, budget, cancellationToken);
+            return RopPropertyStoreDecoders.Parse(ref reader, operationIndex, direction, handleReferences, budget, cancellationToken, context, captureScope);
         }
 
         if (RopMessageRulesDecoders.Supports(direction, ropId))
         {
-            return RopMessageRulesDecoders.Parse(ref reader, operationIndex, direction, handleReferences, budget, cancellationToken);
+            return RopMessageRulesDecoders.Parse(
+                ref reader, operationIndex, direction, handleReferences, budget, cancellationToken, context, captureScope);
         }
 
         if (RopFastTransferDecoders.Supports(direction, ropId))

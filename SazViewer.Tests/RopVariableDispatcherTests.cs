@@ -103,16 +103,24 @@ public sealed class RopVariableDispatcherTests
     {
         // Pinned totals cross-checked by hand against each family's own SupportedRequestRopIds /
         // SupportedResponseRopIds (or RequestRopIds / ResponseRopIds) sets at integration time:
-        // Folder 19/27, PropertyStore 26/28, MessageRules 14/13, FastTransfer 16/7 = 75/75.
+        // Folder 19/27, PropertyStore 27/31, MessageRules 15/13, FastTransfer 16/7 = 77/78.
         // (PropertyStore's response set grew from 25 to 28 when RopSetProperties (0x0A),
         // RopDeleteProperties (0x0B), and RopGetReceiveFolderTable (0x68) responses were added as
-        // deterministic, non-state-dependent semantic decoders.)
+        // deterministic, non-state-dependent semantic decoders; it then grew from 28 to 31, and its
+        // request set from 26 to 27, when the five state-dependent gaps closed: RopWritePerUserInformation
+        // (0x64) request ReplGuid, RopGetPropertiesSpecific (0x07) response row data, RopLogon (0xFE)
+        // response mailbox/public-folder shape, and RopBufferTooSmall (0xFF) response RequestBuffersSize
+        // all keyed off capture-local <see cref="MapiCaptureContext"/> state; MessageRules' request set
+        // grew from 14 to 15 for the fifth, RopSetMessageReadFlag (0x11) request ClientData.)
         // Combined with the two disjointness tests above, this pins the exact reachable surface so an
-        // accidental removal (not just an accidental duplicate) is also caught.
+        // accidental removal (not just an accidental duplicate) is also caught. Combined with the fixed
+        // schema catalog (RopSemanticParser.RequestSchemas/ResponseSchemas), this reaches the full
+        // 128/131 request/response dispatcher coverage target - see MapiCaptureParser.KnownGaps for the
+        // remaining, genuinely state-dependent-and-out-of-scope gaps.
         var requestCount = Enumerable.Range(0, 256).Count(v => RopVariableDispatcher.Supports(MapiDirection.Request, (byte)v));
         var responseCount = Enumerable.Range(0, 256).Count(v => RopVariableDispatcher.Supports(MapiDirection.Response, (byte)v));
-        Assert.Equal(75, requestCount);
-        Assert.Equal(75, responseCount);
+        Assert.Equal(77, requestCount);
+        Assert.Equal(78, responseCount);
     }
 
     // ---------------------------------------------------------------------------------------------

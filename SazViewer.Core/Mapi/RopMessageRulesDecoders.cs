@@ -9,19 +9,23 @@ namespace SazViewer.Core;
 /// (folder permissions) and MS-OXCNOTIF (notifications).
 ///
 /// This module mirrors the shape of <see cref="RopVariableDispatcher"/> (same
-/// <c>Supports</c>/<c>Parse</c> signatures) but is deliberately NOT wired into
-/// <see cref="RopSemanticParser"/>'s dispatch loop or into <see cref="RopVariableDispatcher"/> -
-/// exactly like the pre-existing, not-yet-wired <c>RopFastTransferDecoders</c> convention
-/// documented in <c>FastTransferStreamState.cs</c>. It is exercised directly by
-/// <c>RopMessageRulesDecodersTests</c>. Wiring it in later only requires forwarding
-/// <see cref="RopVariableDispatcher.Supports"/>/<see cref="RopVariableDispatcher.Parse"/> to this
-/// class for the RopId/direction pairs below.
+/// <c>Supports</c>/<c>Parse</c> signatures) and is wired directly into
+/// <see cref="RopVariableDispatcher"/>'s dispatch (see <c>RopVariableDispatcher.Parse</c>), which
+/// consults it after <see cref="RopSemanticParser"/>'s fixed schema catalog declines a RopId. It is
+/// also exercised directly by <c>RopMessageRulesDecodersTests</c>.
 ///
 /// Only RopIds whose exact byte width is fully determined by bytes already read within the same
 /// operation (never earlier operations, other ROPs in the same list, or external session/logon
-/// state) are implemented. Every RopId already covered by <see cref="RopSemanticParser"/>'s fixed
-/// schemas is intentionally excluded here (duplicating it would be dead code, since the semantic
-/// parser only ever consults this module for a RopId it does not already have a fixed schema for).
+/// state) are implemented, with one deliberate exception: RopSetMessageReadFlag's request (0x11)
+/// needs its originating logon's LogonFlags.Private bit, which the optional trailing
+/// <see cref="MapiCaptureContext"/> parameter on <see cref="Parse"/> supplies (recorded by
+/// <see cref="RopPropertyStoreDecoders"/>'s RopLogon request case, transactionally, in the same
+/// capture). When that state is unavailable or ambiguous, the case throws
+/// <see cref="MapiParseException"/>, which <c>RopSemanticParser</c> turns into a raw+warning
+/// fallback rather than guessing. Every RopId already covered by <see cref="RopSemanticParser"/>'s
+/// fixed schemas is intentionally excluded here (duplicating it would be dead code, since the
+/// semantic parser only ever consults this module for a RopId it does not already have a fixed
+/// schema for).
 ///
 /// Sources: pinned upstream MAPIInspector ROP parsers
 /// (https://github.com/OfficeDev/Office-Inspectors-for-Fiddler @ c18dd66c99f3b5a96c2e1d31698c5cf2deb828e7,
@@ -29,11 +33,6 @@ namespace SazViewer.Core;
 /// [MS-OXCPERM] and [MS-OXCNOTIF].
 ///
 /// Explicitly UNSUPPORTED (named on purpose, never guessed):
-///  - RopSetMessageReadFlag request (0x11): the trailing 24-byte ClientData block is present only
-///    when the object was opened against a private mailbox logon (a fact recorded by a prior
-///    RopLogon in the same session), which is state this operation's own bytes cannot reveal.
-///    (Its response IS a genuinely self-contained gated shape and is already covered by
-///    RopSemanticParser's fixed schemas, so it needs no entry here either way.)
 ///  - RopNotify response (0x2A) "TableRowData" payload content: MS-OXCNOTIF ties its internal
 ///    PropertyRow layout to whichever RopSetColumns a client issued on the notified table, which is
 ///    external, capture-wide state this module has no access to. The *boundary* (TableRowDataSize
@@ -89,6 +88,7 @@ internal static class RopMessageRulesDecoders
             0x0C or // RopSaveChangesMessage
             0x0E or // RopModifyRecipients
             0x0F or // RopReadRecipients
+            0x11 or // RopSetMessageReadFlag
             0x20 or // RopSetMessageStatus
             0x21 or // RopGetAttachmentTable
             0x22 or // RopOpenAttachment
@@ -121,7 +121,9 @@ internal static class RopMessageRulesDecoders
         MapiDirection direction,
         List<RopHandleReference> handleReferences,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MapiCaptureContext? context = null,
+        string? captureScope = null)
     {
         var ropId = reader.PeekByte("RopId");
         if (!Supports(direction, ropId))
@@ -138,6 +140,8 @@ internal static class RopMessageRulesDecoders
             (MapiDirection.Request, 0x0C) => ParseSaveChangesMessageRequest(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Request, 0x0E) => ParseModifyRecipientsRequest(ref reader, operationIndex, handleReferences, budget, cancellationToken),
             (MapiDirection.Request, 0x0F) => ParseReadRecipientsRequest(ref reader, operationIndex, handleReferences, budget),
+            (MapiDirection.Request, 0x11) => ParseSetMessageReadFlagRequest(
+                ref reader, operationIndex, handleReferences, budget, context, captureScope),
             (MapiDirection.Request, 0x20) => ParseSetMessageStatusRequest(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Request, 0x21) => ParseGetAttachmentTableRequest(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Request, 0x22) => ParseOpenAttachmentRequest(ref reader, operationIndex, handleReferences, budget),
@@ -176,11 +180,12 @@ internal static class RopMessageRulesDecoders
         return value;
     }
 
-    private static void ReadLogonId(ref MapiReader reader, ImmutableArray<MapiNode>.Builder children, MapiNodeBudget budget)
+    private static byte ReadLogonId(ref MapiReader reader, ImmutableArray<MapiNode>.Builder children, MapiNodeBudget budget)
     {
         var offset = reader.Position;
         var value = reader.ReadByte("LogonId");
         ExtendedBufferParser.AddField(children, "LogonId", offset, 1, value.ToString(CultureInfo.InvariantCulture), budget);
+        return value;
     }
 
     private static byte ReadHandleIndex(
@@ -289,6 +294,15 @@ internal static class RopMessageRulesDecoders
         var dataOffset = reader.Position;
         var data = reader.ReadBytes(size, dataFieldName);
         children.Add(ExtendedBufferParser.RawNode(dataFieldName, data, dataOffset, budget));
+    }
+
+    /// <summary>Reads a fixed number of raw bytes (its size already implied by an earlier field, not a preceding size field of its own) as a single raw node.</summary>
+    private static void AddFixedRaw(
+        ref MapiReader reader, ImmutableArray<MapiNode>.Builder children, string name, int count, MapiNodeBudget budget)
+    {
+        var offset = reader.Position;
+        var data = reader.ReadBytes(count, name);
+        children.Add(ExtendedBufferParser.RawNode(name, data, offset, budget));
     }
 
     private static MapiNode BuildOperation(
@@ -1021,6 +1035,45 @@ internal static class RopMessageRulesDecoders
         ReadHandleIndex(ref reader, "InputHandleIndex", operationIndex, handleReferences, children, budget);
         AddUInt32Decimal(ref reader, children, "RowId", budget);
         AddUInt16(ref reader, children, "Reserved", budget);
+        return BuildOperation(ref reader, operationIndex, ropId, children, start, budget);
+    }
+
+    /// <summary>
+    /// [MS-OXCMSG] 2.2.3.9.1 / upstream RopSetMessageReadFlagRequest.Parse(): the trailing 24-byte
+    /// ClientData block is present exactly when the object was opened against a NON-private (public
+    /// folders) logon - state this operation's own bytes cannot reveal, so it is consulted via
+    /// <see cref="MapiCaptureContext.TryGetLogonPrivacy"/>, recorded transactionally by
+    /// <see cref="RopPropertyStoreDecoders"/>'s RopLogon request case earlier in the same capture.
+    /// When that state is unavailable or ambiguous, this throws rather than guessing, and
+    /// <c>RopSemanticParser</c> retains the operation as raw with an explanatory warning.
+    /// </summary>
+    private static MapiNode ParseSetMessageReadFlagRequest(
+        ref MapiReader reader,
+        int operationIndex,
+        List<RopHandleReference> handleReferences,
+        MapiNodeBudget budget,
+        MapiCaptureContext? context,
+        string? captureScope)
+    {
+        var start = reader.Position;
+        var children = ImmutableArray.CreateBuilder<MapiNode>();
+        var ropId = ReadRopId(ref reader, children, budget);
+        var logonId = ReadLogonId(ref reader, children, budget);
+        ReadHandleIndex(ref reader, "ResponseHandleIndex", operationIndex, handleReferences, children, budget);
+        ReadHandleIndex(ref reader, "InputHandleIndex", operationIndex, handleReferences, children, budget);
+        AddByteHex(ref reader, children, "ReadFlags", budget);
+        if (context is null || !context.TryGetLogonPrivacy(captureScope, logonId, out var isPrivate))
+        {
+            throw new MapiParseException(
+                reader.Position,
+                $"RopSetMessageReadFlag request: cannot determine whether ClientData follows without a prior same-capture RopLogon request recording LogonId {logonId}'s LogonFlags.Private state.");
+        }
+
+        if (!isPrivate)
+        {
+            AddFixedRaw(ref reader, children, "ClientData", 24, budget);
+        }
+
         return BuildOperation(ref reader, operationIndex, ropId, children, start, budget);
     }
 

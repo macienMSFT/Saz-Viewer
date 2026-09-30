@@ -103,12 +103,23 @@ internal static class RopSemanticParser
         List<RopHandleReference> handleReferences,
         CancellationToken cancellationToken,
         FastTransferStreamAssembler? fastTransferAssembler = null,
-        string? captureScope = null)
+        string? captureScope = null,
+        MapiCaptureContext? context = null)
     {
         var schemas = direction == MapiDirection.Request ? RequestSchemas : ResponseSchemas;
         var operations = ImmutableArray.CreateBuilder<MapiNode>();
         var reader = new MapiReader(ropList, cancellationToken, checked((int)absoluteOffset));
         var index = 0;
+        // Only a request-direction ROP list can ever be the paired request of a same-session
+        // RopBufferTooSmall response, so these checkpoints are only ever collected here.
+        // checkpoints[j] is the byte offset (local to this ROP list) reached once exactly j
+        // *response*-producing request operations have been fully parsed - checkpoints[0] is always
+        // 0 before parsing starts. [MS-OXCROPS] 2.2.1: RopRelease (0x01) is the one request ROP that
+        // never yields a response operation, but it is still executed and therefore excluded from a
+        // later RopBufferTooSmall response's RequestBuffers tail. It replaces the current checkpoint
+        // with its post-operation offset instead of appending a response-producing checkpoint.
+        var checkpoints = direction == MapiDirection.Request ? ImmutableArray.CreateBuilder<int>() : null;
+        checkpoints?.Add(0);
         while (!reader.End)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -170,7 +181,8 @@ internal static class RopSemanticParser
                         cancellationToken,
                         warnings,
                         fastTransferAssembler,
-                        captureScope);
+                        captureScope,
+                        context);
                 if (reader.LocalPosition <= opStartLocal)
                 {
                     // Defensive: every schema consumes at least 3 bytes, so this should be unreachable.
@@ -179,6 +191,17 @@ internal static class RopSemanticParser
                 }
                 operations.Add(node);
                 index++;
+                if (ropId == 0x01)
+                {
+                    if (checkpoints is not null)
+                    {
+                        checkpoints[^1] = reader.LocalPosition;
+                    }
+                }
+                else
+                {
+                    checkpoints?.Add(reader.LocalPosition);
+                }
             }
             catch (MapiParseException ex)
             {
@@ -196,6 +219,10 @@ internal static class RopSemanticParser
                     $"{ex.Message}; the remaining {raw.Length:N0} byte(s) are retained as raw and no further operations in this list are decoded.");
                 break;
             }
+        }
+        if (checkpoints is not null && context is not null)
+        {
+            context.RecordRequestRopList(captureScope, ropList.Length, checkpoints.ToImmutable());
         }
         return operations.ToImmutable();
     }

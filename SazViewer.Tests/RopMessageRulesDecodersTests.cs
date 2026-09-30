@@ -18,13 +18,13 @@ public sealed class RopMessageRulesDecodersTests
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
-    public void SupportsExactlyFourteenRequestRopIds()
+    public void SupportsExactlyFifteenRequestRopIds()
     {
         byte[] supported =
         [
-            0x03, 0x06, 0x0C, 0x0E, 0x0F, 0x20, 0x21, 0x22, 0x29, 0x40, 0x41, 0x46, 0x57, 0x66,
+            0x03, 0x06, 0x0C, 0x0E, 0x0F, 0x11, 0x20, 0x21, 0x22, 0x29, 0x40, 0x41, 0x46, 0x57, 0x66,
         ];
-        Assert.Equal(14, supported.Length);
+        Assert.Equal(15, supported.Length);
         foreach (var ropId in supported)
         {
             Assert.True(RopMessageRulesDecoders.Supports(MapiDirection.Request, ropId), $"Expected request 0x{ropId:X2} to be supported.");
@@ -39,7 +39,7 @@ public sealed class RopMessageRulesDecodersTests
                 Assert.Contains((byte)ropId, supported);
             }
         }
-        Assert.Equal(14, supportedCount);
+        Assert.Equal(15, supportedCount);
     }
 
     [Fact]
@@ -68,7 +68,6 @@ public sealed class RopMessageRulesDecodersTests
     }
 
     [Theory]
-    [InlineData(0x11)] // RopSetMessageReadFlag request: ClientData presence depends on logon-session state.
     [InlineData(0x0D)] // RopRemoveAllRecipients: fully covered by the main dispatcher's fixed schemas.
     [InlineData(0x3F)] // RopGetRulesTable: fully covered elsewhere.
     [InlineData(0x3E)] // RopGetPermissionsTable: fully covered elsewhere.
@@ -100,8 +99,8 @@ public sealed class RopMessageRulesDecodersTests
     [Fact]
     public void ParseThrowsForAnUnsupportedRopIdRatherThanGuessingABoundary()
     {
-        var ex = ExpectMapiParseException([0x11, 0x00, 0x00], MapiDirection.Request);
-        Assert.Contains("0x11", ex.Message);
+        var ex = ExpectMapiParseException([0x0D, 0x00, 0x00], MapiDirection.Request);
+        Assert.Contains("0x0D", ex.Message);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -241,6 +240,225 @@ public sealed class RopMessageRulesDecodersTests
         var node = ParseRequest(ropList, 0x0F, new List<RopHandleReference>());
         Assert.Equal(ropList.Length, node.Length);
         Assert.Equal("5", Find(node, "RowId").Value);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // RopSetMessageReadFlag (0x11) request: [MS-OXCMSG] 2.2.3.9 / upstream RopSetMessageReadFlagRequest.
+    // The trailing 24-byte ClientData block is present only when the object was opened against a
+    // NON-private (public folders) logon - state this operation's own bytes cannot reveal, so it is
+    // gated by a same-capture RopLogon request's recorded LogonFlags.Private bit.
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ParsesRopSetMessageReadFlagRequestWithoutClientDataForAPrivateLogon()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordLogonPrivacy("mailbox-a", logonId: 0, isPrivate: true);
+        var ropList = new byte[] { 0x11, 0x00, 0x01, 0x02, 0x01 };
+
+        var handles = new List<RopHandleReference>();
+        var reader = NewReader(ropList);
+        var node = RopMessageRulesDecoders.Parse(
+            ref reader, 0, MapiDirection.Request, handles, new MapiNodeBudget(), CancellationToken.None, context, "mailbox-a");
+
+        Assert.Equal(ropList.Length, node.Length);
+        Assert.True(reader.End);
+        Assert.Equal("0x01", Find(node, "ReadFlags").Value);
+        Assert.False(node.Children.Any(c => c.Name == "ClientData"));
+        Assert.Equal(2, handles.Count);
+    }
+
+    [Fact]
+    public void ParsesRopSetMessageReadFlagRequestWithClientDataForAPublicLogonAndProvesFollowingOperationBoundary()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordLogonPrivacy("mailbox-a", logonId: 3, isPrivate: false);
+        var clientData = Enumerable.Range(0, 24).Select(i => (byte)(0x40 + i)).ToArray();
+        var op1 = Concat(new byte[] { 0x11, 0x03, 0x01, 0x02, 0x00 }, clientData);
+        var op2 = Concat([0x0F, 0x00, 0x00], Le((uint)9), Le((ushort)0)); // RopReadRecipients
+        var buffer = Concat(op1, op2);
+
+        var handles = new List<RopHandleReference>();
+        var reader = NewReader(buffer);
+        var node1 = RopMessageRulesDecoders.Parse(
+            ref reader, 0, MapiDirection.Request, handles, new MapiNodeBudget(), CancellationToken.None, context, "mailbox-a");
+        Assert.Equal(op1.Length, node1.Length);
+        Assert.Equal(op1.Length, reader.Position);
+        Assert.Equal(24, Find(node1, "ClientData").Length);
+        Assert.Equal(Convert.ToHexString(clientData), Find(node1, "ClientData").Value);
+
+        var node2 = RopMessageRulesDecoders.Parse(
+            ref reader, 1, MapiDirection.Request, handles, new MapiNodeBudget(), CancellationToken.None, context, "mailbox-a");
+        Assert.Equal(op2.Length, node2.Length);
+        Assert.True(reader.End);
+        Assert.Equal("9", Find(node2, "RowId").Value);
+    }
+
+    [Fact]
+    public void RopSetMessageReadFlagRequestThrowsWithoutAnyRecordedLogonPrivacyContext()
+    {
+        var ropList = new byte[] { 0x11, 0x07, 0x01, 0x02, 0x00 };
+        var reader = NewReader(ropList);
+        var threw = false;
+        try
+        {
+            RopMessageRulesDecoders.Parse(ref reader, 0, MapiDirection.Request, new List<RopHandleReference>(), new MapiNodeBudget(), CancellationToken.None, context: null);
+        }
+        catch (MapiParseException)
+        {
+            threw = true;
+        }
+        Assert.True(threw, "Expected MapiParseException.");
+    }
+
+    [Fact]
+    public void RopSetMessageReadFlagRequestThrowsWhenTheReferencedLogonIdWasNeverRecorded()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordLogonPrivacy("mailbox-a", logonId: 1, isPrivate: true); // a different LogonId than the one this request references.
+        var ropList = new byte[] { 0x11, 0x02, 0x01, 0x02, 0x00 };
+        var reader = NewReader(ropList);
+        var threw = false;
+        try
+        {
+            RopMessageRulesDecoders.Parse(
+                ref reader, 0, MapiDirection.Request, new List<RopHandleReference>(), new MapiNodeBudget(), CancellationToken.None, context, "mailbox-a");
+        }
+        catch (MapiParseException)
+        {
+            threw = true;
+        }
+        Assert.True(threw, "Expected MapiParseException.");
+    }
+
+    [Fact]
+    public void RopSetMessageReadFlagRequestThrowsWhenTruncatedBeforeReadFlags()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordLogonPrivacy("mailbox-a", logonId: 0, isPrivate: true);
+        var ropList = new byte[] { 0x11, 0x00, 0x01, 0x02 }; // missing ReadFlags byte
+        var reader = NewReader(ropList);
+        var threw = false;
+        try
+        {
+            RopMessageRulesDecoders.Parse(
+                ref reader, 0, MapiDirection.Request, new List<RopHandleReference>(), new MapiNodeBudget(), CancellationToken.None, context, "mailbox-a");
+        }
+        catch (MapiParseException)
+        {
+            threw = true;
+        }
+        Assert.True(threw, "Expected MapiParseException.");
+    }
+
+    [Fact]
+    public void RopSetMessageReadFlagRequestThrowsWhenClientDataIsTruncated()
+    {
+        var context = new MapiCaptureContext();
+        context.RecordLogonPrivacy("mailbox-a", logonId: 0, isPrivate: false);
+        var ropList = Concat(new byte[] { 0x11, 0x00, 0x01, 0x02, 0x00 }, new byte[10]); // needs 24 bytes of ClientData, only 10 present
+        var reader = NewReader(ropList);
+        var threw = false;
+        try
+        {
+            RopMessageRulesDecoders.Parse(
+                ref reader, 0, MapiDirection.Request, new List<RopHandleReference>(), new MapiNodeBudget(), CancellationToken.None, context, "mailbox-a");
+        }
+        catch (MapiParseException)
+        {
+            threw = true;
+        }
+        Assert.True(threw, "Expected MapiParseException.");
+    }
+
+    [Fact]
+    public void RopSetMessageReadFlagRequestPrivacyStateFlowsAcrossHttpSessionsInTheSameLogicalConnection()
+    {
+        // A LogonId's privacy is established once per logical MAPI connection and is legitimately
+        // referenced by RopSetMessageReadFlag requests in later HTTP round-trips on that connection.
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("http-logon", "mailbox-a");
+        context.RegisterLogonCorrelationScope("http-read-flag", "mailbox-a");
+        context.RecordLogonPrivacy("http-logon", logonId: 5, isPrivate: true);
+        var ropList = new byte[] { 0x11, 0x05, 0x01, 0x02, 0x00 };
+        var reader = NewReader(ropList);
+        var node = RopMessageRulesDecoders.Parse(
+            ref reader,
+            0,
+            MapiDirection.Request,
+            new List<RopHandleReference>(),
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context,
+            "http-read-flag");
+        Assert.True(reader.End);
+        Assert.False(node.Children.Any(c => c.Name == "ClientData"));
+    }
+
+    [Fact]
+    public void RopSetMessageReadFlagRequestKeepsReusedLogonIdsIsolatedByLogicalConnection()
+    {
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("http-private", "mailbox-private");
+        context.RegisterLogonCorrelationScope("http-public", "mailbox-public");
+        context.RecordLogonPrivacy("http-private", logonId: 1, isPrivate: true);
+        context.RecordLogonPrivacy("http-public", logonId: 1, isPrivate: false);
+
+        var privateReader = NewReader([0x11, 0x01, 0x01, 0x02, 0x00]);
+        var privateNode = RopMessageRulesDecoders.Parse(
+            ref privateReader,
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context,
+            "http-private");
+        Assert.False(privateNode.Children.Any(c => c.Name == "ClientData"));
+
+        var clientData = new byte[24];
+        var publicReader = NewReader(Concat([0x11, 0x01, 0x01, 0x02, 0x00], clientData));
+        var publicNode = RopMessageRulesDecoders.Parse(
+            ref publicReader,
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context,
+            "http-public");
+        Assert.Equal(24, Find(publicNode, "ClientData").Length);
+    }
+
+    [Fact]
+    public void RopSetMessageReadFlagRequestRefusesConflictingPrivacyWithinOneLogicalConnection()
+    {
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("http-logon-1", "mailbox-a");
+        context.RegisterLogonCorrelationScope("http-logon-2", "mailbox-a");
+        context.RegisterLogonCorrelationScope("http-read-flag", "mailbox-a");
+        context.RecordLogonPrivacy("http-logon-1", logonId: 1, isPrivate: true);
+        context.RecordLogonPrivacy("http-logon-2", logonId: 1, isPrivate: false);
+
+        var reader = NewReader([0x11, 0x01, 0x01, 0x02, 0x00]);
+        var threw = false;
+        try
+        {
+            RopMessageRulesDecoders.Parse(
+                ref reader,
+                0,
+                MapiDirection.Request,
+                [],
+                new MapiNodeBudget(),
+                CancellationToken.None,
+                context,
+                "http-read-flag");
+        }
+        catch (MapiParseException)
+        {
+            threw = true;
+        }
+        Assert.True(threw, "Conflicting privacy observations must make the correlation ambiguous.");
     }
 
     [Fact]

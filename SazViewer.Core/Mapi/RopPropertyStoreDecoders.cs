@@ -32,19 +32,28 @@ namespace SazViewer.Core;
 /// table - throws <see cref="MapiParseException"/> instead of guessing a boundary, consistent with
 /// how this decoder module treats every other genuinely indeterminate structure.
 ///
-/// A handful of request/response ROPs in these families are deliberately left unsupported (absent
-/// from <see cref="Supports"/>) because their wire shape can only be resolved using state from a
-/// *different*, earlier operation (an originating RopLogon's LogonFlags, a paired request's declared
-/// buffer size, or a per-session named-property/PropertyTag dictionary) that this decoder - by
-/// design, per its stateless per-operation contract - does not have access to:
+/// Four request/response ROPs in these families need state from a *different*, earlier operation to
+/// resolve their exact wire shape (an originating RopLogon's LogonFlags, a paired request's declared
+/// buffer size, or a per-session PropertyTag dictionary) that this decoder's stateless per-operation
+/// contract cannot see from its own bytes alone. The optional trailing
+/// <see cref="MapiCaptureContext"/>/<c>captureScope</c> parameters on <see cref="Parse"/> close all
+/// four, each transactionally recorded/consulted only via <see cref="MapiCaptureContext"/> (never a
+/// global) and each failing safely - by throwing <see cref="MapiParseException"/>, which
+/// <c>RopSemanticParser</c> turns into a raw+warning fallback - when the required state is absent or
+/// ambiguous, rather than guessing:
 ///   - Request 0x64 RopWritePerUserInformation: the trailing 16-byte ReplGuid is present only when
 ///     DataOffset == 0 AND the LogonId's originating RopLogon used LogonFlags.Private.
-///   - Response 0x07 RopGetPropertiesSpecific: the property tags returned are implied by the
-///     matching request's PropertyTags array, which is not visible from the response bytes alone.
-///   - Response 0xFE RopLogon: splits into two entirely different shapes (private mailbox vs.
-///     public folders) with no in-band discriminator; it depends on the request's LogonFlags.
-///   - Response 0xFF RopBufferTooSmall: its RequestBuffersSize field depends on the paired request's
-///     buffer size, tracked only in cross-message session state.
+///   - Response 0x07 RopGetPropertiesSpecific: the RowData's property tags are exactly the matching
+///     same-session request's PropertyTags array, correlated by handle index via a FIFO queue (the
+///     same handle index can be reused by more than one call within one ROP list).
+///   - Response 0xFE RopLogon: on success, splits into a private-mailbox shape or a public-folders
+///     shape based on the in-band LogonFlags byte the response itself carries (no external state
+///     needed for that choice); the request's own case below separately records this same LogonId's
+///     Private/public-folders flag for the other three gaps above, which are the ones that truly need
+///     an earlier operation's state.
+///   - Response 0xFF RopBufferTooSmall: its RequestBuffersSize is the tail of the same-session request
+///     ROP list starting at this operation's own index, recorded by <c>RopSemanticParser</c> while it
+///     walks that request list.
 ///
 /// <c>RopVariableDispatcher</c> routes supported property/store operations here after the fixed
 /// semantic catalog declines them. The same <c>Supports</c>/<c>Parse</c> contract remains directly
@@ -55,6 +64,15 @@ internal static class RopPropertyStoreDecoders
     // [MS-OXCDATA] 2.4.1: the only AdditionalErrorCodes value that changes a CopyTo/CopyToStream/
     // CopyProperties response's shape (an extra DestHandleIndex field).
     private const uint NullDestinationObject = 0x00000503;
+
+    // [MS-OXCDATA] 2.4.1: the AdditionalErrorCodes value that turns a failed RopLogon response into a
+    // "redirect to a different server" shape (LogonFlags + ServerNameSize + ServerName) instead of the
+    // ordinary bare RopId+OutputHandleIndex+ReturnValue failure shape.
+    private const uint WrongServer = 0x00000478;
+
+    // [MS-OXCSTOR] LogonFlags.Private bit ([MS-OXCSTOR] 2.2.1.1.1): set for a private-mailbox logon,
+    // clear for a public-folders logon.
+    private const byte LogonFlagsPrivate = 0x01;
 
     // [MS-OXCDATA] 2.11.1: the MultiValue flag bit OR'd into a base PropertyType to form its
     // "array of values" variant.
@@ -103,6 +121,7 @@ internal static class RopPropertyStoreDecoders
         0x26, // RopSetReceiveFolder
         0x27, // RopGetReceiveFolder
         0x51, // RopTransportNewMail
+        0x64, // RopWritePerUserInformation
         0x6F, // RopOptionsData
         0xFE, // RopLogon
         // Core MSOXCROPS
@@ -110,6 +129,7 @@ internal static class RopPropertyStoreDecoders
 
     private static readonly ImmutableHashSet<byte> ResponseRopIds = ImmutableHashSet.Create<byte>(
         // MSOXCPRPT
+        0x07, // RopGetPropertiesSpecific
         0x08, // RopGetPropertiesAll
         0x09, // RopGetPropertiesList
         0x0A, // RopSetProperties
@@ -129,17 +149,22 @@ internal static class RopPropertyStoreDecoders
         0x90, // RopWriteAndCommitStream
         0xA3, // RopWriteStreamExtended
         // MSOXCSTOR
+        // Note: RopWritePerUserInformation (0x64) response is NOT listed here - its response shape
+        // is a fixed Header+ReturnValue (see RopSemanticParser's Fixed6(0x64, ...) schema); only the
+        // *request*'s trailing ReplGuid is state-dependent, so only 0x64's request is a variable case.
         0x27, // RopGetReceiveFolder
         0x42, // RopGetOwningServers
         0x45, // RopPublicFolderIsGhosted
         0x60, // RopGetPerUserLongTermIds
         0x68, // RopGetReceiveFolderTable
         0x6F, // RopOptionsData
+        0xFE, // RopLogon
         // Core MSOXCROPS
         0x49, // RopGetAddressTypes
         0x4A, // RopTransportSend
         0x50, // RopProgress
-        0xF9); // RopBackoff
+        0xF9, // RopBackoff
+        0xFF); // RopBufferTooSmall
 
     internal static bool Supports(MapiDirection direction, byte ropId) =>
         (direction == MapiDirection.Request ? RequestRopIds : ResponseRopIds).Contains(ropId);
@@ -150,7 +175,9 @@ internal static class RopPropertyStoreDecoders
         MapiDirection direction,
         List<RopHandleReference> handleReferences,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MapiCaptureContext? context = null,
+        string? captureScope = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var start = reader.Position;
@@ -162,11 +189,11 @@ internal static class RopPropertyStoreDecoders
 
         if (direction == MapiDirection.Request)
         {
-            ParseRequest(ref reader, ropId, operationIndex, handleReferences, budget, children);
+            ParseRequest(ref reader, ropId, operationIndex, handleReferences, budget, children, context, captureScope);
         }
         else
         {
-            ParseResponse(ref reader, ropId, operationIndex, handleReferences, budget, children);
+            ParseResponse(ref reader, ropId, operationIndex, handleReferences, budget, children, context, captureScope);
         }
 
         budget.Claim(0);
@@ -189,17 +216,28 @@ internal static class RopPropertyStoreDecoders
         int operationIndex,
         List<RopHandleReference> handleReferences,
         MapiNodeBudget budget,
-        ImmutableArray<MapiNode>.Builder children)
+        ImmutableArray<MapiNode>.Builder children,
+        MapiCaptureContext? context,
+        string? captureScope)
     {
         switch (ropId)
         {
             case 0x07: // RopGetPropertiesSpecific
+            {
                 AddLogonId(ref reader, children, budget);
-                AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                var handleIndex = AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
                 AddUInt16Field(ref reader, children, "PropertySizeLimit", budget);
                 AddBoolAsUInt16Field(ref reader, children, "WantUnicode", budget);
-                AddCountedPropertyTags(ref reader, children, "PropertyTagCount", "PropertyTags", budget);
+                var tags = AddCountedPropertyTags(ref reader, children, "PropertyTagCount", "PropertyTags", budget);
+
+                // Recorded transactionally (only after the request parsed fully) so the matching
+                // response's RopGetPropertiesSpecific (0x07) case can render its untyped RowData
+                // against these exact tags; queued (not overwritten) per handle index because the
+                // same handle index can issue more than one GetPropertiesSpecific call within a ROP
+                // list, and responses arrive in the same order.
+                context?.EnqueuePropertySpecificTags(captureScope, handleIndex, tags);
                 return;
+            }
             case 0x08: // RopGetPropertiesAll
                 AddLogonId(ref reader, children, budget);
                 AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
@@ -330,6 +368,35 @@ internal static class RopPropertyStoreDecoders
                 AddUInt32Field(ref reader, children, "DataOffset", budget);
                 AddUInt16Field(ref reader, children, "MaxDataSize", budget);
                 return;
+            case 0x64: // RopWritePerUserInformation
+            {
+                // [MS-OXCSTOR] 2.2.4.7.1: ReplGuid is present iff DataOffset == 0 AND the LogonId's
+                // originating RopLogon used LogonFlags.Private - state this decoder cannot know from
+                // its own bytes, so it consults the same-capture record made by the RopLogon 0xFE
+                // request case below (transactionally, only after that request parsed cleanly).
+                var logonId = AddLogonId(ref reader, children, budget);
+                AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                children.Add(AddLongTermId(ref reader, "FolderId", budget));
+                AddBoolField(ref reader, children, "HasFinished", budget);
+                var dataOffset = AddUInt32Field(ref reader, children, "DataOffset", budget);
+                AddLengthPrefixedBytes(ref reader, children, "DataSize", "Data", budget);
+                if (dataOffset == 0)
+                {
+                    if (context is null || !context.TryGetLogonPrivacy(captureScope, logonId, out var isPrivate))
+                    {
+                        throw new MapiParseException(
+                            reader.Position,
+                            $"RopWritePerUserInformation request: cannot determine whether ReplGuid follows without a prior same-capture RopLogon request recording LogonId {logonId}'s LogonFlags.Private state.");
+                    }
+
+                    if (isPrivate)
+                    {
+                        AddGuidField(ref reader, children, "ReplGuid", budget);
+                    }
+                }
+
+                return;
+            }
             case 0x67: // RopCopyProperties
                 AddLogonId(ref reader, children, budget);
                 AddHandleIndex(ref reader, children, "SourceHandleIndex", operationIndex, handleReferences, budget);
@@ -370,9 +437,9 @@ internal static class RopPropertyStoreDecoders
                 return;
             case 0xFE: // RopLogon
             {
-                AddLogonId(ref reader, children, budget);
+                var logonId = AddLogonId(ref reader, children, budget);
                 AddHandleIndex(ref reader, children, "OutputHandleIndex", operationIndex, handleReferences, budget);
-                AddByteField(ref reader, children, "LogonFlags", budget);
+                var logonFlags = AddByteField(ref reader, children, "LogonFlags", budget);
                 AddUInt32Field(ref reader, children, "OpenFlags", budget, hex: true);
                 AddUInt32Field(ref reader, children, "StoreState", budget, hex: true);
                 var essdnSize = AddUInt16Field(ref reader, children, "EssdnSize", budget);
@@ -380,6 +447,11 @@ internal static class RopPropertyStoreDecoders
                 {
                     AddAsciiField(ref reader, children, "Essdn", budget);
                 }
+
+                // Transactional: only recorded once the whole request has parsed without throwing, so
+                // a malformed RopLogon request never poisons later RopWritePerUserInformation/
+                // RopSetMessageReadFlag correlation for this LogonId.
+                context?.RecordLogonPrivacy(captureScope, logonId, (logonFlags & LogonFlagsPrivate) != 0);
                 return;
             }
             default:
@@ -397,10 +469,38 @@ internal static class RopPropertyStoreDecoders
         int operationIndex,
         List<RopHandleReference> handleReferences,
         MapiNodeBudget budget,
-        ImmutableArray<MapiNode>.Builder children)
+        ImmutableArray<MapiNode>.Builder children,
+        MapiCaptureContext? context,
+        string? captureScope)
     {
         switch (ropId)
         {
+            case 0x07: // RopGetPropertiesSpecific
+            {
+                // [MS-OXCPRPT] 2.2.4.1.2: the RowData that follows ReturnValue is an untyped
+                // PropertyRow whose column list is exactly the matching same-session request's
+                // PropertyTags array - state this decoder cannot see from its own bytes, so it
+                // dequeues the same-session, same-handle-index record made by the 0x07 request case.
+                var handleIndex = AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                var success = AddReturnValue(ref reader, children, budget, out _);
+                ImmutableArray<(ushort Type, ushort Id)> tags = default;
+                var hasTags = context is not null
+                    && context.TryDequeuePropertySpecificTags(captureScope, handleIndex, out tags);
+                if (success)
+                {
+                    if (!hasTags)
+                    {
+                        throw new MapiParseException(
+                            reader.Position,
+                            $"RopGetPropertiesSpecific response: no matching same-session request recorded its PropertyTags for handle index {handleIndex}.");
+                    }
+
+                    children.Add(RopMessageRulesDecoders.ParseRopPropertyRow(
+                        ref reader, "RowData", tags, tags.Length, budget, depth: 1, CancellationToken.None));
+                }
+
+                return;
+            }
             case 0x08: // RopGetPropertiesAll
             {
                 AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
@@ -680,6 +780,83 @@ internal static class RopPropertyStoreDecoders
                 AddRawBytesField(ref reader, children, "AdditionalData", additionalDataSize, budget);
                 return;
             }
+            case 0xFE: // RopLogon
+            {
+                // [MS-OXCSTOR] 2.2.2.1.1/2.2.2.1.2: unlike every other decoder in this module, which
+                // branch is present is fully self-determined here - the response itself carries the
+                // in-band LogonFlags byte that selects private-mailbox vs. public-folders (no earlier
+                // state is needed for THIS shape choice; only the request-side RopLogon case above
+                // needs to *record* this LogonId's privacy, for the unrelated RopWritePerUserInformation
+                // and RopSetMessageReadFlag gaps that genuinely cannot self-determine their own shape).
+                AddHandleIndex(ref reader, children, "OutputHandleIndex", operationIndex, handleReferences, budget);
+                var success = AddReturnValue(ref reader, children, budget, out var raw);
+                if (success)
+                {
+                    var logonFlags = AddByteField(ref reader, children, "LogonFlags", budget);
+                    AddFixedFolderIdArray(ref reader, children, "FolderIds", 13, budget);
+                    if ((logonFlags & LogonFlagsPrivate) != 0)
+                    {
+                        AddByteField(ref reader, children, "ResponseFlags", budget);
+                        AddGuidField(ref reader, children, "MailboxGuid", budget);
+                        AddUInt16Field(ref reader, children, "ReplId", budget);
+                        AddGuidField(ref reader, children, "ReplGuid", budget);
+                        children.Add(AddLogonTime(ref reader, "LogonTime", budget));
+                        AddUInt64Field(ref reader, children, "GwartTime", budget);
+                        AddUInt32Field(ref reader, children, "StoreState", budget, hex: true);
+                    }
+                    else
+                    {
+                        AddUInt16Field(ref reader, children, "ReplId", budget);
+                        AddGuidField(ref reader, children, "ReplGuid", budget);
+                        AddGuidField(ref reader, children, "PerUserGuid", budget);
+                    }
+                }
+                else if (raw == WrongServer)
+                {
+                    AddByteField(ref reader, children, "LogonFlags", budget);
+                    var serverNameSize = AddByteField(ref reader, children, "ServerNameSize", budget);
+                    if (serverNameSize > 0)
+                    {
+                        AddAsciiField(ref reader, children, "ServerName", budget);
+                    }
+                }
+
+                return;
+            }
+            case 0xFF: // RopBufferTooSmall
+            {
+                // [MS-OXCROPS] 2.2.15.1/2.2.15.2: genuinely different shape - no HandleIndex, no
+                // ReturnValue at all - just SizeNeeded followed by the still-unexecuted tail of the
+                // matching same-session request's ROP list. RequestBuffers bytes themselves are read
+                // straight from this response's own wire bytes (the server echoes them back); only
+                // their *length* needs cross-message state, recorded by RopSemanticParser while it
+                // walked that request's ROP list.
+                AddUInt16Field(ref reader, children, "SizeNeeded", budget);
+                if (context is null || !context.TryGetRequestRopList(captureScope, out var totalLength, out var checkpoints))
+                {
+                    throw new MapiParseException(
+                        reader.Position,
+                        "RopBufferTooSmall response: no matching same-session request ROP list was recorded to determine RequestBuffers' length.");
+                }
+
+                if (operationIndex < 0 || operationIndex >= checkpoints.Length)
+                {
+                    throw new MapiParseException(
+                        reader.Position,
+                        $"RopBufferTooSmall response: response operation index {operationIndex} has no corresponding checkpoint among the matching request's recorded {checkpoints.Length}.");
+                }
+
+                var requestBuffersSize = totalLength - checkpoints[operationIndex];
+                if (requestBuffersSize < 0)
+                {
+                    throw new MapiParseException(
+                        reader.Position,
+                        $"RopBufferTooSmall response: computed RequestBuffers length {requestBuffersSize} is negative for response operation index {operationIndex}.");
+                }
+
+                AddRawBytesField(ref reader, children, "RequestBuffers", requestBuffersSize, budget);
+                return;
+            }
             default:
                 throw new MapiParseException(reader.Position, $"RopPropertyStoreDecoders has no response decoder for 0x{ropId:X2}.");
         }
@@ -690,11 +867,12 @@ internal static class RopPropertyStoreDecoders
     // RopField/RopFieldTier engine (which this file must not modify or otherwise depend on).
     // -------------------------------------------------------------------------------------------
 
-    private static void AddLogonId(ref MapiReader reader, ImmutableArray<MapiNode>.Builder children, MapiNodeBudget budget)
+    private static byte AddLogonId(ref MapiReader reader, ImmutableArray<MapiNode>.Builder children, MapiNodeBudget budget)
     {
         var offset = reader.Position;
         var value = reader.ReadByte("LogonId");
         ExtendedBufferParser.AddField(children, "LogonId", offset, 1, value.ToString(CultureInfo.InvariantCulture), budget);
+        return value;
     }
 
     private static byte AddHandleIndex(
@@ -844,13 +1022,17 @@ internal static class RopPropertyStoreDecoders
     // -------------------------------------------------------------------------------------------
 
     /// <summary>[MS-OXCDATA] 2.9: PropertyType(UInt16) + PropertyId(UInt16).</summary>
-    private static MapiNode AddPropertyTagField(ref MapiReader reader, string name, MapiNodeBudget budget)
+    private static MapiNode AddPropertyTagField(ref MapiReader reader, string name, MapiNodeBudget budget) =>
+        AddPropertyTagField(ref reader, name, budget, out _, out _);
+
+    private static MapiNode AddPropertyTagField(
+        ref MapiReader reader, string name, MapiNodeBudget budget, out ushort propertyType, out ushort propertyId)
     {
         var start = reader.Position;
         var typeOffset = reader.Position;
-        var propertyType = reader.ReadUInt16($"{name}.PropertyType");
+        propertyType = reader.ReadUInt16($"{name}.PropertyType");
         var idOffset = reader.Position;
-        var propertyId = reader.ReadUInt16($"{name}.PropertyId");
+        propertyId = reader.ReadUInt16($"{name}.PropertyId");
         var nested = ImmutableArray.CreateBuilder<MapiNode>(2);
         ExtendedBufferParser.AddField(nested, "PropertyType", typeOffset, 2, NspiPropertyParser.PropertyTypeName(propertyType), budget);
         ExtendedBufferParser.AddField(nested, "PropertyId", idOffset, 2, MapiPropertyNames.FormatPidTag(propertyId), budget);
@@ -858,7 +1040,12 @@ internal static class RopPropertyStoreDecoders
         return new MapiNode(name, MapiNodeKind.Structure, start, reader.Position - start, null, nested.ToImmutable());
     }
 
-    private static void AddCountedPropertyTags(
+    /// <summary>
+    /// Reads a counted PropertyTag array, both emitting its tree nodes and returning the parsed
+    /// (Type, Id) tuples - the latter is consulted only by RopGetPropertiesSpecific's request case,
+    /// to record the exact tags its matching same-session response must be rendered against.
+    /// </summary>
+    private static ImmutableArray<(ushort Type, ushort Id)> AddCountedPropertyTags(
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder children,
         string countFieldName,
@@ -869,9 +1056,11 @@ internal static class RopPropertyStoreDecoders
         var count = reader.ReadCount16(countFieldName);
         ExtendedBufferParser.AddField(children, countFieldName, countOffset, 2, count.ToString(CultureInfo.InvariantCulture), budget);
         var array = ImmutableArray.CreateBuilder<MapiNode>(count);
+        var tags = ImmutableArray.CreateBuilder<(ushort Type, ushort Id)>(count);
         for (var i = 0; i < count; i++)
         {
-            array.Add(AddPropertyTagField(ref reader, $"{arrayFieldName}[{i}]", budget));
+            array.Add(AddPropertyTagField(ref reader, $"{arrayFieldName}[{i}]", budget, out var propertyType, out var propertyId));
+            tags.Add((propertyType, propertyId));
         }
         budget.Claim(0, count);
         children.Add(new MapiNode(
@@ -881,6 +1070,7 @@ internal static class RopPropertyStoreDecoders
             array.Sum(n => n.Length),
             $"{count:N0} entrie(s)",
             array.ToImmutable()));
+        return tags.ToImmutable();
     }
 
     /// <summary>[MS-OXCDATA] 2.7: Index(UInt16) + PropertyTag(4 bytes) + ErrorCode(UInt32).</summary>
@@ -985,6 +1175,58 @@ internal static class RopPropertyStoreDecoders
         var nested = ImmutableArray.CreateBuilder<MapiNode>(2);
         ExtendedBufferParser.AddField(nested, "ReplicaId", replicaOffset, 2, replicaId.ToString(CultureInfo.InvariantCulture), budget);
         nested.Add(ExtendedBufferParser.RawNode("GlobalCounter", globalCounter, globalCounterOffset, budget));
+        budget.Claim(0);
+        return new MapiNode(name, MapiNodeKind.Structure, start, reader.Position - start, null, nested.ToImmutable());
+    }
+
+    /// <summary>[MS-OXCSTOR] 2.2.2.1.1: RopLogon's fixed 13-entry FolderID array (Root, Deleted Items, Search, IPM Subtree, Inbox, Outbox, Sent Items, Deleted Items, Public folders root, IPM Public folders root, Deferred Action, Spooler queue, Common Views/Finder - each an 8-byte FolderID). Reuses <see cref="AddFolderOrMessageId(ref MapiReader, string, MapiNodeBudget)"/> since every entry shares the exact FolderID wire shape.</summary>
+    private static void AddFixedFolderIdArray(
+        ref MapiReader reader, ImmutableArray<MapiNode>.Builder children, string arrayFieldName, int count, MapiNodeBudget budget)
+    {
+        var array = ImmutableArray.CreateBuilder<MapiNode>(count);
+        for (var i = 0; i < count; i++)
+        {
+            array.Add(AddFolderOrMessageId(ref reader, $"{arrayFieldName}[{i}]", budget));
+        }
+        budget.Claim(0, count);
+        children.Add(new MapiNode(
+            arrayFieldName,
+            MapiNodeKind.Array,
+            array.Count == 0 ? reader.Position : array[0].Offset,
+            array.Sum(n => n.Length),
+            $"{count:N0} entrie(s)",
+            array.ToImmutable()));
+    }
+
+    /// <summary>
+    /// [MS-OXCSTOR]/[MS-OXCDATA] LogonTime, part of a private-mailbox RopLogon success response:
+    /// Seconds/Minutes/Hour/DayOfWeek/Day/Month (one byte each) followed by Year (UInt16) - 8 bytes.
+    /// </summary>
+    private static MapiNode AddLogonTime(ref MapiReader reader, string name, MapiNodeBudget budget)
+    {
+        var start = reader.Position;
+        var secondsOffset = reader.Position;
+        var seconds = reader.ReadByte($"{name}.Seconds");
+        var minutesOffset = reader.Position;
+        var minutes = reader.ReadByte($"{name}.Minutes");
+        var hourOffset = reader.Position;
+        var hour = reader.ReadByte($"{name}.Hour");
+        var dayOfWeekOffset = reader.Position;
+        var dayOfWeek = reader.ReadByte($"{name}.DayOfWeek");
+        var dayOffset = reader.Position;
+        var day = reader.ReadByte($"{name}.Day");
+        var monthOffset = reader.Position;
+        var month = reader.ReadByte($"{name}.Month");
+        var yearOffset = reader.Position;
+        var year = reader.ReadUInt16($"{name}.Year");
+        var nested = ImmutableArray.CreateBuilder<MapiNode>(7);
+        ExtendedBufferParser.AddField(nested, "Seconds", secondsOffset, 1, seconds.ToString(CultureInfo.InvariantCulture), budget);
+        ExtendedBufferParser.AddField(nested, "Minutes", minutesOffset, 1, minutes.ToString(CultureInfo.InvariantCulture), budget);
+        ExtendedBufferParser.AddField(nested, "Hour", hourOffset, 1, hour.ToString(CultureInfo.InvariantCulture), budget);
+        ExtendedBufferParser.AddField(nested, "DayOfWeek", dayOfWeekOffset, 1, dayOfWeek.ToString(CultureInfo.InvariantCulture), budget);
+        ExtendedBufferParser.AddField(nested, "Day", dayOffset, 1, day.ToString(CultureInfo.InvariantCulture), budget);
+        ExtendedBufferParser.AddField(nested, "Month", monthOffset, 1, month.ToString(CultureInfo.InvariantCulture), budget);
+        ExtendedBufferParser.AddField(nested, "Year", yearOffset, 2, year.ToString(CultureInfo.InvariantCulture), budget);
         budget.Claim(0);
         return new MapiNode(name, MapiNodeKind.Structure, start, reader.Position - start, null, nested.ToImmutable());
     }

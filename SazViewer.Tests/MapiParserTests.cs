@@ -59,13 +59,14 @@ public sealed class MapiParserTests
     [Fact]
     public void ParsesExecuteExtendedBufferRopFramingAndHandles()
     {
-        // 0x64 (RopWritePerUserInformation) request is a real, named RopId that is intentionally
-        // implemented by none of the fixed schema catalog or the four self-contained variable-width
-        // decoder families (its trailing ReplGuid depends on state from a different, earlier
-        // operation), so it reliably exercises the "unimplemented RopId retained as raw" framing path
+        // 0x2A (RopNotify) is a real, named RopId that has zero *request*-direction schema anywhere
+        // (fixed catalog or any of the four self-contained variable-width decoder families) by
+        // protocol design: [MS-OXCROPS] 2.2.14.1 defines RopNotify strictly as a server-initiated
+        // response operation, never a request. That makes it a stable, permanently-true example for
+        // exercising the "unimplemented-for-this-direction RopId retained as raw" framing path
         // exercised by this test (which is about extended buffer/handle table framing, not about
-        // decoding RopWritePerUserInformation itself).
-        byte[] ropPayload = [5, 0, 0x64, 0, 0, 0x44, 0x33, 0x22, 0x11];
+        // decoding RopNotify itself).
+        byte[] ropPayload = [5, 0, 0x2A, 0, 0, 0x44, 0x33, 0x22, 0x11];
         var extended = ExtendedBuffer(ropPayload, flags: 0x0004);
         using var requestBody = new MemoryStream();
         WriteUInt32(requestBody, 0);
@@ -83,9 +84,82 @@ public sealed class MapiParserTests
 
         var request = Assert.Single(new SazParser().Parse(saz).Sessions).Mapi!.Request!;
 
-        Assert.Equal("RopWritePerUserInformation", Find(request.Root, "RopId").Value!.Split('(')[1].TrimEnd(')'));
+        Assert.Equal("RopNotify", Find(request.Root, "RopId").Value!.Split('(')[1].TrimEnd(')'));
         Assert.Equal("0x11223344", Find(request.Root, "[0]").Value);
         Assert.Contains(request.Warnings, warning => warning.Contains("individual ROP fields", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CorrelatesLogonPrivacyAcrossExecuteRoundTripsOnTheSameLogicalConnection()
+    {
+        byte[] logon =
+        [
+            0xFE, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        byte[] setReadFlag = [0x11, 0x00, 0x00, 0x00, 0x01];
+
+        using var saz = Fixture(
+            ("raw/20_c.txt", Http(
+                "POST /mapi/emsmdb/?MailboxId=mailbox-a HTTP/1.1",
+                ExecuteRequest(logon),
+                ("Host", "example.test"),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Execute"),
+                ("X-ClientInfo", "client-a"))),
+            ("raw/21_c.txt", Http(
+                "POST /mapi/emsmdb/?MailboxId=mailbox-a HTTP/1.1",
+                ExecuteRequest(setReadFlag),
+                ("Host", "example.test"),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Execute"),
+                ("X-ClientInfo", "client-a"))));
+
+        var report = new SazParser().Parse(saz);
+        Assert.Equal(2, report.Sessions.Count);
+        var secondRequest = report.Sessions[1].Mapi!.Request!;
+        Assert.True(secondRequest.Complete);
+        Assert.Equal("0x01", Find(secondRequest.Root, "ReadFlags").Value);
+        Assert.DoesNotContain(secondRequest.Warnings, warning => warning.Contains("LogonFlags.Private", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DoesNotCorrelateLogonPrivacyAcrossDifferentClientIdentities()
+    {
+        byte[] logon =
+        [
+            0xFE, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        byte[] setReadFlag = [0x11, 0x00, 0x00, 0x00, 0x01];
+
+        using var saz = Fixture(
+            ("raw/22_c.txt", Http(
+                "POST /mapi/emsmdb/?MailboxId=mailbox-a HTTP/1.1",
+                ExecuteRequest(logon),
+                ("Host", "example.test"),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Execute"),
+                ("X-ClientInfo", "client-a"))),
+            ("raw/23_c.txt", Http(
+                "POST /mapi/emsmdb/?MailboxId=mailbox-a HTTP/1.1",
+                ExecuteRequest(setReadFlag),
+                ("Host", "example.test"),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Execute"),
+                ("X-ClientInfo", "client-b"))));
+
+        var report = new SazParser().Parse(saz);
+        var secondRequest = report.Sessions[1].Mapi!.Request!;
+        Assert.False(secondRequest.Complete);
+        Assert.Contains(
+            secondRequest.Warnings,
+            warning => warning.Contains("LogonFlags.Private", StringComparison.Ordinal)
+                && warning.Contains("could not be parsed", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -1204,6 +1278,27 @@ public sealed class MapiParserTests
         BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(6, 2), checked((ushort)payload.Length));
         payload.CopyTo(result, 8);
         return result;
+    }
+
+    private static byte[] ExecuteRequest(byte[] operation)
+    {
+        var ropPayload = BuildBody(
+            stream =>
+            {
+                WriteUInt16(stream, checked((ushort)(2 + operation.Length)));
+                stream.Write(operation);
+                WriteUInt32(stream, 0xFFFFFFFF);
+            });
+        var extended = ExtendedBuffer(ropPayload, flags: 0x0004);
+        return BuildBody(
+            stream =>
+            {
+                WriteUInt32(stream, 0);
+                WriteUInt32(stream, checked((uint)extended.Length));
+                stream.Write(extended);
+                WriteUInt32(stream, 4096);
+                WriteUInt32(stream, 0);
+            });
     }
 
     private static byte[] Gzip(byte[] bytes)

@@ -152,20 +152,21 @@ public sealed class RopSemanticParserTests
     [Fact]
     public void StopsAtKnownButUnimplementedRopIdWithoutGuessingFurtherOperationBoundaries()
     {
-        // RopWritePerUserInformation request (0x64) is a real, named RopId that is deliberately left
-        // unimplemented in both the fixed-width catalog and all four self-contained variable-width
-        // decoder families: its trailing ReplGuid field is present only when DataOffset == 0 AND the
-        // LogonId's originating RopLogon used LogonFlags.Private, state this stateless per-operation
-        // decoder does not have access to. Bytes after it must never be interpreted as another
-        // operation.
-        byte[] ropList = [0x01, 0x00, 0x00, 0x64, 0x00, 0x00, 0x01, 0x00];
+        // RopNotify (0x2A) is a real, named RopId that has zero *request*-direction schema anywhere
+        // (fixed-width catalog or any of the four self-contained variable-width decoder families) by
+        // protocol design, not by an accidental gap: [MS-OXCROPS] 2.2.14.1 defines RopNotify as a
+        // server-initiated event pushed only inside a response ROP list (following a prior
+        // RopRegisterNotification request) - it can never legitimately appear as a request operation.
+        // A hostile/malformed buffer could still place it there, so this proves the request-direction
+        // fallback still stops immediately and never guesses at further operation boundaries.
+        byte[] ropList = [0x01, 0x00, 0x00, 0x2A, 0x00, 0x00, 0x01, 0x00];
         var buffer = Frame(ropList);
         var warnings = new List<string>();
         var nodes = RopBufferParser.Parse(buffer, 0, MapiDirection.Request, warnings, new MapiNodeBudget(), CancellationToken.None);
 
         var ropListNode = Find(nodes, "ROP list");
         Assert.Equal(2, ropListNode.Children.Length);
-        Assert.Equal("0x64 (RopWritePerUserInformation)", Find(ropListNode.Children[1].Children, "RopId").Value);
+        Assert.Equal("0x2A (RopNotify)", Find(ropListNode.Children[1].Children, "RopId").Value);
         Assert.Contains(
             warnings,
             w => w.Contains("no fixed-width request schema is implemented", StringComparison.Ordinal));
@@ -210,6 +211,33 @@ public sealed class RopSemanticParserTests
         Assert.Contains(
             warnings,
             w => w.Contains("exceeds", StringComparison.OrdinalIgnoreCase) && w.Contains("nodes", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RequestCheckpointsAdvancePastReleaseWithoutAddingAResponseSlot()
+    {
+        byte[] ropList =
+        [
+            0x01, 0x00, 0x00, // RopRelease: executed but produces no response.
+            0x09, 0x00, 0x00, // RopGetPropertiesList: response-producing request.
+        ];
+        var context = new MapiCaptureContext();
+
+        var operations = RopSemanticParser.ParseOperations(
+            ropList,
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            [],
+            CancellationToken.None,
+            captureScope: "scope-release",
+            context: context);
+
+        Assert.Equal(2, operations.Length);
+        Assert.True(context.TryGetRequestRopList("scope-release", out var totalLength, out var checkpoints));
+        Assert.Equal(ropList.Length, totalLength);
+        Assert.Equal([3, 6], checkpoints);
     }
 
     [Fact]

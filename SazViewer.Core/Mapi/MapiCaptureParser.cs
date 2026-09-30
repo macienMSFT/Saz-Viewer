@@ -53,6 +53,7 @@ internal static class MapiCaptureParser
                         ? MapiEndpoint.Mailbox
                         : MapiEndpoint.Unknown;
             var protocolError = responseCode is not null && responseCode != "0";
+            context.RegisterLogonCorrelationScope(session.Id, BuildLogonCorrelationScope(session));
 
             var request = ParseMessage(
                 session.Request,
@@ -110,8 +111,7 @@ internal static class MapiCaptureParser
             ],
             [
                 "RopQueryRows/RopFindRow/RopExpandRow responses whose row data depends on a prior RopSetColumns (decoded when no row data is present; raw fallback only when it is)",
-                "RopWritePerUserInformation request ReplGuid, RopGetPropertiesSpecific response tags, RopLogon response shape, and RopBufferTooSmall response RequestBuffersSize (each depends on a different, earlier operation's state)",
-                "RopSetMessageReadFlag request ClientData and RopNotify response TableRowData internals (depend on an originating RopLogon or RopSetColumns elsewhere in the session)",
+                "RopNotify response TableRowData internals (depend on an originating RopSetColumns elsewhere in the session)",
                 "In the property/stream/store family's generic property-value arrays (RopGetPropertiesSpecific/RopSetProperties and similar), PtypRestriction/PtypRuleAction values and any property type outside the fixed MS-OXCDATA 2.11.1 table are intentionally refused rather than guessed; the message/rule/permission family's own RuleData/PermissionData arrays and the folder/table family's own restrictions do fully decode both types with an explicit ROP-buffer-vs-extended-rule width boundary",
                 "FastTransfer reconstruction spans multiple operations within the same MAPI/HTTP session only; joining buffers across separate HTTP round-trips is not attempted"
             ]);
@@ -119,6 +119,19 @@ internal static class MapiCaptureParser
             resultSessions,
             resultSessions.ToImmutableDictionary(item => item.HttpSessionId, StringComparer.OrdinalIgnoreCase),
             coverage);
+    }
+
+    private static string BuildLogonCorrelationScope(HttpSession session)
+    {
+        var request = session.Request;
+        var requestPath = session.Url ?? request?.StartLine ?? session.Id;
+        session.Metadata.TryGetValue("x-processinfo", out var localProcess);
+        return string.Join(
+            '\u001F',
+            requestPath.Trim(),
+            localProcess?.Trim() ?? string.Empty,
+            request?.Header("X-ClientInfo")?.Trim() ?? string.Empty,
+            request?.Header("X-ClientApplication")?.Trim() ?? string.Empty);
     }
 
     private static MapiMessageParse? ParseMessage(
