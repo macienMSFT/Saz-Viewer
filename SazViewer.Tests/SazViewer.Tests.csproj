@@ -22,6 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\SazViewer.Cli\SazViewer.Cli.csproj" />
     <ProjectReference Include="..\SazViewer.Core\SazViewer.Core.csproj" />
   </ItemGroup>
 

@@ -19,10 +19,20 @@ dotnet test .\SazViewer.sln
 ```powershell
 dotnet run --project .\SazViewer.Cli -- .\capture.saz
 dotnet run --project .\SazViewer.Cli -- .\capture.saz .\reports\capture.html
+dotnet run --project .\SazViewer.Cli -- --password-stdin .\encrypted.saz .\reports\encrypted.html
 dotnet run --project .\SazViewer.Cli -- --help
 ```
 
 When no output path is supplied, the report is written beside the input archive with an `.html` extension.
+
+Encrypted archives are detected automatically. In an interactive terminal, the tool prompts with `Password:` without echoing characters and allows up to three attempts. For automation, `--password-stdin` reads exactly one line, preserves meaningful leading/trailing spaces, accepts at most 1,024 characters, and does not retry. Supply that line from a trusted secret provider rather than a command-line argument, for example:
+
+```powershell
+Get-Secret -Name SazArchivePassword -AsPlainText |
+  dotnet run --project .\SazViewer.Cli -- --password-stdin .\encrypted.saz
+```
+
+Do not use a literal password in `echo`, command arguments, scripts, or shell history. SAZ Viewer intentionally has no `--password <value>` option. .NET and the ZIP library ultimately require an immutable `string` for decryption, so the tool clears its mutable input buffers promptly but cannot guarantee complete password erasure from managed memory.
 
 In the report, select an HTTP row with the mouse or keyboard to open a full-screen inspector dialog. The session table stays behind the dialog with its filter and scroll position preserved. The dialog shows Previous/Next controls that step through the currently visible/filtered rows in chronological order (disabled at the first/last row, plus an `Alt+Left`/`Alt+Right` shortcut), a position indicator, and an accessible Close control (also closable with `Escape`, which restores focus to the originating row). Each session has top-level Request and Response tabs — Request is always selected first, whether the dialog was just opened or navigated to via Previous/Next — and exactly one side is shown at a time, including on narrow windows. Within the active side, a second, fixed-order tab strip — JSON, XML, MAPI, Headers, Raw — fills the remaining space, with unavailable tabs shown disabled. Every available secondary view has a Copy control; JSON/XML copy their complete Pretty Text representation regardless of the active Tree/Pretty subview, MAPI copies a deterministic bounded text form of the complete retained protocol tree, and Headers/Raw preserve the report's bounded captured/decoded representation. JSON and XML tabs offer a default, initially expanded Tree view (individually togglable nodes, Expand all/Collapse all, keyboard and mouse toggles) plus a Pretty Text syntax-highlighted view, when the body is recognized as valid JSON/XML; both views are rendered with bounded depth/child/node budgets so very large or deeply nested bodies stay responsive and show an accurate truncation note instead of expanding everything. The MAPI tab holds a searchable, lazily expandable protocol tree with byte offsets and lengths for detected MAPI/HTTP and NSPI sessions; Headers shows only the captured header block; Raw shows the original captured headers plus the decoded body text (with decode status/encodings), a bounded hex view for binary bodies, and a compact "Captured bytes" control when pre-decode bytes are available. The initial secondary tab favors MAPI, then JSON/XML, then Raw, then Headers, whichever is available, and every tab strip supports Left/Right/Home/End keyboard navigation with roving focus. Detected MAPI/HTTP and NSPI sessions also keep the protocol badge/filter in the session table.
 
@@ -40,6 +50,10 @@ Use `win-arm64` instead of `win-x64` for Windows on ARM. The published executabl
 ## Capture handling
 
 - SAZ files are treated as ZIP archives, and sparse `raw/<id>_*` entries are supported.
+- Unencrypted ZIP/SAZ files use the .NET archive reader. Encrypted files support the format verified from Fiddler Everywhere Reporter exports: WinZip AES AE-2 with AES-256 and DEFLATE, including archives mixed with traditional PKZIP/ZipCrypto DEFLATE members and unencrypted members. Other AES vendor versions, key sizes, vendors, or encrypted compression methods fail with an explicit unsupported-encryption error rather than being guessed.
+- WinZip AES members are fully read and their HMAC authentication code is verified before plaintext is passed to the parser. ZipCrypto members are also fully read and CRC-checked, but ZipCrypto is legacy encryption and does not provide modern authenticated-encryption security.
+- ZipCrypto's password verifier is only one byte. In the rare case that an incorrect password passes that verifier, an interactive parse may consume another allowed attempt; if no supplied password succeeds, the tool preserves the integrity failure as archive corruption rather than claiming the password was definitely wrong.
+- Encrypted extraction is memory-only and transactional. Safety limits are 100,000 archive entries, 256 MiB decompressed per encrypted entry, 1 GiB cumulative decrypted data, and a 1,000:1 declared compression ratio. A non-seekable input stream is copied only up to 512 MiB to enable central-directory validation.
 - Individual missing or malformed records produce warnings instead of aborting the archive.
 - Session-specific warnings remain visible in the affected session inspector. The aggregate warning section is currently omitted from generated HTML, while warning data remains available to the CLI/report model.
 - HTTP body previews are bounded. Text uses a safely recognized charset; binary data is shown as a bounded hex preview.

@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Globalization;
-using System.IO.Compression;
 using System.Text;
 
 namespace SazViewer.Core;
@@ -14,7 +13,7 @@ internal static class WebSocketParser
     private const long MaxEntryBytes = 256L * 1024 * 1024;
 
     public static void Parse(
-        ZipArchiveEntry entry,
+        ISazArchiveEntry entry,
         string sessionId,
         int archiveOrder,
         List<WebSocketMessage> messages,

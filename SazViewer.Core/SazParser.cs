@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -11,7 +10,7 @@ public sealed partial class SazParser
 {
     private const int MaxMetadataBytes = 1024 * 1024;
 
-    public SazReport Parse(string path)
+    public SazReport Parse(string path, ISazPasswordProvider? passwordProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
@@ -24,7 +23,7 @@ public sealed partial class SazParser
         try
         {
             using var file = File.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            using var archive = new ZipArchive(file, ZipArchiveMode.Read, leaveOpen: false);
+            using var archive = SazArchiveFactory.Open(file, leaveOpen: false, passwordProvider);
             ParseArchive(archive, report);
         }
         catch (InvalidDataException exception)
@@ -37,15 +36,18 @@ public sealed partial class SazParser
         return report;
     }
 
-    public SazReport Parse(Stream stream, string sourceName = "capture.saz")
+    public SazReport Parse(
+        Stream stream,
+        string sourceName = "capture.saz",
+        ISazPasswordProvider? passwordProvider = null)
     {
         var report = new SazReport { SourceName = sourceName };
-        using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+        using var archive = SazArchiveFactory.Open(stream, leaveOpen: true, passwordProvider);
         ParseArchive(archive, report);
         return report;
     }
 
-    private static void ParseArchive(ZipArchive archive, SazReport report)
+    private static void ParseArchive(ISazArchive archive, SazReport report)
     {
         var groups = Discover(archive, report.Warnings);
         foreach (var group in groups.OrderBy(g => g.ArchiveOrder))
@@ -85,7 +87,7 @@ public sealed partial class SazParser
         }
     }
 
-    private static List<EntryGroup> Discover(ZipArchive archive, List<string> warnings)
+    private static List<EntryGroup> Discover(ISazArchive archive, List<string> warnings)
     {
         var groups = new Dictionary<string, EntryGroup>(StringComparer.OrdinalIgnoreCase);
         for (var index = 0; index < archive.Entries.Count; index++)
@@ -126,7 +128,7 @@ public sealed partial class SazParser
         return groups.Values.ToList();
     }
 
-    private static void ParseRequest(ZipArchiveEntry? entry, HttpSession session)
+    private static void ParseRequest(ISazArchiveEntry? entry, HttpSession session)
     {
         if (entry is null)
         {
@@ -146,7 +148,7 @@ public sealed partial class SazParser
         }
     }
 
-    private static void ParseResponse(ZipArchiveEntry? entry, HttpSession session)
+    private static void ParseResponse(ISazArchiveEntry? entry, HttpSession session)
     {
         if (entry is null)
         {
@@ -166,7 +168,7 @@ public sealed partial class SazParser
         }
     }
 
-    private static void ParseMetadata(ZipArchiveEntry? entry, HttpSession session)
+    private static void ParseMetadata(ISazArchiveEntry? entry, HttpSession session)
     {
         if (entry is null)
         {
@@ -474,12 +476,12 @@ public sealed partial class SazParser
     {
         public string Id { get; } = id;
         public int ArchiveOrder { get; } = archiveOrder;
-        public ZipArchiveEntry? Request;
-        public ZipArchiveEntry? Response;
-        public ZipArchiveEntry? Metadata;
-        public ZipArchiveEntry? WebSocket;
+        public ISazArchiveEntry? Request;
+        public ISazArchiveEntry? Response;
+        public ISazArchiveEntry? Metadata;
+        public ISazArchiveEntry? WebSocket;
 
-        public ref ZipArchiveEntry? Entry(string kind)
+        public ref ISazArchiveEntry? Entry(string kind)
         {
             if (kind == "c") return ref Request;
             if (kind == "s") return ref Response;

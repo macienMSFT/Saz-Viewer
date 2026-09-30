@@ -12,4 +12,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="SazViewer.Tests" />
+  </ItemGroup>
+
 </Project>
