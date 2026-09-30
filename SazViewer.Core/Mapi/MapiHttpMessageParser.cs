@@ -216,7 +216,7 @@ internal static class MapiHttpMessageParser
                     var count = ReadCount32(ref reader, nodes, "EntryIdCount", budget);
                     for (var index = 0; index < count; index++)
                     {
-                        ParseSizedEntryId(ref reader, nodes, index, budget);
+                        ParseSizedEntryId(ref reader, nodes, index, budget, warnings);
                     }
                 }
                 ParseAuxiliarySuffix(ref reader, nodes, warnings, budget, cancellationToken);
@@ -678,7 +678,8 @@ internal static class MapiHttpMessageParser
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder nodes,
         int index,
-        MapiNodeBudget budget)
+        MapiNodeBudget budget,
+        List<string> warnings)
     {
         var start = reader.Position;
         var size = reader.ReadUInt32($"EntryId[{index}].Size");
@@ -692,7 +693,16 @@ internal static class MapiHttpMessageParser
         var payload = reader.ReadBytes((int)size, $"EntryId[{index}].Value");
         var children = ImmutableArray.CreateBuilder<MapiNode>();
         ExtendedBufferParser.AddField(children, "Size", start, 4, size.ToString(CultureInfo.InvariantCulture), budget);
-        children.Add(ExtendedBufferParser.RawNode("Value", payload, payloadOffset, budget));
+        try
+        {
+            children.Add(MapiEntryIdParser.ParseNspiEntryId(payload, payloadOffset, budget, warnings));
+        }
+        catch (MapiParseException exception)
+        {
+            children.Add(ExtendedBufferParser.RawNode("Value", payload, payloadOffset, budget));
+            warnings.Add(
+                $"EntryId[{index}] semantic fields were retained as {payload.Length:N0} raw bytes: {exception.Message}");
+        }
         budget.Claim(0);
         nodes.Add(new MapiNode(
             $"EntryId[{index}]",

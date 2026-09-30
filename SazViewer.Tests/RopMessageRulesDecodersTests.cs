@@ -190,6 +190,110 @@ public sealed class RopMessageRulesDecodersTests
         Assert.Equal(ropList.Length, node.Length);
     }
 
+    [Fact]
+    public void ParsesAddressBookEntryIdInsidePersonalDistributionListRecipient()
+    {
+        var provider = Guid.Parse("C840A7DC-42C0-1A10-B4B9-08002B2FE182");
+        byte[] providerBytes =
+        [
+            0xDC, 0xA7, 0x40, 0xC8, 0xC0, 0x42, 0x10, 0x1A,
+            0xB4, 0xB9, 0x08, 0x00, 0x2B, 0x2F, 0xE1, 0x82
+        ];
+        const string distinguishedName = "/o=Example/ou=Recipients/cn=<script>alert(1)</script>";
+        var entryId = Concat(
+            Le(0u),
+            providerBytes,
+            Le(1u),
+            Le(5u),
+            AsciiZ(distinguishedName));
+        var row = Concat(
+            [0x06, 0x00],
+            Le((ushort)entryId.Length),
+            entryId,
+            Le((ushort)0),
+            Le((ushort)0),
+            [0x00]);
+        var ropList = Concat(
+            [0x0E, 0x00, 0x00],
+            Le((ushort)0),
+            Le((ushort)1),
+            Le(1u),
+            [0x00],
+            Le((ushort)row.Length),
+            row);
+        var warnings = new List<string>();
+
+        var node = ParseRequest(ropList, 0x0E, [], warnings);
+
+        Assert.Equal(ropList.Length, node.Length);
+        Assert.Equal(provider.ToString(), Find(node, "ProviderUID").Value);
+        Assert.Equal(
+            "PrivateDistributionList = 0x00000005",
+            Find(Find(node, "AddressBookEntryID"), "Type").Value);
+        Assert.Equal(distinguishedName, Find(node, "X500DN").Value);
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
+    public void MalformedAddressBookEntryIdFallsBackLocallyAndPreservesRecipientBoundary()
+    {
+        byte[] providerBytes =
+        [
+            0xDC, 0xA7, 0x40, 0xC8, 0xC0, 0x42, 0x10, 0x1A,
+            0xB4, 0xB9, 0x08, 0x00, 0x2B, 0x2F, 0xE1, 0x82
+        ];
+        var entryId = Concat(
+            Le(1u),
+            providerBytes,
+            Le(1u),
+            Le(1u),
+            [0xFF, 0x00]);
+        var malformedRow = Concat(
+            [0x07, 0x00],
+            Le((ushort)entryId.Length),
+            entryId,
+            Le((ushort)0),
+            Le((ushort)0),
+            [0x00]);
+        var validEntryId = Concat(
+            Le(0u),
+            providerBytes,
+            Le(1u),
+            Le(1u),
+            AsciiZ("/o=Example/ou=Recipients/cn=Following"));
+        var validRow = Concat(
+            [0x06, 0x00],
+            Le((ushort)validEntryId.Length),
+            validEntryId,
+            Le((ushort)0),
+            Le((ushort)0),
+            [0x00]);
+        var ropList = Concat(
+            [0x0E, 0x00, 0x00],
+            Le((ushort)0),
+            Le((ushort)2),
+            Le(1u),
+            [0x00],
+            Le((ushort)malformedRow.Length),
+            malformedRow,
+            Le(2u),
+            [0x00],
+            Le((ushort)validRow.Length),
+            validRow);
+        var warnings = new List<string>();
+
+        var node = ParseRequest(ropList, 0x0E, [], warnings);
+
+        Assert.Equal(ropList.Length, node.Length);
+        Assert.Equal(MapiNodeKind.Raw, Find(node, "EntryID").Kind);
+        Assert.Contains(warnings, warning =>
+            warning.Contains("non-ASCII", StringComparison.Ordinal) &&
+            warning.Contains("retained as", StringComparison.Ordinal));
+        Assert.DoesNotContain(warnings, warning => warning.Contains("Flags in the EntryID", StringComparison.Ordinal));
+        Assert.Equal("/o=Example/ou=Recipients/cn=Following", Find(node, "X500DN").Value);
+        Assert.Equal("All values present", Find(node, "Flag").Value);
+    }
+
     /// <summary>
     /// Regression for a real-capture width bug: PtypBinary's byte-count prefix is 16-bit in an
     /// MS-OXCROPS ROP buffer ([MS-OXCDATA] 2.11.1.1), not the 32-bit NSPI/extended-rule form. Covers
@@ -1353,11 +1457,22 @@ public sealed class RopMessageRulesDecodersTests
         throw new InvalidOperationException("Expected a MapiParseException to be thrown, but Parse completed without one.");
     }
 
-    private static MapiNode ParseRequest(byte[] ropList, byte expectedRopId, List<RopHandleReference> handles)
+    private static MapiNode ParseRequest(
+        byte[] ropList,
+        byte expectedRopId,
+        List<RopHandleReference> handles,
+        List<string>? warnings = null)
     {
         var reader = NewReader(ropList);
         Assert.True(RopMessageRulesDecoders.Supports(MapiDirection.Request, expectedRopId));
-        var node = RopMessageRulesDecoders.Parse(ref reader, 0, MapiDirection.Request, handles, new MapiNodeBudget(), CancellationToken.None);
+        var node = RopMessageRulesDecoders.Parse(
+            ref reader,
+            0,
+            MapiDirection.Request,
+            handles,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            warnings: warnings);
         Assert.True(reader.End);
         return node;
     }

@@ -40,11 +40,8 @@ namespace SazViewer.Core;
 ///    RecipientColumns array of its own, so there is no deterministic column list to decode each
 ///    RecipientRow against; the row bytes are retained as bounded raw (matching upstream's own
 ///    incomplete/raw treatment of this exact structure).
-///  - AddressBookEntryID (inside a RecipientRow whose address type is a personal distribution
-///    list) and the generic EntryID/ServerEid payloads inside RopUpdateDeferredActionMessages: both
-///    are variable, loosely-specified EntryID sub-formats; rather than guess at an internal shape
-///    that cannot be verified from the surrounding bytes alone, they are retained as bounded raw
-///    bytes. The outer size-prefixed boundary around them is always exact.
+///  - Generic EntryID/ServerEid payloads inside RopUpdateDeferredActionMessages remain bounded raw:
+///    their outer size-prefixed boundary is exact, but their client-defined internal shape is not.
 /// </summary>
 internal static class RopMessageRulesDecoders
 {
@@ -136,7 +133,8 @@ internal static class RopMessageRulesDecoders
             (MapiDirection.Request, 0x03) => ParseOpenMessageRequest(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Request, 0x06) => ParseCreateMessageRequest(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Request, 0x0C) => ParseSaveChangesMessageRequest(ref reader, operationIndex, handleReferences, budget),
-            (MapiDirection.Request, 0x0E) => ParseModifyRecipientsRequest(ref reader, operationIndex, handleReferences, budget, cancellationToken),
+            (MapiDirection.Request, 0x0E) => ParseModifyRecipientsRequest(
+                ref reader, operationIndex, handleReferences, budget, cancellationToken, warnings),
             (MapiDirection.Request, 0x0F) => ParseReadRecipientsRequest(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Request, 0x11) => ParseSetMessageReadFlagRequest(
                 ref reader, operationIndex, handleReferences, budget, context, captureScope),
@@ -150,17 +148,20 @@ internal static class RopMessageRulesDecoders
             (MapiDirection.Request, 0x57) => ParseUpdateDeferredActionMessagesRequest(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Request, 0x66) => ParseSetReadFlagsRequest(ref reader, operationIndex, handleReferences, budget, cancellationToken),
 
-            (MapiDirection.Response, 0x03) => ParseOpenMessageResponse(ref reader, operationIndex, handleReferences, budget, cancellationToken),
+            (MapiDirection.Response, 0x03) => ParseOpenMessageResponse(
+                ref reader, operationIndex, handleReferences, budget, cancellationToken, warnings),
             (MapiDirection.Response, 0x06) => ParseCreateMessageResponse(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Response, 0x0C) => ParseSaveChangesMessageResponse(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Response, 0x0F) => ParseReadRecipientsResponse(ref reader, operationIndex, handleReferences, budget, cancellationToken),
-            (MapiDirection.Response, 0x10) => ParseReloadCachedInformationResponse(ref reader, operationIndex, handleReferences, budget, cancellationToken),
+            (MapiDirection.Response, 0x10) => ParseReloadCachedInformationResponse(
+                ref reader, operationIndex, handleReferences, budget, cancellationToken, warnings),
             (MapiDirection.Response, 0x1F) => ParseGetMessageStatusResponse(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Response, 0x20) => ParseSetMessageStatusResponse(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Response, 0x23) => ParseCreateAttachmentResponse(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Response, 0x2A) => ParseNotifyResponse(
                 ref reader, operationIndex, budget, cancellationToken, context, captureScope, warnings),
-            (MapiDirection.Response, 0x46) => ParseOpenEmbeddedMessageResponse(ref reader, operationIndex, handleReferences, budget, cancellationToken),
+            (MapiDirection.Response, 0x46) => ParseOpenEmbeddedMessageResponse(
+                ref reader, operationIndex, handleReferences, budget, cancellationToken, warnings),
             (MapiDirection.Response, 0x52) => ParseGetValidAttachmentsResponse(ref reader, operationIndex, handleReferences, budget, cancellationToken),
             (MapiDirection.Response, 0x66) => ParseSetReadFlagsResponse(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Response, 0x6E) => ParsePendingResponse(ref reader, operationIndex, budget),
@@ -293,6 +294,27 @@ internal static class RopMessageRulesDecoders
         var dataOffset = reader.Position;
         var data = reader.ReadBytes(size, dataFieldName);
         children.Add(ExtendedBufferParser.RawNode(dataFieldName, data, dataOffset, budget));
+    }
+
+    private static void AddSizePrefixedAddressBookEntryId(
+        ref MapiReader reader,
+        ImmutableArray<MapiNode>.Builder children,
+        MapiNodeBudget budget,
+        List<string>? warnings)
+    {
+        var size = AddCount16(ref reader, children, "EntryIdSize", budget);
+        var dataOffset = reader.Position;
+        var data = reader.ReadBytes(size, "EntryID");
+        try
+        {
+            children.Add(MapiEntryIdParser.ParseAddressBookEntryId(data, dataOffset, budget, warnings));
+        }
+        catch (MapiParseException exception)
+        {
+            children.Add(ExtendedBufferParser.RawNode("EntryID", data, dataOffset, budget));
+            warnings?.Add(
+                $"AddressBookEntryID semantic fields were retained as {data.Length:N0} raw bytes: {exception.Message}");
+        }
     }
 
     /// <summary>Reads a fixed number of raw bytes (its size already implied by an earlier field, not a preceding size field of its own) as a single raw node.</summary>
@@ -460,7 +482,8 @@ internal static class RopMessageRulesDecoders
         string name,
         ImmutableArray<(ushort Type, ushort Id)> columns,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        List<string>? warnings)
     {
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
@@ -504,7 +527,7 @@ internal static class RopMessageRulesDecoders
                 break;
             case 0x6: // PersonalDistributionList1
             case 0x7: // PersonalDistributionList2
-                AddSizePrefixedRaw(ref reader, children, "EntryIdSize", "EntryID", budget);
+                AddSizePrefixedAddressBookEntryId(ref reader, children, budget, warnings);
                 AddSizePrefixedRaw(ref reader, children, "SearchKeySize", "SearchKey", budget);
                 break;
             case 0x0 when flagO: // NoType with the "Out of band" flag set carries an AddressType string.
@@ -536,7 +559,14 @@ internal static class RopMessageRulesDecoders
                 reader.Position,
                 $"{name}.RecipientColumnCount {columnCount} exceeds the {columns.Length} column(s) declared earlier in this operation.");
         }
-        children.Add(ParseRopPropertyRow(ref reader, "RecipientProperties", columns, columnCount, budget, depth: 1, cancellationToken));
+        children.Add(ParseRopPropertyRow(
+            ref reader,
+            "RecipientProperties",
+            columns,
+            columnCount,
+            budget,
+            depth: 1,
+            cancellationToken));
 
         budget.Claim(0);
         return new MapiNode(name, MapiNodeKind.Structure, start, reader.Position - start, null, children.ToImmutable());
@@ -662,7 +692,8 @@ internal static class RopMessageRulesDecoders
         int rowCount,
         ImmutableArray<(ushort Type, ushort Id)> columns,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        List<string>? warnings)
     {
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
@@ -676,7 +707,7 @@ internal static class RopMessageRulesDecoders
             AddUInt16(ref reader, rowChildren, "Reserved", budget);
             var size = AddCount16(ref reader, rowChildren, "RecipientRowSize", budget);
             var rowSlice = reader.SliceReader(size, "RecipientRow");
-            rowChildren.Add(ParseRecipientRow(ref rowSlice, "RecipientRow", columns, budget, cancellationToken));
+            rowChildren.Add(ParseRecipientRow(ref rowSlice, "RecipientRow", columns, budget, cancellationToken, warnings));
             if (!rowSlice.End)
             {
                 throw new MapiParseException(rowSlice.Position, $"{name}[{index}].RecipientRow did not consume its declared RecipientRowSize.");
@@ -696,7 +727,8 @@ internal static class RopMessageRulesDecoders
         int rowCount,
         ImmutableArray<(ushort Type, ushort Id)> columns,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        List<string>? warnings)
     {
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
@@ -711,7 +743,7 @@ internal static class RopMessageRulesDecoders
             if (size > 0)
             {
                 var rowSlice = reader.SliceReader(size, "RecipientRow");
-                rowChildren.Add(ParseRecipientRow(ref rowSlice, "RecipientRow", columns, budget, cancellationToken));
+                rowChildren.Add(ParseRecipientRow(ref rowSlice, "RecipientRow", columns, budget, cancellationToken, warnings));
                 if (!rowSlice.End)
                 {
                     throw new MapiParseException(rowSlice.Position, $"{name}[{index}].RecipientRow did not consume its declared RecipientRowSize.");
@@ -759,7 +791,8 @@ internal static class RopMessageRulesDecoders
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder children,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        List<string>? warnings)
     {
         AddBool(ref reader, children, "HasNamedProperties", budget);
         children.Add(ParseTypedString(ref reader, "SubjectPrefix", budget));
@@ -768,7 +801,14 @@ internal static class RopMessageRulesDecoders
         var columnCount = AddCount16(ref reader, children, "ColumnCount", budget);
         var columns = ParsePropertyTagArray(ref reader, "RecipientColumns", columnCount, children, budget, cancellationToken);
         var rowCount = AddByteDecimal(ref reader, children, "RowCount", budget);
-        children.Add(ParseOpenRecipientRows(ref reader, "RecipientRows", rowCount, columns, budget, cancellationToken));
+        children.Add(ParseOpenRecipientRows(
+            ref reader,
+            "RecipientRows",
+            rowCount,
+            columns,
+            budget,
+            cancellationToken,
+            warnings));
     }
 
     // ---- RuleData / PermissionData ([MS-OXORULE] 2.2.3.1, [MS-OXCPERM] 2.2.3) ------------------
@@ -1066,7 +1106,12 @@ internal static class RopMessageRulesDecoders
     }
 
     private static MapiNode ParseModifyRecipientsRequest(
-        ref MapiReader reader, int operationIndex, List<RopHandleReference> handleReferences, MapiNodeBudget budget, CancellationToken cancellationToken)
+        ref MapiReader reader,
+        int operationIndex,
+        List<RopHandleReference> handleReferences,
+        MapiNodeBudget budget,
+        CancellationToken cancellationToken,
+        List<string>? warnings)
     {
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
@@ -1076,7 +1121,14 @@ internal static class RopMessageRulesDecoders
         var columnCount = AddCount16(ref reader, children, "ColumnCount", budget);
         var columns = ParsePropertyTagArray(ref reader, "RecipientColumns", columnCount, children, budget, cancellationToken);
         var rowCount = AddCount16(ref reader, children, "RowCount", budget);
-        children.Add(ParseModifyRecipientRows(ref reader, "RecipientRows", rowCount, columns, budget, cancellationToken));
+        children.Add(ParseModifyRecipientRows(
+            ref reader,
+            "RecipientRows",
+            rowCount,
+            columns,
+            budget,
+            cancellationToken,
+            warnings));
         return BuildOperation(ref reader, operationIndex, ropId, children, start, budget);
     }
 
@@ -1286,7 +1338,12 @@ internal static class RopMessageRulesDecoders
     // ---- MSOXCMSG response decoders ---------------------------------------------------------------
 
     private static MapiNode ParseOpenMessageResponse(
-        ref MapiReader reader, int operationIndex, List<RopHandleReference> handleReferences, MapiNodeBudget budget, CancellationToken cancellationToken)
+        ref MapiReader reader,
+        int operationIndex,
+        List<RopHandleReference> handleReferences,
+        MapiNodeBudget budget,
+        CancellationToken cancellationToken,
+        List<string>? warnings)
     {
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
@@ -1295,7 +1352,7 @@ internal static class RopMessageRulesDecoders
         var success = ReadReturnValueGate(ref reader, children, budget);
         if (success)
         {
-            ParseNamedPropsAndRecipients(ref reader, children, budget, cancellationToken);
+            ParseNamedPropsAndRecipients(ref reader, children, budget, cancellationToken, warnings);
         }
         return BuildOperation(ref reader, operationIndex, ropId, children, start, budget);
     }
@@ -1350,7 +1407,12 @@ internal static class RopMessageRulesDecoders
     }
 
     private static MapiNode ParseReloadCachedInformationResponse(
-        ref MapiReader reader, int operationIndex, List<RopHandleReference> handleReferences, MapiNodeBudget budget, CancellationToken cancellationToken)
+        ref MapiReader reader,
+        int operationIndex,
+        List<RopHandleReference> handleReferences,
+        MapiNodeBudget budget,
+        CancellationToken cancellationToken,
+        List<string>? warnings)
     {
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
@@ -1359,7 +1421,7 @@ internal static class RopMessageRulesDecoders
         var success = ReadReturnValueGate(ref reader, children, budget);
         if (success)
         {
-            ParseNamedPropsAndRecipients(ref reader, children, budget, cancellationToken);
+            ParseNamedPropsAndRecipients(ref reader, children, budget, cancellationToken, warnings);
         }
         return BuildOperation(ref reader, operationIndex, ropId, children, start, budget);
     }
@@ -1407,7 +1469,12 @@ internal static class RopMessageRulesDecoders
     }
 
     private static MapiNode ParseOpenEmbeddedMessageResponse(
-        ref MapiReader reader, int operationIndex, List<RopHandleReference> handleReferences, MapiNodeBudget budget, CancellationToken cancellationToken)
+        ref MapiReader reader,
+        int operationIndex,
+        List<RopHandleReference> handleReferences,
+        MapiNodeBudget budget,
+        CancellationToken cancellationToken,
+        List<string>? warnings)
     {
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
@@ -1418,7 +1485,7 @@ internal static class RopMessageRulesDecoders
         {
             AddByteHex(ref reader, children, "Reserved", budget);
             children.Add(ParseFolderOrMessageId(ref reader, "MessageId", budget));
-            ParseNamedPropsAndRecipients(ref reader, children, budget, cancellationToken);
+            ParseNamedPropsAndRecipients(ref reader, children, budget, cancellationToken, warnings);
         }
         return BuildOperation(ref reader, operationIndex, ropId, children, start, budget);
     }

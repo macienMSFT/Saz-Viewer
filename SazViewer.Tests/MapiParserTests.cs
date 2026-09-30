@@ -1369,6 +1369,156 @@ public sealed class MapiParserTests
     }
 
     [Fact]
+    public void ParsesModLinkAttPermanentAndEphemeralEntryIds()
+    {
+        var permanentProvider = Guid.Parse("C840A7DC-42C0-1A10-B4B9-08002B2FE182");
+        byte[] permanentProviderBytes =
+        [
+            0xDC, 0xA7, 0x40, 0xC8, 0xC0, 0x42, 0x10, 0x1A,
+            0xB4, 0xB9, 0x08, 0x00, 0x2B, 0x2F, 0xE1, 0x82
+        ];
+        using var permanent = new MemoryStream();
+        permanent.Write([0x00, 0x00, 0x00, 0x00]);
+        permanent.Write(permanentProviderBytes);
+        WriteUInt32(permanent, 1);
+        WriteUInt32(permanent, 5);
+        WriteAsciiZ(permanent, "/o=Example/ou=Recipients/cn=Permanent");
+
+        var ephemeralProvider = Guid.Parse("12345678-9ABC-DEF0-1122-334455667788");
+        using var ephemeral = new MemoryStream();
+        ephemeral.Write([0x87, 0x00, 0x00, 0x00]);
+        ephemeral.Write(
+        [
+            0x78, 0x56, 0x34, 0x12, 0xBC, 0x9A, 0xF0, 0xDE,
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+        ]);
+        WriteUInt32(ephemeral, 1);
+        WriteUInt32(ephemeral, 1);
+        WriteUInt32(ephemeral, 0x12345678);
+
+        using var body = new MemoryStream();
+        WriteUInt32(body, 0);
+        WriteUInt32(body, 0x00030001);
+        WriteUInt32(body, 42);
+        body.WriteByte(1);
+        WriteUInt32(body, 2);
+        WriteUInt32(body, (uint)permanent.Length);
+        body.Write(permanent.ToArray());
+        WriteUInt32(body, (uint)ephemeral.Length);
+        body.Write(ephemeral.ToArray());
+        WriteUInt32(body, 0);
+        var warnings = new List<string>();
+
+        var root = MapiHttpMessageParser.Parse(
+            body.ToArray(),
+            "ModLinkAtt",
+            MapiDirection.Request,
+            new MapiCaptureContext(),
+            warnings,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            out var parsedBytes,
+            out _,
+            out _);
+
+        Assert.Equal(body.Length, parsedBytes);
+        Assert.Equal(permanentProvider.ToString(), Find(Find(root, "PermanentEntryID"), "ProviderUID").Value);
+        Assert.Equal("DT_PRIVATE_DISTLIST = 0x00000005", Find(root, "DisplayType").Value);
+        Assert.Equal("/o=Example/ou=Recipients/cn=Permanent", Find(root, "DistinguishedName").Value);
+        Assert.Equal(ephemeralProvider.ToString(), Find(Find(root, "EphemeralEntryID"), "ProviderUID").Value);
+        Assert.Equal("0x12345678 (305,419,896)", Find(root, "Mid").Value);
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
+    public void MalformedModLinkAttEntryIdFallsBackLocallyAndKeepsFollowingEntry()
+    {
+        byte[] muidEmsab =
+        [
+            0xDC, 0xA7, 0x40, 0xC8, 0xC0, 0x42, 0x10, 0x1A,
+            0xB4, 0xB9, 0x08, 0x00, 0x2B, 0x2F, 0xE1, 0x82
+        ];
+        using var malformedPermanent = new MemoryStream();
+        malformedPermanent.Write([0x00, 0x00, 0x00, 0x00]);
+        malformedPermanent.Write(muidEmsab);
+        WriteUInt32(malformedPermanent, 2);
+        WriteUInt32(malformedPermanent, 0);
+        malformedPermanent.Write(Encoding.ASCII.GetBytes("missing-terminator"));
+
+        using var ephemeral = new MemoryStream();
+        ephemeral.Write([0x87, 0x00, 0x00, 0x00]);
+        ephemeral.Write(Guid.Empty.ToByteArray());
+        WriteUInt32(ephemeral, 1);
+        WriteUInt32(ephemeral, 0);
+        WriteUInt32(ephemeral, 7);
+
+        using var body = new MemoryStream();
+        WriteUInt32(body, 0);
+        WriteUInt32(body, 0x00030001);
+        WriteUInt32(body, 42);
+        body.WriteByte(1);
+        WriteUInt32(body, 2);
+        WriteUInt32(body, (uint)malformedPermanent.Length);
+        body.Write(malformedPermanent.ToArray());
+        WriteUInt32(body, (uint)ephemeral.Length);
+        body.Write(ephemeral.ToArray());
+        WriteUInt32(body, 0);
+        var warnings = new List<string>();
+
+        var root = MapiHttpMessageParser.Parse(
+            body.ToArray(),
+            "ModLinkAtt",
+            MapiDirection.Request,
+            new MapiCaptureContext(),
+            warnings,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            out var parsedBytes,
+            out _,
+            out _);
+
+        Assert.Equal(body.Length, parsedBytes);
+        Assert.Equal(MapiNodeKind.Raw, Find(Find(root, "EntryId[0]"), "Value").Kind);
+        Assert.Equal("0x00000007 (7)", Find(Find(root, "EntryId[1]"), "Mid").Value);
+        Assert.Contains(warnings, warning =>
+            warning.Contains("missing its null terminator", StringComparison.Ordinal) &&
+            warning.Contains("retained as", StringComparison.Ordinal));
+        Assert.DoesNotContain(warnings, warning => warning.Contains("R4 in the EntryID", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(31)]
+    [InlineData(33)]
+    public void RejectsInvalidEphemeralEntryIdLengths(int length)
+    {
+        var bytes = new byte[length];
+        if (bytes.Length > 0)
+        {
+            bytes[0] = 0x87;
+        }
+
+        Assert.Throws<MapiParseException>(() =>
+            MapiEntryIdParser.ParseNspiEntryId(bytes, 0, new MapiNodeBudget(), []));
+    }
+
+    [Fact]
+    public void RejectsPermanentEntryIdWithWrongProvider()
+    {
+        using var entryId = new MemoryStream();
+        entryId.Write([0x00, 0x00, 0x00, 0x00]);
+        entryId.Write(Guid.Empty.ToByteArray());
+        WriteUInt32(entryId, 1);
+        WriteUInt32(entryId, 0);
+        WriteAsciiZ(entryId, "/o=Example");
+
+        var exception = Assert.Throws<MapiParseException>(() =>
+            MapiEntryIdParser.ParseNspiEntryId(entryId.ToArray(), 0, new MapiNodeBudget(), []));
+
+        Assert.Contains("MUIDEMSAB", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RetainsClientDefinedPtypServerIdAndWarnsForReservedDiscriminator()
     {
         var reader = new MapiReader([4, 0, 0x7F, 0xAA, 0xBB, 0xCC]);

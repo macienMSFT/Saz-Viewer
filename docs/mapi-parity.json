@@ -184,8 +184,6 @@
   "remainingSemanticAreas": [
     "Differential validation against broader legal synthetic and local capture corpora remains in progress, including large/deep report responsiveness and compressed lazy-tree behavior",
     "RopReadRecipients response RecipientRow property internals remain bounded raw because that response carries no RecipientColumns array and the protocol does not identify a deterministic external column source",
-    "AddressBookEntryID values in rule properties remain bounded raw despite their exact enclosing size; deterministic Flags, ProviderUID, Version, Type, and X500DN decoding remains to be implemented",
-    "ModLinkAtt permanent and ephemeral EntryID variants are classified by discriminator but their deterministic fields remain bounded raw",
     "Generic property-value arrays intentionally refuse types outside the fixed MS-OXCDATA property table when no deterministic self-delimiting grammar is available; deterministic PtypRestriction, PtypRuleAction, and PtypServerId structures are decoded"
   ],
   "safetyDivergences": [
