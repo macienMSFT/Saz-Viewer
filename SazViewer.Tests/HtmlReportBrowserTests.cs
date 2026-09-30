@@ -42,6 +42,7 @@ public sealed class HtmlReportBrowserTests
 
             await VerifyInspectorAsync(browser, reportPath, 1440, exerciseAllControls: true);
             await VerifyInspectorAsync(browser, reportPath, 480, exerciseAllControls: false);
+            await VerifyHttpActiveViewSearchAsync(browser, reportPath);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 1440);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 320);
             await VerifyNewTabInspectorAsync(browser, reportPath);
@@ -50,6 +51,290 @@ public sealed class HtmlReportBrowserTests
             await VerifyCopyModelFailureStatesAsync(browser, tempDirectory);
             await VerifyStructuralPayloadFailureStatesAsync(browser, reportPath);
             await VerifyAbandonedTreeStopsAndRebuildsAsync(browser, tempDirectory);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    private static async Task VerifyHttpActiveViewSearchAsync(IBrowser browser, string reportPath)
+    {
+        var errors = new List<string>();
+        var popupErrors = new List<string>();
+        var page = await browser.NewPageAsync(new()
+        {
+            ViewportSize = new ViewportSize { Width = 1280, Height = 800 },
+        });
+        await InstallClipboardTestHookAsync(page);
+        CaptureErrors(page, errors);
+        await page.AddInitScriptAsync(
+            """
+            globalThis.__httpSearchViewListenerBalance=0;
+            const nativeAddEventListener=EventTarget.prototype.addEventListener;
+            const nativeRemoveEventListener=EventTarget.prototype.removeEventListener;
+            EventTarget.prototype.addEventListener=function(type,listener,options){
+              if(type==='saz-view-change'&&this.id==='inspectorBody')globalThis.__httpSearchViewListenerBalance++;
+              return nativeAddEventListener.call(this,type,listener,options);
+            };
+            EventTarget.prototype.removeEventListener=function(type,listener,options){
+              if(type==='saz-view-change'&&this.id==='inspectorBody')globalThis.__httpSearchViewListenerBalance--;
+              return nativeRemoveEventListener.call(this,type,listener,options);
+            };
+            """);
+        IPage? popup = null;
+        try
+        {
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+
+            var search = page.Locator(".http-view-search-input");
+            var status = page.Locator(".http-view-search-status");
+            Assert.Equal("Search active Request or Response view", await search.GetAttributeAsync("aria-label"));
+            Assert.Equal("polite", await status.GetAttributeAsync("aria-live"));
+
+            await page.Locator("#request-panel-json .tree-collapse-all").ClickAsync();
+            var jsonRoot = page.Locator("#request-panel-json .tree-view>.tree-item[aria-expanded]").First;
+            Assert.Equal("false", await jsonRoot.GetAttributeAsync("aria-expanded"));
+            await search.FillAsync("ENABLED");
+            await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+            Assert.Equal("true", await jsonRoot.GetAttributeAsync("aria-expanded"));
+            Assert.Equal(1, await page.Locator("#request-panel-json .http-search-match").CountAsync());
+            Assert.Equal(0, await page.Locator("#response-panel-xml .http-search-match").CountAsync());
+            Assert.True(await search.EvaluateAsync<bool>("input=>document.activeElement===input"));
+
+            await page.Locator("#request-panel-json [data-view=pretty]").ClickAsync();
+            Assert.Equal("", await search.InputValueAsync());
+            Assert.Equal("0 matches", await status.InnerTextAsync());
+            Assert.Equal("false", await jsonRoot.GetAttributeAsync("aria-expanded"));
+
+            await search.FillAsync("a");
+            await Assertions.Expect(page.Locator(".http-search-match-current")).ToHaveCountAsync(1);
+            var matchCount = await page.Locator(".http-search-match").CountAsync();
+            Assert.True(matchCount > 1);
+            await search.PressAsync("Shift+Enter");
+            Assert.Equal(
+                (matchCount - 1).ToString(),
+                await page.Locator(".http-search-match-current").GetAttributeAsync("data-match-index"));
+            Assert.True(await search.EvaluateAsync<bool>("input=>document.activeElement===input"));
+            await search.PressAsync("Enter");
+            Assert.Equal("0", await page.Locator(".http-search-match-current").GetAttributeAsync("data-match-index"));
+
+            await search.FillAsync("enabled");
+            await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+            await search.PressAsync("Enter");
+            await search.PressAsync("Shift+Enter");
+            Assert.Equal("0", await page.Locator(".http-search-match-current").GetAttributeAsync("data-match-index"));
+
+            await search.FillAsync("not-present");
+            await Assertions.Expect(status).ToHaveTextAsync("0 matches");
+            await search.PressAsync("Enter");
+            Assert.True(await search.EvaluateAsync<bool>("input=>document.activeElement===input"));
+            Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>("dialog=>dialog.open"));
+
+            var ignoredKeys = await search.EvaluateAsync<bool[]>(
+                """
+                    input => {
+                      const composing = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, isComposing: true });
+                      const modified = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ctrlKey: true });
+                      input.dispatchEvent(composing);
+                      input.dispatchEvent(modified);
+                      return [composing.defaultPrevented, modified.defaultPrevented];
+                    }
+                    """);
+            Assert.Equal([false, false], ignoredKeys);
+
+            await search.FillAsync("   ");
+            await search.PressAsync("Enter");
+            Assert.Equal("0 matches", await status.InnerTextAsync());
+            await search.FillAsync("globalthis");
+            await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+            Assert.False(await page.EvaluateAsync<bool>("()=>Boolean(globalThis.pwned)"));
+            await search.FillAsync("<img src=x onerror=globalThis.pwned=true>");
+            await Assertions.Expect(status).ToHaveTextAsync("0 matches");
+            Assert.Equal(0, await page.Locator("#httpInspector img").CountAsync());
+            Assert.Equal(ExpectedJson(), await CopyAndReadAsync(page, "request-panel-json"));
+
+            await page.Locator("#request-tab-headers").ClickAsync();
+            Assert.Equal("", await search.InputValueAsync());
+            await search.FillAsync("content-type");
+            await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+            Assert.Equal(1, await page.Locator("#request-panel-headers .http-search-match").CountAsync());
+
+            await page.Locator("#primary-tab-response").ClickAsync();
+            Assert.Equal("", await search.InputValueAsync());
+            await page.Locator("#response-panel-xml .tree-collapse-all").ClickAsync();
+            var xmlRoot = page.Locator("#response-panel-xml .tree-view>.tree-item[aria-expanded]").First;
+            Assert.Equal("false", await xmlRoot.GetAttributeAsync("aria-expanded"));
+            await search.FillAsync("SAFE");
+            await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+            Assert.Equal("true", await xmlRoot.GetAttributeAsync("aria-expanded"));
+            await search.FillAsync("");
+            Assert.Equal("false", await xmlRoot.GetAttributeAsync("aria-expanded"));
+
+            await page.Locator("#response-panel-xml [data-view=pretty]").ClickAsync();
+            await search.FillAsync("root");
+            await Assertions.Expect(status).ToHaveTextAsync("1 of 2 matches");
+            await page.Locator(".http-view-search-prev").ClickAsync();
+            Assert.Equal("1", await page.Locator(".http-search-match-current").GetAttributeAsync("data-match-index"));
+            await page.Locator(".http-view-search-next").ClickAsync();
+            Assert.Equal("0", await page.Locator(".http-search-match-current").GetAttributeAsync("data-match-index"));
+
+            await page.Locator("#response-tab-raw").ClickAsync();
+            Assert.Equal("", await search.InputValueAsync());
+            await search.FillAsync("payload");
+            await Assertions.Expect(status).ToHaveTextAsync("0 matches");
+            Assert.Equal(0, await page.Locator("#primary-panel-request .http-search-match").CountAsync());
+            await search.FillAsync("parsed as xml");
+            await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+            Assert.Equal(ExpectedResponseRaw(), await CopyAndReadAsync(page, "response-panel-raw"));
+
+            await page.Locator("#inspectorNext").ClickAsync();
+            search = page.Locator(".http-view-search-input");
+            status = page.Locator(".http-view-search-status");
+            Assert.Equal("", await search.InputValueAsync());
+            var capturedBytes = page.Locator("#request-panel-raw .captured-bytes");
+            Assert.False(await capturedBytes.EvaluateAsync<bool>("details=>details.open"));
+            await search.FillAsync("00ff1020");
+            await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+            Assert.True(await capturedBytes.EvaluateAsync<bool>("details=>details.open"));
+            await search.FillAsync("");
+            Assert.False(await capturedBytes.EvaluateAsync<bool>("details=>details.open"));
+
+            await page.Locator("#inspectorNext").ClickAsync();
+            search = page.Locator(".http-view-search-input");
+            status = page.Locator(".http-view-search-status");
+            var mapiRoot = page.Locator("#request-panel-mapi details.protocol-node").First;
+            await page.Locator("#request-panel-mapi")
+                .GetByRole(AriaRole.Button, new() { Name = "Collapse all" })
+                .ClickAsync();
+            Assert.False(await mapiRoot.EvaluateAsync<bool>("details=>details.open"));
+            await search.FillAsync("propertyvalue");
+            await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+            Assert.True(await mapiRoot.EvaluateAsync<bool>("details=>details.open"));
+            await search.FillAsync("");
+            Assert.False(await mapiRoot.EvaluateAsync<bool>("details=>details.open"));
+            Assert.Equal(ExpectedMapi(), await CopyAndReadAsync(page, "request-panel-mapi"));
+            Assert.Equal(0, await page.Locator("#request-panel-mapi input[placeholder=\"Search protocol fields...\"]").CountAsync());
+
+            await page.Locator("#inspectorPrev").ClickAsync();
+            await page.Locator("#inspectorPrev").ClickAsync();
+            search = page.Locator(".http-view-search-input");
+            await search.FillAsync("payload");
+            await page.Locator("#inspectorClose").ClickAsync();
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            Assert.Equal("", await page.Locator(".http-view-search-input").InputValueAsync());
+            Assert.Equal(0, await page.Locator(".http-search-match").CountAsync());
+            await page.SetViewportSizeAsync(480, 800);
+            search = page.Locator(".http-view-search-input");
+            await search.FillAsync("payload");
+            await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+            Assert.True(await page.Locator(".http-view-search").EvaluateAsync<bool>(
+                "toolbar=>{const box=toolbar.getBoundingClientRect();return box.left>=0&&box.right<=innerWidth&&box.width>0}"));
+            Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>(
+                "dialog=>dialog.scrollWidth<=dialog.clientWidth"));
+            await page.Locator("#request-tab-headers").ClickAsync();
+            Assert.Equal("", await search.InputValueAsync());
+            await page.Locator("#request-tab-json").ClickAsync();
+            await page.SetViewportSizeAsync(1280, 800);
+            Assert.Equal(
+                1,
+                await page.EvaluateAsync<int>("()=>globalThis.__httpSearchViewListenerBalance"));
+            var popupTask = page.WaitForPopupAsync();
+            await page.Locator("#inspectorOpenTab").ClickAsync();
+            popup = await popupTask;
+            CaptureErrors(popup, popupErrors);
+            await popup.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+            await popup.Locator("#httpInspector[open] .http-view-search-input").WaitForAsync();
+            var popupSearch = popup.Locator(".http-view-search-input");
+            await popupSearch.FillAsync("payload");
+            await Assertions.Expect(popup.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+            await popup.Locator("#request-tab-headers").ClickAsync();
+            Assert.Equal("", await popupSearch.InputValueAsync());
+            Assert.Equal(0, await popup.Locator(".http-search-match").CountAsync());
+
+            Assert.Empty(errors);
+            Assert.Empty(popupErrors);
+        }
+        finally
+        {
+            if (popup is not null)
+            {
+                await popup.CloseAsync();
+            }
+            await page.CloseAsync();
+        }
+    }
+
+    [WindowsEdgeFact]
+    public async Task HttpActiveViewSearchCapsLargeRawMatchesAndUsesUnicodeSafeNonOverlappingRanges()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), $"saz viewer http active search {Guid.NewGuid():N}");
+        var reportPath = Path.Combine(tempDirectory, "large http search report.html");
+        var errors = new List<string>();
+        try
+        {
+            Directory.CreateDirectory(tempDirectory);
+            var body = $"{new string('x', 6_001)}\nİx Straße雪 ΟΣ aa aa";
+            var report = new SazReport { SourceName = "large-http-search.saz" };
+            report.Sessions.Add(
+                new HttpSession
+                {
+                    Id = "1",
+                    ArchiveOrder = 0,
+                    Method = "POST",
+                    Url = "https://example.test/large-search",
+                    StatusCode = 200,
+                    Request = Message("POST /large-search HTTP/1.1", "text/plain", body)
+                });
+            await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(report));
+
+            using var playwright = await Playwright.CreateAsync();
+            await using var browser = await playwright.Chromium.LaunchAsync(
+                new BrowserTypeLaunchOptions { Channel = "msedge", Headless = true });
+            var page = await browser.NewPageAsync();
+            await InstallClipboardTestHookAsync(page);
+            CaptureErrors(page, errors);
+            try
+            {
+                await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+                await page.Locator("#httpTable tbody tr").ClickAsync();
+                var search = page.Locator(".http-view-search-input");
+                var status = page.Locator(".http-view-search-status");
+
+                await search.FillAsync("X");
+                await Assertions.Expect(status).ToHaveTextAsync("1 of 5000+ matches (capped)");
+                Assert.Equal(5_000, await page.Locator(".http-search-match").CountAsync());
+
+                await search.FillAsync("xx");
+                await Assertions.Expect(status).ToHaveTextAsync("1 of 3000 matches");
+                Assert.Equal(3_000, await page.Locator(".http-search-match").CountAsync());
+
+                await search.FillAsync("İX");
+                await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+                Assert.Equal("İx", await page.Locator(".http-search-match").InnerTextAsync());
+                await search.FillAsync("STRAßE雪");
+                await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+                Assert.Equal("Straße雪", await page.Locator(".http-search-match").InnerTextAsync());
+                await search.FillAsync("ΟΣ");
+                await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
+                Assert.Equal("ΟΣ", await page.Locator(".http-search-match").InnerTextAsync());
+                await search.FillAsync("aa");
+                await Assertions.Expect(status).ToHaveTextAsync("1 of 2 matches");
+
+                var copied = await CopyAndReadAsync(page, "request-panel-raw");
+                Assert.NotNull(copied);
+                Assert.Contains(body, copied, StringComparison.Ordinal);
+                Assert.DoesNotContain("<mark", copied, StringComparison.Ordinal);
+                Assert.Empty(errors);
+            }
+            finally
+            {
+                await page.CloseAsync();
+            }
         }
         finally
         {
@@ -1230,8 +1515,12 @@ public sealed class HtmlReportBrowserTests
                 "const nativeFrame=requestAnimationFrame.bind(globalThis);globalThis.requestAnimationFrame=callback=>setTimeout(()=>nativeFrame(callback),100)");
             await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
             await page.Locator("#httpTable tbody tr").ClickAsync();
+            await page.Locator(".http-view-search-input").FillAsync("999");
             await page.Locator("#request-panel-json [data-view=\"pretty\"]").ClickAsync();
             await page.WaitForTimeoutAsync(250);
+            Assert.Equal("", await page.Locator(".http-view-search-input").InputValueAsync());
+            Assert.Equal("0 matches", await page.Locator(".http-view-search-status").InnerTextAsync());
+            Assert.Equal(0, await page.Locator(".http-search-match").CountAsync());
             Assert.True(await page.Locator("#request-panel-json .tree-item").CountAsync() < 301);
 
             await page.Locator("#request-panel-json [data-view=\"tree\"]").ClickAsync();

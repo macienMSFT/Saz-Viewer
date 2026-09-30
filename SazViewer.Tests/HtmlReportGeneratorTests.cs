@@ -417,6 +417,48 @@ public sealed class HtmlReportGeneratorTests
     }
 
     [Fact]
+    public void WiresUnifiedSafeActiveViewSearchForHttpInspector()
+    {
+        var report = new SazReport { SourceName = "http-search.saz" };
+        report.Sessions.Add(
+            new HttpSession
+            {
+                Id = "1",
+                ArchiveOrder = 0,
+                Method = "POST",
+                Url = "https://example.test/search",
+                StatusCode = 200,
+                Request = Message("POST /search HTTP/1.1", "application/json", """{"nested":{"needle":"İx Straße雪"}}"""),
+                Response = Message("HTTP/1.1 200 OK", "application/xml", "<root><needle>safe</needle></root>")
+            });
+
+        var html = new HtmlReportGenerator().Generate(report);
+
+        Assert.Contains("function setupActiveViewSearch(options)", html, StringComparison.Ordinal);
+        Assert.Contains("setupHttpViewSearch(inspectorBody,generation);", html, StringComparison.Ordinal);
+        Assert.Contains("placeholder:'Search active Request/Response view...'", html, StringComparison.Ordinal);
+        Assert.Contains("inputLabel:'Search active Request or Response view'", html, StringComparison.Ordinal);
+        Assert.Contains("clearOnViewChange:true", html, StringComparison.Ordinal);
+        Assert.Contains("matchClass:'http-search-match'", html, StringComparison.Ordinal);
+        Assert.Contains("currentClass:'http-search-match-current'", html, StringComparison.Ordinal);
+        Assert.Contains("snapshot:()=>snapshotValueTree(tree)", html, StringComparison.Ordinal);
+        Assert.Contains("snapshot:()=>snapshotDetails(details)", html, StringComparison.Ordinal);
+        Assert.Contains("reveal:revealDetailMatches", html, StringComparison.Ordinal);
+        Assert.Contains("await renderProtocolTree(host,generation)", html, StringComparison.Ordinal);
+        Assert.Contains("inspectorBody._disposeHttpViewSearch?.();", html, StringComparison.Ordinal);
+        Assert.Contains("function closeInspector(){inspectorBody._clearHttpViewSearch?.();inspector.close()}", html, StringComparison.Ordinal);
+        Assert.Contains("removeEventListener('saz-view-change',viewChangeHandler)", html, StringComparison.Ordinal);
+        Assert.Contains("event.isComposing||event.keyCode===229||event.ctrlKey||event.altKey||event.metaKey", html, StringComparison.Ordinal);
+        Assert.Contains("event.preventDefault();move(event.shiftKey?-1:1);input.focus({preventScroll:true})", html, StringComparison.Ordinal);
+        Assert.Contains("NodeFilter.SHOW_TEXT", html, StringComparison.Ordinal);
+        Assert.Contains("mark.textContent=node.data.slice(segment.start,segment.end)", html, StringComparison.Ordinal);
+        Assert.Contains("MAX_MATCHES=5000", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("Search protocol fields...", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("protocol-hidden", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TablistKeydownIgnoresModifiedArrowKeysToAvoidConflictingWithInspectorNavigation()
     {
         // Regression test: Alt+Arrow is the inspector's Previous/Next shortcut (see
@@ -639,18 +681,18 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("splitter.setPointerCapture(event.pointerId)", html, StringComparison.Ordinal);
         Assert.Contains("aria-valuetext',`Left pane ${now} percent; right pane ${100-now} percent`", html, StringComparison.Ordinal);
         Assert.Contains("Search selected payload view...", html, StringComparison.Ordinal);
-        Assert.Contains("highlightWebSocketSearchRoots", html, StringComparison.Ordinal);
+        Assert.Contains("highlightActiveSearchRoots", html, StringComparison.Ordinal);
         Assert.Contains("MAX_MATCHES=5000", html, StringComparison.Ordinal);
         Assert.Contains("document.createElement('mark')", html, StringComparison.Ordinal);
-        Assert.Contains("function foldWebSocketSearchText(text)", html, StringComparison.Ordinal);
+        Assert.Contains("function foldActiveSearchText(text)", html, StringComparison.Ordinal);
         Assert.Contains("for(let scan=nodeIndex;scan<nodes.length&&nodes[scan].start<end;scan++)", html, StringComparison.Ordinal);
         Assert.Contains("function move(delta)", html, StringComparison.Ordinal);
         Assert.Contains("event.key!=='Enter'||event.isComposing||event.keyCode===229||event.ctrlKey||event.altKey||event.metaKey", html, StringComparison.Ordinal);
         Assert.Contains("event.preventDefault();move(event.shiftKey?-1:1);input.focus({preventScroll:true})", html, StringComparison.Ordinal);
         Assert.Contains("previous.addEventListener('click',()=>move(-1))", html, StringComparison.Ordinal);
         Assert.Contains("next.addEventListener('click',()=>move(1))", html, StringComparison.Ordinal);
-        Assert.Contains("content.addEventListener('saz-view-change',run)", html, StringComparison.Ordinal);
-        Assert.Contains("removeWebSocketSearchMarks(content)", html, StringComparison.Ordinal);
+        Assert.Contains("viewEventTarget.addEventListener('saz-view-change'", html, StringComparison.Ordinal);
+        Assert.Contains("removeActiveSearchMarks(options.searchRoot,options.matchClass)", html, StringComparison.Ordinal);
         Assert.DoesNotContain("localStorage", html, StringComparison.Ordinal);
         Assert.Contains("const logicalId=index+1", html, StringComparison.Ordinal);
         Assert.DoesNotContain("const meta=wsElement('span','ws-message-meta'", html, StringComparison.Ordinal);
@@ -1175,8 +1217,8 @@ public sealed class HtmlReportGeneratorTests
             ? $"<leaf>{new string('x', 3000)}</leaf>"
             : $"<n>{DeepXml(depth - 1)}<!--c--></n>";
         var deepBody = $"<root>{DeepXml(45)}</root>"; // Above TreeMaxDepth(40), below MaxStructuredDepth(64),
-                                                        // and padded so pretty-print expansion stays within
-                                                        // BodyFormatter's safe expansion-ratio limit.
+                                                      // and padded so pretty-print expansion stays within
+                                                      // BodyFormatter's safe expansion-ratio limit.
 
         var report = new SazReport { SourceName = "deep-xml.saz" };
         report.Sessions.Add(
