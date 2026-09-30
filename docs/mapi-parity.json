@@ -159,7 +159,7 @@
     "response": []
   },
   "remainingSemanticAreas": [
-    "FastTransfer and ICS production-level syntactical grammar grouping/root selection beyond the wired RopFastTransferDecoders/FastTransferStreamLexer lexical decoding; partial varSizeValue reconstruction now spans separate HTTP round-trips when logical-connection and 32-bit server-handle identity are deterministic",
+    "FastTransfer and ICS complete production ordering/root selection beyond typed recursive marker matching and ProgressInformation/PropertyGroupInfo syntactical structures; partial varSizeValue reconstruction spans separate HTTP round-trips when logical-connection and 32-bit server-handle identity are deterministic",
     "RopReadRecipients response RecipientRow property internals remain bounded raw because that response carries no RecipientColumns array and the protocol does not identify a deterministic external column source",
     "Generic property-value arrays intentionally refuse PtypRestriction, PtypRuleAction, and types outside the fixed MS-OXCDATA property table when no deterministic self-delimiting grammar is available"
   ],
@@ -171,6 +171,7 @@
     "Parser state is per capture rather than upstream static global state.",
     "Table-column state is committed only after a successful RopSetColumns response and invalidated on failure, RopRelease, and successful RopResetTable; pinned upstream caches request state eagerly and does not perform those invalidations.",
     "FastTransfer stream state is keyed by logical MAPI connection plus resolved 32-bit server object handle, completed only from download TransferStatus Done, and invalidated on failed download, RopRelease, or successful handle reuse; upload TransferStatus is displayed as protocol-defined ignored data rather than interpreted.",
+    "Cross-buffer ProgressInformation and PropertyGroupInfo reconstruction is capped at 64 KiB per special structure; larger declarations remain bounded raw continuations rather than accumulating attacker-controlled structure state.",
     "Hierarchy-table RopNotify row-added/row-modified parsing includes InsertAfterTableRowFolderID even when the Message flag is clear, correcting a pinned-upstream field-presence bug contradicted by MS-OXCNOTIF examples.",
     "Auxiliary offset-referenced trailer fields (e.g. MachineName/UserName/ServerDN/ProcessName/annotation strings) are resolved via bounds-checked random-access reads from validated offsets rather than upstream's unchecked sequential pointer arithmetic; out-of-range offsets warn and omit the field, while zero offsets represent absent fields and are omitted without warning.",
     "AUX_EXCEPTION_TRACE is decoded into an \"ExceptionMessage\" array of individual ExceptionMessage[0..N] line fields split on CR/LF from the bounded remainder after the fixed RopIndex header, rather than upstream's raw single-string dump; this is a readability enhancement and does not change the underlying bytes considered or bounds enforced."

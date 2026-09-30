@@ -629,6 +629,237 @@ public sealed class FastTransferParserTests
     }
 
     [Fact]
+    public void LeavesAMismatchedSyntacticalProductionOpen()
+    {
+        var result = Lex(Concat(Le(0x400C0003u), Le(0x400E0003u)));
+
+        Assert.Equal(1, result.State.MarkerDepth);
+        Assert.Equal("Message", result.State.SyntaxStack[0].Production);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("requires EndMessage", StringComparison.Ordinal));
+        Assert.Contains("mismatched end marker for Message", result.Nodes[1].Value);
+    }
+
+    [Fact]
+    public void ClassifiesIncrementalSyncMarkersWithoutInventingNesting()
+    {
+        var result = Lex(Concat(
+            Le(0x40120003u),
+            Le(0x40130003u),
+            Le(0x402F0003u),
+            Le(0x40140003u)));
+
+        Assert.Equal(0, result.State.MarkerDepth);
+        Assert.Empty(result.Warnings);
+        Assert.Contains("starts IncrementalSyncChange", result.Nodes[0].Value);
+        Assert.Contains("starts Deletions", result.Nodes[1].Value);
+        Assert.Contains("starts ReadStateChanges", result.Nodes[2].Value);
+        Assert.Contains("starts IncrementalSyncEnd", result.Nodes[3].Value);
+    }
+
+    [Fact]
+    public void DecodesPublishedProgressInformationSpecialProperty()
+    {
+        var payload = Concat(
+            Le((ushort)0),
+            Le((ushort)0),
+            Le(0x98765432u),
+            Le(0xBABEBABEBABEBABEul),
+            Le(0x00ABCDEFu),
+            Le(0u),
+            Le(0x1234567890ABCDEFul));
+        var result = Lex(Concat(
+            Le(0x4074000Bu),
+            Le((ushort)0x0102),
+            Le((ushort)0x0000),
+            Le((uint)payload.Length),
+            payload));
+
+        Assert.Empty(result.Warnings);
+        Assert.Equal(0x98765432u.ToString(), Find(result.Nodes, "FAIMessageCount").Value);
+        Assert.Equal(0xBABEBABEBABEBABEul.ToString(), Find(result.Nodes, "FAIMessageTotalSize").Value);
+        Assert.Equal(0x00ABCDEFu.ToString(), Find(result.Nodes, "NormalMessageCount").Value);
+        Assert.Equal(0x1234567890ABCDEFul.ToString(), Find(result.Nodes, "NormalMessageTotalSize").Value);
+        Assert.Contains("ProgressInformation (special)", Find(result.Nodes, "PropID").Value);
+    }
+
+    [Fact]
+    public void DecodesPropertyGroupInfoIncludingNamedPropertyNames()
+    {
+        var propertySet = Guid.Parse("00062008-0000-0000-c000-000000000046");
+        var name = Encoding.Unicode.GetBytes("CustomName");
+        var group = Concat(
+            Le(2u),
+            Le((ushort)0x0003), Le((ushort)0x3001),
+            Le((ushort)0x001F), Le((ushort)0x8001),
+            propertySet.ToByteArray(),
+            Le(1u),
+            Le((uint)name.Length),
+            name);
+        var payload = Concat(Le(7u), Le(0u), Le(1u), group);
+        var result = Lex(Concat(
+            Le(0x407B0102u),
+            Le((ushort)0x0102),
+            Le((ushort)0x0000),
+            Le((uint)payload.Length),
+            payload));
+
+        Assert.Empty(result.Warnings);
+        Assert.Equal("7", Find(result.Nodes, "GroupId").Value);
+        Assert.Equal("1", Find(result.Nodes, "GroupCount").Value);
+        Assert.Equal("2", Find(result.Nodes, "PropertyTagCount").Value);
+        Assert.Equal("CustomName", Find(result.Nodes, "Name").Value);
+        Assert.Contains("PropertyGroupInfo (special)", Find(result.Nodes, "PropID").Value);
+    }
+
+    [Fact]
+    public void ReconstructsSplitProgressInformationBeforeSemanticDecoding()
+    {
+        var payload = Concat(
+            Le((ushort)0),
+            Le((ushort)0),
+            Le(2u),
+            Le(3ul),
+            Le(4u),
+            Le(0u),
+            Le(5ul));
+        var prefix = Concat(
+            Le(0x4074000Bu),
+            Le((ushort)0x0102),
+            Le((ushort)0x0000),
+            Le((uint)payload.Length));
+        var first = Lex(Concat(prefix, payload[..10]));
+
+        Assert.NotNull(first.State.Pending);
+        Assert.Equal(0x4074000Bu, first.State.Pending!.Value.SpecialMarker);
+
+        var second = FastTransferStreamLexer.Lex(
+            payload[10..],
+            0,
+            first.State,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+
+        Assert.Null(second.State.Pending);
+        Assert.Equal("2", Find(second.Nodes, "FAIMessageCount").Value);
+        Assert.Equal("5", Find(second.Nodes, "NormalMessageTotalSize").Value);
+        Assert.Equal(0, Find(second.Nodes, "ProgressInformation").Length);
+        Assert.All(
+            Find(second.Nodes, "ProgressInformation").Children,
+            child => Assert.Equal(0, child.Length));
+    }
+
+    [Fact]
+    public void FallsBackTransactionallyForHostilePropertyGroupCounts()
+    {
+        var payload = Concat(Le(1u), Le(1u), Le(uint.MaxValue));
+        var result = Lex(Concat(
+            Le(0x407B0102u),
+            Le((ushort)0x0102),
+            Le((ushort)0x0000),
+            Le((uint)payload.Length),
+            payload));
+
+        Assert.False(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("GroupCount", StringComparison.Ordinal)
+            && warning.Contains("retained as raw", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Warnings, warning =>
+            warning.Contains("Reserved is", StringComparison.Ordinal));
+        Assert.Equal(Convert.ToHexString(payload), Find(result.Nodes, "Value").Value);
+    }
+
+    [Fact]
+    public void DoesNotAccumulateOversizedSpecialStructures()
+    {
+        var declared = (uint)FastTransferLimits.MaxSpecialStructureBytes + 1;
+        var result = Lex(Concat(
+            Le(0x407B0102u),
+            Le((ushort)0x0102),
+            Le((ushort)0x0000),
+            Le(declared),
+            [0x01]));
+
+        Assert.NotNull(result.State.Pending);
+        Assert.Null(result.State.Pending!.Value.SpecialMarker);
+        Assert.True(result.State.Pending!.Value.AccumulatedBytes.IsDefault);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("reconstruction limit", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RetainsTrailingBytesFromAReconstructedPropertyGroupInfo()
+    {
+        var payload = Concat(
+            Le(1u),
+            Le(0u),
+            Le(1u),
+            Le(1u),
+            Le((ushort)0x0003),
+            Le((ushort)0x3001),
+            [0xAA, 0xBB]);
+        var prefix = Concat(
+            Le(0x407B0102u),
+            Le((ushort)0x0102),
+            Le((ushort)0x0000),
+            Le((uint)payload.Length));
+        var first = Lex(Concat(prefix, payload[..8]));
+        var second = FastTransferStreamLexer.Lex(
+            payload[8..],
+            0,
+            first.State,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+
+        Assert.Equal("AABB; reconstructed", Find(second.Nodes, "Value trailing bytes").Value);
+        Assert.Contains(second.Warnings, warning =>
+            warning.Contains("left unparsed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RejectsUnknownGroupPropertyNameKindsTransactionally()
+    {
+        var propertySet = Guid.Parse("00062008-0000-0000-c000-000000000046");
+        var group = Concat(
+            Le(1u),
+            Le((ushort)0x001F),
+            Le((ushort)0x8001),
+            propertySet.ToByteArray(),
+            Le(2u));
+        var payload = Concat(Le(7u), Le(0u), Le(1u), group);
+        var result = Lex(Concat(
+            Le(0x407B0102u),
+            Le((ushort)0x0102),
+            Le((ushort)0x0000),
+            Le((uint)payload.Length),
+            payload));
+
+        Assert.False(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("Kind 0x00000002 is not defined", StringComparison.Ordinal)
+            && warning.Contains("retained as raw", StringComparison.Ordinal));
+        Assert.Equal(Convert.ToHexString(payload), Find(result.Nodes, "Value").Value);
+    }
+
+    [Fact]
+    public void KeepsWrongSizedProgressInformationRawWithoutAccumulatingIt()
+    {
+        var payload = new byte[31];
+        var result = Lex(Concat(
+            Le(0x4074000Bu),
+            Le((ushort)0x0102),
+            Le((ushort)0x0000),
+            Le((uint)payload.Length),
+            payload));
+
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("requires exactly 32", StringComparison.Ordinal));
+        Assert.Equal(Convert.ToHexString(payload), Find(result.Nodes, "Value").Value);
+    }
+
+    [Fact]
     public void RejectsMarkerNestingBeyondTheDepthLimit()
     {
         var stream = Concat([.. Enumerable.Repeat(Le(0x400C0003u), 65)]);

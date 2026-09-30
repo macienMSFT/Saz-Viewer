@@ -83,7 +83,8 @@ internal static class FastTransferStreamLexer
 
         var reader = new MapiReader(buffer, cancellationToken, checked((int)absoluteOffset));
         var elementStart = reader;
-        var markerDepth = next.MarkerDepth;
+        var syntaxStack = next.SyntaxStack;
+        var pendingSpecialMarker = next.PendingSpecialMarker;
         FastTransferPendingValue? pending = next.Pending;
 
         try
@@ -131,7 +132,8 @@ internal static class FastTransferStreamLexer
                 var node = LexElement(
                     ref reader,
                     elements,
-                    ref markerDepth,
+                    ref syntaxStack,
+                    ref pendingSpecialMarker,
                     out pending,
                     warnings,
                     budget,
@@ -176,7 +178,7 @@ internal static class FastTransferStreamLexer
                 "retained as raw and the stream is marked desynchronized.");
             return new FastTransferLexResult(
                 nodes.ToImmutable(),
-                next.WithElements(elements).WithMarkerDepth(markerDepth).AsDesynchronized(),
+                next.WithElements(elements).WithSyntaxStack(syntaxStack).AsDesynchronized(),
                 [.. warnings],
                 buffer.Length,
                 elements,
@@ -192,7 +194,8 @@ internal static class FastTransferStreamLexer
 
         var committed = next
             .WithElements(elements)
-            .WithMarkerDepth(markerDepth)
+            .WithSyntaxStack(syntaxStack)
+            .WithPendingSpecialMarker(pendingSpecialMarker)
             .WithPending(pending);
         return new FastTransferLexResult(
             nodes.ToImmutable(), committed, [.. warnings], buffer.Length, elements, endedInsideValue);
@@ -203,7 +206,8 @@ internal static class FastTransferStreamLexer
     private static MapiNode LexElement(
         ref MapiReader reader,
         int index,
-        ref int markerDepth,
+        ref ImmutableArray<FastTransferSyntaxFrame> syntaxStack,
+        ref uint? pendingSpecialMarker,
         out FastTransferPendingValue? pending,
         List<string> warnings,
         MapiNodeBudget budget,
@@ -217,15 +221,50 @@ internal static class FastTransferStreamLexer
 
         if (MarkerNames.TryGetValue(tag, out var markerName))
         {
-            return LexMarker(ref reader, index, markerName, tag, ref markerDepth, warnings, budget, depth);
+            WarnIfSpecialValueMissing(ref pendingSpecialMarker, markerName, index, warnings);
+            var marker = LexMarker(ref reader, index, markerName, tag, ref syntaxStack, warnings, budget, depth);
+            if (tag is 0x4074000B or 0x407B0102)
+            {
+                pendingSpecialMarker = tag;
+            }
+            return marker;
         }
 
         if (MetaPropertyNames.ContainsKey(tag))
         {
+            WarnIfSpecialValueMissing(ref pendingSpecialMarker, MetaPropertyNames[tag], index, warnings);
             return LexMetaProperty(ref reader, index, tag, budget, depth, warnings);
         }
 
-        return LexPropValue(ref reader, index, tag, out pending, warnings, budget, depth, cancellationToken);
+        var specialMarker = pendingSpecialMarker;
+        pendingSpecialMarker = null;
+        return LexPropValue(
+            ref reader,
+            index,
+            tag,
+            specialMarker,
+            out pending,
+            warnings,
+            budget,
+            depth,
+            cancellationToken);
+    }
+
+    private static void WarnIfSpecialValueMissing(
+        ref uint? pendingSpecialMarker,
+        string nextElement,
+        int index,
+        List<string> warnings)
+    {
+        if (pendingSpecialMarker is not { } marker)
+        {
+            return;
+        }
+
+        warnings.Add(
+            $"FastTransfer element {index} is {nextElement}, but {MarkerNames[marker]} requires its special " +
+            "property value immediately after the marker.");
+        pendingSpecialMarker = null;
     }
 
     private static MapiNode LexMarker(
@@ -233,36 +272,56 @@ internal static class FastTransferStreamLexer
         int index,
         string markerName,
         uint tag,
-        ref int markerDepth,
+        ref ImmutableArray<FastTransferSyntaxFrame> syntaxStack,
         List<string> warnings,
         MapiNodeBudget budget,
         int depth)
     {
         var offset = reader.Position;
         _ = reader.ReadUInt32("Marker");
-        var kind = MarkerNesting(tag);
-        var depthBefore = markerDepth;
-        if (kind < 0)
+        var depthBefore = syntaxStack.Length;
+        string syntax;
+        if (TryGetOpeningFrame(tag, out var opening))
         {
-            if (markerDepth == 0)
-            {
-                warnings.Add(
-                    $"FastTransfer element {index} is the end marker {markerName} but no matching start marker is open.");
-            }
-            else
-            {
-                markerDepth--;
-            }
-        }
-        else if (kind > 0)
-        {
-            if (markerDepth >= FastTransferLimits.MaxMarkerDepth)
+            if (syntaxStack.Length >= FastTransferLimits.MaxMarkerDepth)
             {
                 throw new MapiParseException(
                     offset,
                     $"FastTransfer marker nesting exceeds {FastTransferLimits.MaxMarkerDepth}.");
             }
-            markerDepth++;
+            syntaxStack = syntaxStack.Add(opening);
+            syntax = $"opens {opening.Production}";
+        }
+        else if (IsClosingMarker(tag))
+        {
+            if (syntaxStack.IsEmpty)
+            {
+                warnings.Add(
+                    $"FastTransfer element {index} is the end marker {markerName} but no matching start marker is open.");
+                syntax = "unmatched end marker";
+            }
+            else
+            {
+                var expected = syntaxStack[^1];
+                if (expected.EndTag != tag)
+                {
+                    warnings.Add(
+                        $"FastTransfer element {index} is {markerName}, but the open {expected.Production} " +
+                        $"production requires {MarkerNames[expected.EndTag]}; the production was left open.");
+                    syntax = $"mismatched end marker for {expected.Production}";
+                }
+                else
+                {
+                    syntaxStack = syntaxStack.RemoveAt(syntaxStack.Length - 1);
+                    syntax = $"closes {expected.Production}";
+                }
+            }
+        }
+        else
+        {
+            syntax = StandaloneProductionNames.TryGetValue(tag, out var production)
+                ? $"starts {production}"
+                : "standalone marker";
         }
 
         budget.Claim(depth);
@@ -271,7 +330,7 @@ internal static class FastTransferStreamLexer
             MapiNodeKind.Field,
             offset,
             4,
-            $"{markerName} (0x{tag:X8}) at nesting {(kind < 0 ? markerDepth : depthBefore)}");
+            $"{markerName} (0x{tag:X8}); {syntax}; nesting {depthBefore} -> {syntaxStack.Length}");
     }
 
     private static MapiNode LexMetaProperty(
@@ -352,6 +411,7 @@ internal static class FastTransferStreamLexer
         ref MapiReader reader,
         int index,
         uint tag,
+        uint? specialMarker,
         out FastTransferPendingValue? pending,
         List<string> warnings,
         MapiNodeBudget budget,
@@ -365,9 +425,18 @@ internal static class FastTransferStreamLexer
         var propertyType = reader.ReadUInt16("PropValue.PropType");
         var idOffset = reader.Position;
         var propertyId = reader.ReadUInt16("PropValue.PropID");
+        if (specialMarker is 0x4074000B or 0x407B0102
+            && (propertyType != 0x0102 || propertyId != 0x0000))
+        {
+            warnings.Add(
+                $"{MarkerNames[specialMarker.Value]} requires the immediately following property to be the " +
+                $"special PtypBinary tag 0x00000102, but found 0x{propertyId:X4}:{propertyType:X4}; " +
+                "the ordinary property grammar was used instead.");
+            specialMarker = null;
+        }
         ExtendedBufferParser.AddField(children, "PropType", typeOffset, 2, DescribeType(propertyType), budget);
         ExtendedBufferParser.AddField(
-            children, "PropID", idOffset, 2, DescribePropertyId(propertyId, tag), budget);
+            children, "PropID", idOffset, 2, DescribePropertyId(propertyId, tag, specialMarker), budget);
 
         string? namedSetName = null;
         string? namedSymbol = null;
@@ -389,6 +458,7 @@ internal static class FastTransferStreamLexer
                 propertyType,
                 propertyId,
                 multiValueRemaining: 0,
+                specialMarker: specialMarker,
                 children,
                 warnings,
                 budget,
@@ -641,6 +711,7 @@ internal static class FastTransferStreamLexer
         ushort propertyType,
         ushort propertyId,
         int multiValueRemaining,
+        uint? specialMarker,
         ImmutableArray<MapiNode>.Builder children,
         List<string> warnings,
         MapiNodeBudget budget,
@@ -661,6 +732,21 @@ internal static class FastTransferStreamLexer
         ExtendedBufferParser.AddField(
             children, "Length", lengthOffset, 4, length.ToString(CultureInfo.InvariantCulture), budget);
 
+        if (specialMarker == 0x4074000B && length != 32)
+        {
+            warnings.Add(
+                $"ProgressInformation declares {length:N0} byte(s), but version 0 requires exactly 32; " +
+                "the value will remain raw.");
+            specialMarker = null;
+        }
+        else if (specialMarker == 0x407B0102 && length > FastTransferLimits.MaxSpecialStructureBytes)
+        {
+            warnings.Add(
+                $"PropertyGroupInfo declares {length:N0} byte(s), exceeding the " +
+                $"{FastTransferLimits.MaxSpecialStructureBytes:N0}-byte reconstruction limit; the value will remain raw.");
+            specialMarker = null;
+        }
+
         if (length > reader.Remaining)
         {
             // MS-OXCFXICS 2.2.4.1: this is the only legal split point. Record the tail transactionally
@@ -669,12 +755,19 @@ internal static class FastTransferStreamLexer
             var partial = reader.ReadRemaining("PartialValue");
             children.Add(ExtendedBufferParser.RawNode("PartialValue", partial, partialOffset, budget));
             pending = new FastTransferPendingValue(
-                propertyType, propertyId, length, length - partial.Length, multiValueRemaining);
+                propertyType,
+                propertyId,
+                length,
+                length - partial.Length,
+                multiValueRemaining,
+                specialMarker,
+                specialMarker is null ? default : [.. partial]);
             return $"{partial.Length:N0} of {length:N0} byte(s); value continues in a later buffer";
         }
 
         var slice = reader.SliceReader(checked((int)length), "Value");
-        var summary = DecodeVarValue(ref slice, propertyType, propertyId, children, budget, depth, warnings);
+        var summary = DecodeVarValue(
+            ref slice, propertyType, propertyId, specialMarker, children, budget, depth, warnings);
         AppendUnconsumed(ref slice, children, "Value trailing bytes", budget, warnings);
         return summary;
     }
@@ -683,6 +776,7 @@ internal static class FastTransferStreamLexer
         ref MapiReader slice,
         ushort propertyType,
         ushort propertyId,
+        uint? specialMarker,
         ImmutableArray<MapiNode>.Builder children,
         MapiNodeBudget budget,
         int depth,
@@ -733,7 +827,8 @@ internal static class FastTransferStreamLexer
             case 0x0003:
             default:
             {
-                var decoded = TryDecodeKnownBinary(ref slice, propertyId, children, budget, depth, warnings);
+                var decoded = TryDecodeKnownBinary(
+                    ref slice, propertyType, propertyId, specialMarker, children, budget, depth, warnings);
                 if (decoded is not null)
                 {
                     return decoded;
@@ -751,19 +846,30 @@ internal static class FastTransferStreamLexer
     /// </summary>
     private static string? TryDecodeKnownBinary(
         ref MapiReader slice,
+        ushort propertyType,
         ushort propertyId,
+        uint? specialMarker,
         ImmutableArray<MapiNode>.Builder children,
         MapiNodeBudget budget,
         int depth,
         List<string> warnings)
     {
         var attempt = slice;
+        var speculativeWarnings = new List<string>();
         MapiNode node;
         string summary;
         try
         {
             switch (propertyId)
             {
+                case 0x0000 when specialMarker == 0x4074000B && propertyType == 0x0102:
+                    node = ParseProgressInformation(ref attempt, budget, depth, speculativeWarnings);
+                    summary = "ProgressInformation";
+                    break;
+                case 0x0000 when specialMarker == 0x407B0102 && propertyType == 0x0102:
+                    node = ParsePropertyGroupInfo(ref attempt, budget, depth, speculativeWarnings);
+                    summary = "PropertyGroupInfo";
+                    break;
                 case 0x65E0: // PidTagSourceKey
                 case 0x65E1: // PidTagParentSourceKey
                 case 0x65E2: // PidTagChangeKey
@@ -803,6 +909,7 @@ internal static class FastTransferStreamLexer
         }
 
         slice = attempt;
+        warnings.AddRange(speculativeWarnings);
         children.Add(node);
         return summary;
     }
@@ -880,6 +987,7 @@ internal static class FastTransferStreamLexer
                     baseType,
                     propertyId,
                     multiValueRemaining: total - index - 1,
+                    specialMarker: null,
                     elementChildren,
                     warnings,
                     budget,
@@ -926,7 +1034,48 @@ internal static class FastTransferStreamLexer
         var bytes = reader.ReadBytes(take, "PartialValueContinuation");
         var remaining = pending.RemainingLength - take;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
-        children.Add(ExtendedBufferParser.RawNode("Bytes", bytes, offset, budget));
+        var accumulated = pending.AccumulatedBytes.IsDefault
+            ? ImmutableArray<byte>.Empty
+            : pending.AccumulatedBytes;
+        var reconstructed = pending.SpecialMarker is null
+            ? default
+            : accumulated.AddRange(bytes.ToArray());
+        if (pending.SpecialMarker is { } specialMarker && remaining == 0)
+        {
+            var reconstructedReader = new MapiReader(
+                reconstructed.AsSpan(),
+                CancellationToken.None,
+                0);
+            var reconstructedChildren = ImmutableArray.CreateBuilder<MapiNode>();
+            var decoded = TryDecodeKnownBinary(
+                ref reconstructedReader,
+                pending.PropertyType,
+                pending.PropertyId,
+                specialMarker,
+                reconstructedChildren,
+                budget,
+                depth + 1,
+                warnings);
+            if (decoded is null)
+            {
+                reconstructedChildren.Add(ExtendedBufferParser.RawNode(
+                    "Reconstructed bytes", reconstructed.AsSpan(), 0, budget));
+            }
+            else
+            {
+                AppendUnconsumed(
+                    ref reconstructedReader,
+                    reconstructedChildren,
+                    "Value trailing bytes",
+                    budget,
+                    warnings);
+            }
+            children.AddRange(reconstructedChildren.Select(node => MarkReconstructed(node, offset, annotate: true)));
+        }
+        else
+        {
+            children.Add(ExtendedBufferParser.RawNode("Bytes", bytes, offset, budget));
+        }
         budget.Claim(depth);
         nodes.Add(new MapiNode(
             "PartialValueContinuation",
@@ -940,7 +1089,11 @@ internal static class FastTransferStreamLexer
 
         if (remaining > 0)
         {
-            return pending with { RemainingLength = remaining };
+            return pending with
+            {
+                RemainingLength = remaining,
+                AccumulatedBytes = pending.SpecialMarker is null ? default : reconstructed,
+            };
         }
 
         if (pending.RemainingMultiValueElements > 0)
@@ -974,7 +1127,295 @@ internal static class FastTransferStreamLexer
         return null;
     }
 
+    private static MapiNode MarkReconstructed(MapiNode node, long currentBufferOffset, bool annotate) =>
+        node with
+        {
+            Offset = currentBufferOffset,
+            Length = 0,
+            Value = annotate
+                ? node.Value is null ? "reconstructed across transfer buffers" : $"{node.Value}; reconstructed"
+                : node.Value,
+            Children = [.. node.Children.Select(child => MarkReconstructed(child, currentBufferOffset, annotate: false))],
+        };
+
     // ---- MS-OXCFXICS structures ------------------------------------------------------------------
+
+    private static MapiNode ParseProgressInformation(
+        ref MapiReader reader,
+        MapiNodeBudget budget,
+        int depth,
+        List<string> warnings)
+    {
+        const int serializedSize = 32;
+        var start = reader.Position;
+        if (reader.Remaining != serializedSize)
+        {
+            throw new MapiParseException(
+                start,
+                $"ProgressInformation must be exactly {serializedSize} bytes, not {reader.Remaining:N0}.");
+        }
+
+        var children = ImmutableArray.CreateBuilder<MapiNode>();
+        var versionOffset = reader.Position;
+        var version = reader.ReadUInt16("Version");
+        ExtendedBufferParser.AddField(children, "Version", versionOffset, 2, $"0x{version:X4}", budget);
+        if (version != 0)
+        {
+            throw new MapiParseException(versionOffset, $"ProgressInformation version 0x{version:X4} is not defined.");
+        }
+
+        var padding1Offset = reader.Position;
+        var padding1 = reader.ReadUInt16("Padding1");
+        ExtendedBufferParser.AddField(children, "Padding1", padding1Offset, 2, $"0x{padding1:X4}", budget);
+        if (padding1 != 0)
+        {
+            warnings.Add($"ProgressInformation Padding1 is 0x{padding1:X4}; the protocol recommends zero.");
+        }
+
+        AddUInt32(children, "FAIMessageCount", ref reader, budget);
+        AddUInt64(children, "FAIMessageTotalSize", ref reader, budget);
+        AddUInt32(children, "NormalMessageCount", ref reader, budget);
+        var padding2Offset = reader.Position;
+        var padding2 = reader.ReadUInt32("Padding2");
+        ExtendedBufferParser.AddField(children, "Padding2", padding2Offset, 4, $"0x{padding2:X8}", budget);
+        if (padding2 != 0)
+        {
+            warnings.Add($"ProgressInformation Padding2 is 0x{padding2:X8}; the protocol recommends zero.");
+        }
+        AddUInt64(children, "NormalMessageTotalSize", ref reader, budget);
+
+        budget.Claim(depth);
+        return new MapiNode(
+            "ProgressInformation",
+            MapiNodeKind.Structure,
+            start,
+            serializedSize,
+            "version 0",
+            children.ToImmutable());
+    }
+
+    private static MapiNode ParsePropertyGroupInfo(
+        ref MapiReader reader,
+        MapiNodeBudget budget,
+        int depth,
+        List<string> warnings)
+    {
+        var start = reader.Position;
+        var children = ImmutableArray.CreateBuilder<MapiNode>();
+        AddUInt32(children, "GroupId", ref reader, budget);
+        var reservedOffset = reader.Position;
+        var reserved = reader.ReadUInt32("Reserved");
+        ExtendedBufferParser.AddField(children, "Reserved", reservedOffset, 4, $"0x{reserved:X8}", budget);
+        if (reserved != 0)
+        {
+            warnings.Add($"PropertyGroupInfo Reserved is 0x{reserved:X8}; the protocol requires zero.");
+        }
+
+        var countOffset = reader.Position;
+        var count = reader.ReadUInt32("GroupCount");
+        ExtendedBufferParser.AddField(children, "GroupCount", countOffset, 4, count.ToString(CultureInfo.InvariantCulture), budget);
+        if (count == 0)
+        {
+            warnings.Add("PropertyGroupInfo GroupCount is zero, contrary to the protocol.");
+        }
+        if (count > FastTransferLimits.MaxPropertyGroups || count > reader.Remaining / 4)
+        {
+            throw new MapiParseException(
+                countOffset,
+                $"PropertyGroupInfo GroupCount {count:N0} exceeds the safe or remaining extent.");
+        }
+
+        var groupsStart = reader.Position;
+        var groups = ImmutableArray.CreateBuilder<MapiNode>();
+        for (var index = 0; index < count; index++)
+        {
+            groups.Add(ParsePropertyGroup(ref reader, index, budget, depth + 2, warnings));
+        }
+        budget.Claim(depth + 1);
+        children.Add(new MapiNode(
+            "Groups",
+            MapiNodeKind.Array,
+            groupsStart,
+            reader.Position - groupsStart,
+            $"{count:N0} group(s)",
+            groups.ToImmutable()));
+        budget.Claim(depth);
+        return new MapiNode(
+            "PropertyGroupInfo",
+            MapiNodeKind.Structure,
+            start,
+            reader.Position - start,
+            $"{count:N0} group(s)",
+            children.ToImmutable());
+    }
+
+    private static MapiNode ParsePropertyGroup(
+        ref MapiReader reader,
+        int groupIndex,
+        MapiNodeBudget budget,
+        int depth,
+        List<string> warnings)
+    {
+        var start = reader.Position;
+        var children = ImmutableArray.CreateBuilder<MapiNode>();
+        var countOffset = reader.Position;
+        var count = reader.ReadUInt32("PropertyTagCount");
+        ExtendedBufferParser.AddField(
+            children, "PropertyTagCount", countOffset, 4, count.ToString(CultureInfo.InvariantCulture), budget);
+        if (count == 0)
+        {
+            warnings.Add($"PropertyGroup[{groupIndex}] PropertyTagCount is zero, contrary to the protocol.");
+        }
+        if (count > FastTransferLimits.MaxPropertyTagsPerGroup || count > reader.Remaining / 4)
+        {
+            throw new MapiParseException(
+                countOffset,
+                $"PropertyTagCount {count:N0} exceeds the safe or remaining extent.");
+        }
+
+        var tagsStart = reader.Position;
+        var tags = ImmutableArray.CreateBuilder<MapiNode>();
+        for (var index = 0; index < count; index++)
+        {
+            tags.Add(ParsePropertyTagWithGroupName(ref reader, index, budget, depth + 2, warnings));
+        }
+        budget.Claim(depth + 1);
+        children.Add(new MapiNode(
+            "PropertyTags",
+            MapiNodeKind.Array,
+            tagsStart,
+            reader.Position - tagsStart,
+            $"{count:N0} tag(s)",
+            tags.ToImmutable()));
+        budget.Claim(depth);
+        return new MapiNode(
+            $"PropertyGroup[{groupIndex}]",
+            MapiNodeKind.Structure,
+            start,
+            reader.Position - start,
+            $"{count:N0} tag(s)",
+            children.ToImmutable());
+    }
+
+    private static MapiNode ParsePropertyTagWithGroupName(
+        ref MapiReader reader,
+        int index,
+        MapiNodeBudget budget,
+        int depth,
+        List<string> warnings)
+    {
+        var start = reader.Position;
+        var children = ImmutableArray.CreateBuilder<MapiNode>();
+        var typeOffset = reader.Position;
+        var propertyType = reader.ReadUInt16("PropertyType");
+        ExtendedBufferParser.AddField(
+            children, "PropertyType", typeOffset, 2, NspiPropertyParser.PropertyTypeName(propertyType), budget);
+        var idOffset = reader.Position;
+        var propertyId = reader.ReadUInt16("PropertyId");
+        ExtendedBufferParser.AddField(
+            children, "PropertyId", idOffset, 2, MapiPropertyNames.FormatPidTag(propertyId), budget);
+        if (propertyId >= 0x8000)
+        {
+            children.Add(ParseGroupPropertyName(ref reader, budget, depth + 1, warnings));
+        }
+
+        budget.Claim(depth);
+        return new MapiNode(
+            $"PropertyTag[{index}]",
+            MapiNodeKind.Property,
+            start,
+            reader.Position - start,
+            $"0x{propertyId:X4}:{propertyType:X4}",
+            children.ToImmutable());
+    }
+
+    private static MapiNode ParseGroupPropertyName(
+        ref MapiReader reader,
+        MapiNodeBudget budget,
+        int depth,
+        List<string> warnings)
+    {
+        var start = reader.Position;
+        var children = ImmutableArray.CreateBuilder<MapiNode>();
+        var guidOffset = reader.Position;
+        var guid = reader.ReadGuid("PropertySet");
+        ExtendedBufferParser.AddField(
+            children,
+            "PropertySet",
+            guidOffset,
+            16,
+            MapiPropertyNames.PropertySetName(guid) is { } name ? $"{guid} ({name})" : guid.ToString(),
+            budget);
+        var kindOffset = reader.Position;
+        var kind = reader.ReadUInt32("Kind");
+        ExtendedBufferParser.AddField(
+            children, "Kind", kindOffset, 4, kind switch { 0 => "0x00000000 (LID)", 1 => "0x00000001 (Name)", _ => $"0x{kind:X8}" }, budget);
+        switch (kind)
+        {
+            case 0:
+                AddUInt32(children, "LID", ref reader, budget, hex: true);
+                break;
+            case 1:
+            {
+                var sizeOffset = reader.Position;
+                var size = reader.ReadUInt32("NameSize");
+                ExtendedBufferParser.AddField(
+                    children, "NameSize", sizeOffset, 4, size.ToString(CultureInfo.InvariantCulture), budget);
+                if (size > MapiParseLimits.MaxStringBytes || size > reader.Remaining || (size & 1) != 0)
+                {
+                    throw new MapiParseException(
+                        sizeOffset,
+                        $"GroupPropertyName NameSize {size:N0} is odd or exceeds the safe or remaining extent.");
+                }
+                var valueOffset = reader.Position;
+                var bytes = reader.ReadBytes(checked((int)size), "Name");
+                children.Add(DecodeUnicodeString(bytes, valueOffset, "Name", budget, warnings));
+                break;
+            }
+            default:
+                throw new MapiParseException(
+                    kindOffset, $"GroupPropertyName Kind 0x{kind:X8} is not defined.");
+        }
+
+        budget.Claim(depth);
+        return new MapiNode(
+            "GroupPropertyName",
+            MapiNodeKind.Structure,
+            start,
+            reader.Position - start,
+            kind == 0 ? "LID" : "Name",
+            children.ToImmutable());
+    }
+
+    private static void AddUInt32(
+        ImmutableArray<MapiNode>.Builder children,
+        string name,
+        ref MapiReader reader,
+        MapiNodeBudget budget,
+        bool hex = false)
+    {
+        var offset = reader.Position;
+        var value = reader.ReadUInt32(name);
+        ExtendedBufferParser.AddField(
+            children,
+            name,
+            offset,
+            4,
+            hex ? $"0x{value:X8}" : value.ToString(CultureInfo.InvariantCulture),
+            budget);
+    }
+
+    private static void AddUInt64(
+        ImmutableArray<MapiNode>.Builder children,
+        string name,
+        ref MapiReader reader,
+        MapiNodeBudget budget)
+    {
+        var offset = reader.Position;
+        var value = reader.ReadUInt64(name);
+        ExtendedBufferParser.AddField(
+            children, name, offset, 8, value.ToString(CultureInfo.InvariantCulture), budget);
+    }
 
     private static MapiNode ParseFolderReplicaInfo(
         ref MapiReader reader,
@@ -1419,8 +1860,14 @@ internal static class FastTransferStreamLexer
             ? $"0x{propertyType:X4} {name}"
             : NspiPropertyParser.PropertyTypeName(propertyType);
 
-    private static string DescribePropertyId(ushort propertyId, uint tag)
+    private static string DescribePropertyId(ushort propertyId, uint tag, uint? specialMarker = null)
     {
+        if (propertyId == 0 && specialMarker is 0x4074000B or 0x407B0102)
+        {
+            return specialMarker == 0x4074000B
+                ? "0x0000 ProgressInformation (special)"
+                : "0x0000 PropertyGroupInfo (special)";
+        }
         if (IcsPropertyNames.TryGetValue(tag, out var icsName))
         {
             return $"0x{propertyId:X4} {icsName}";
@@ -1448,14 +1895,40 @@ internal static class FastTransferStreamLexer
 
     internal static bool IsMetaProperty(uint tag) => MetaPropertyNames.ContainsKey(tag);
 
-    /// <summary>1 for start markers, -1 for end markers, 0 for standalone markers.</summary>
-    private static int MarkerNesting(uint tag) => tag switch
+    private static bool TryGetOpeningFrame(uint tag, out FastTransferSyntaxFrame frame)
     {
-        0x40090003 or 0x400A0003 or 0x400C0003 or 0x40100003 or 0x40010003 or 0x40030003 or 0x40000003
-            or 0x403A0003 => 1,
-        0x400B0003 or 0x400D0003 or 0x40020003 or 0x40040003 or 0x400E0003 or 0x403B0003 => -1,
-        _ => 0,
-    };
+        frame = tag switch
+        {
+            0x40090003 => new(tag, 0x400B0003, "TopFolder"),
+            0x400A0003 => new(tag, 0x400B0003, "SubFolder"),
+            0x400C0003 => new(tag, 0x400D0003, "Message"),
+            0x40100003 => new(tag, 0x400D0003, "FAI Message"),
+            0x40010003 => new(tag, 0x40020003, "EmbeddedMessage"),
+            0x40030003 => new(tag, 0x40040003, "Recipient"),
+            0x40000003 => new(tag, 0x400E0003, "Attachment"),
+            0x403A0003 => new(tag, 0x403B0003, "State"),
+            _ => default,
+        };
+        return frame != default;
+    }
+
+    private static bool IsClosingMarker(uint tag) => tag is
+        0x400B0003 or 0x400D0003 or 0x40020003 or 0x40040003 or 0x400E0003 or 0x403B0003;
+
+    private static readonly ImmutableDictionary<uint, string> StandaloneProductionNames =
+        new Dictionary<uint, string>
+        {
+            [0x40120003] = "IncrementalSyncChange",
+            [0x407D0003] = "IncrementalSyncChangePartial",
+            [0x40130003] = "Deletions",
+            [0x40140003] = "IncrementalSyncEnd",
+            [0x402F0003] = "ReadStateChanges",
+            [0x4074000B] = "ProgressTotal",
+            [0x4075000B] = "ProgressPerMessage",
+            [0x40150003] = "IncrementalSyncMessage",
+            [0x407B0102] = "GroupInfo",
+            [0x40180003] = "ErrorInfo",
+        }.ToImmutableDictionary();
 
     // ---- Tag catalogs ----------------------------------------------------------------------------
     // MS-OXCFXICS 2.2.4.1.4 (markers) and 2.2.4.1.5 (meta-properties), cross-checked against the

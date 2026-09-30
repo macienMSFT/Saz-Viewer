@@ -25,6 +25,12 @@ internal static class FastTransferLimits
     /// <summary>Maximum SizedXid entries decoded inside a PredecessorChangeList value.</summary>
     public const int MaxSizedXidEntries = 4_096;
 
+    public const int MaxPropertyGroups = 4_096;
+
+    public const int MaxPropertyTagsPerGroup = 65_536;
+
+    public const int MaxSpecialStructureBytes = 64 * 1024;
+
     /// <summary>Maximum distinct streams a single capture-local assembler will track.</summary>
     public const int MaxTrackedStreams = 4_096;
 
@@ -62,7 +68,14 @@ internal readonly record struct FastTransferPendingValue(
     ushort PropertyId,
     long DeclaredLength,
     long RemainingLength,
-    int RemainingMultiValueElements);
+    int RemainingMultiValueElements,
+    uint? SpecialMarker = null,
+    ImmutableArray<byte> AccumulatedBytes = default);
+
+internal readonly record struct FastTransferSyntaxFrame(
+    uint StartTag,
+    uint EndTag,
+    string Production);
 
 /// <summary>
 /// The immutable lexical/syntactical state of one FastTransfer stream between transfer buffers.
@@ -77,8 +90,14 @@ internal sealed record FastTransferStreamState
     /// <summary>The varSizeValue tail a previous buffer ended inside, if any.</summary>
     public FastTransferPendingValue? Pending { get; init; }
 
-    /// <summary>Current syntactical nesting produced by unmatched start markers.</summary>
-    public int MarkerDepth { get; init; }
+    /// <summary>Open deterministic syntactical productions carried across transfer buffers.</summary>
+    public ImmutableArray<FastTransferSyntaxFrame> SyntaxStack { get; init; } =
+        ImmutableArray<FastTransferSyntaxFrame>.Empty;
+
+    public int MarkerDepth => SyntaxStack.Length;
+
+    /// <summary>A marker whose context determines the shape of the immediately following propValue.</summary>
+    public uint? PendingSpecialMarker { get; init; }
 
     /// <summary>Number of transfer buffers folded into this state.</summary>
     public int BufferCount { get; init; }
@@ -114,15 +133,21 @@ internal sealed record FastTransferStreamState
         Pending = pending,
     };
 
-    public FastTransferStreamState WithMarkerDepth(int depth) => this with
+    public FastTransferStreamState WithSyntaxStack(ImmutableArray<FastTransferSyntaxFrame> stack) => this with
     {
-        MarkerDepth = depth < 0 ? 0 : depth,
+        SyntaxStack = stack,
+    };
+
+    public FastTransferStreamState WithPendingSpecialMarker(uint? marker) => this with
+    {
+        PendingSpecialMarker = marker,
     };
 
     public FastTransferStreamState AsDesynchronized() => this with
     {
         Desynchronized = true,
         Pending = null,
+        PendingSpecialMarker = null,
     };
 
     public FastTransferStreamState AsComplete() => this with { Complete = true };
