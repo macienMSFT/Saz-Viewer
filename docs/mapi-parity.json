@@ -164,9 +164,11 @@
       "phaseValidatedRoots": [
         "contentsSync",
         "hierarchySync",
-        "state"
+        "state",
+        "messageList",
+        "topFolder"
       ],
-      "note": "Root state is staged under the request output-handle slot, moved transactionally to the logical-connection/server-handle key only after a successful creation response, and discarded on failure, missing response, release, or handle reuse. If multiple output-producing ROPs reuse one slot in the same HTTP session, intermediate handles cannot be reconstructed from the final handle table, so root/upload state for that slot is explicitly discarded. Phase mismatches stop syntactical validation without marker resynchronization; RecoverMode FXErrorInfo unwinds to the contentsSync recovery boundary and requires its single binary error property; download Done reports an incomplete selected root."
+      "note": "Root state is staged under the request output-handle slot, moved transactionally to the logical-connection/server-handle key only after a successful creation response, and discarded on failure, missing response, release, or handle reuse. If multiple output-producing ROPs reuse one slot in the same HTTP session, intermediate handles cannot be reconstructed from the final handle table, so root/upload state for that slot is explicitly discarded. Phase mismatches stop syntactical validation without marker resynchronization. messageList validates optional DnPrefix/EcWarning/message entries and legal unmarked end-of-stream completion. topFolder validates its optional DnPrefix, required StartTopFld/EndFolder pair, recursive properties-before-messages-before-subfolders order, message properties-before-recipients-before-attachments order, required PidTagAttachNumber, and embedded-message placement. RecoverMode FXErrorInfo unwinds to the nearest retained contentsSync or messageList boundary and requires its single binary error property; download Done reports an incomplete selected root."
     }
   },
   "namedMethodGaps": {
@@ -174,7 +176,7 @@
     "response": []
   },
   "remainingSemanticAreas": [
-    "FastTransfer folderContent/messageContent/attachmentContent root selection for CopyTo/CopyProperties requires capture-local Folder/Message/Attachment server-object type reconstruction; messageList/topFolder and detailed folder/message/attachment/recipient child production ordering are not yet phase-validated. contentsSync/hierarchySync/state roots and their outer phase order are provenance-selected and validated",
+    "FastTransfer folderContent/messageContent/attachmentContent root selection for CopyTo/CopyProperties requires capture-local Folder/Message/Attachment server-object type reconstruction; contentsSync/hierarchySync/state/messageList/topFolder roots and their nested productions are provenance-selected and validated",
     "RopReadRecipients response RecipientRow property internals remain bounded raw because that response carries no RecipientColumns array and the protocol does not identify a deterministic external column source",
     "Generic property-value arrays intentionally refuse PtypRestriction, PtypRuleAction, and types outside the fixed MS-OXCDATA property table when no deterministic self-delimiting grammar is available"
   ],

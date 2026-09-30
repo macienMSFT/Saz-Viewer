@@ -112,12 +112,12 @@ internal static class MapiCaptureParser
                 "Capture-local table columns and row/notification reconstruction",
                 "Cross-HTTP FastTransfer stream reconstruction by logical MAPI connection and server object handle",
                 "FastTransfer typed syntactical markers plus ProgressInformation and PropertyGroupInfo structures",
-                "Provenance-bound contentsSync, hierarchySync, and state root/phase validation"
+                "Provenance-bound contentsSync, hierarchySync, state, messageList, and recursive topFolder production validation"
             ],
             [
                 "RopReadRecipients response RecipientRow property internals remain bounded raw because that response carries no RecipientColumns array and the protocol does not identify a deterministic external column source",
                 "In the property/stream/store family's generic property-value arrays (RopGetPropertiesSpecific/RopSetProperties and similar), PtypRestriction/PtypRuleAction values and any property type outside the fixed MS-OXCDATA 2.11.1 table are intentionally refused rather than guessed; the message/rule/permission family's own RuleData/PermissionData arrays and the folder/table family's own restrictions do fully decode both types with an explicit ROP-buffer-vs-extended-rule width boundary",
-                "FastTransfer provenance selects contentsSync, hierarchySync, state, messageList, and topFolder roots where the configuring ROP is authoritative; contentsSync/hierarchySync/state outer phases are validated. Detailed folder/message/attachment child production ordering remains incomplete, and CopyTo/CopyProperties cannot select folderContent/messageContent/attachmentContent until the input server-object type is recovered"
+                "FastTransfer CopyTo/CopyProperties cannot yet select folderContent/messageContent/attachmentContent roots because their input server-object type is not yet reconstructed"
             ]);
         return new MapiCapture(
             resultSessions,

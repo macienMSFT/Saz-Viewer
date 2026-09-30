@@ -163,10 +163,14 @@ internal sealed record FastTransferStreamState
         PendingSpecialMarker = null,
     };
 
-    public FastTransferStreamState AsComplete() => this with { Complete = true };
+    public FastTransferStreamState AsComplete() => this with
+    {
+        Complete = true,
+        Grammar = FastTransferGrammar.Finalize(Grammar),
+    };
 
     public string? CompletionIssue =>
-        Grammar.IsValidated && !Grammar.IsComplete
+        Grammar.IsValidated && !FastTransferGrammar.CanComplete(Grammar)
             ? $"{Grammar.Root} grammar ended in phase {Grammar.Phase}"
             : null;
 

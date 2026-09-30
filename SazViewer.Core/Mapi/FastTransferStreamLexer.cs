@@ -235,8 +235,10 @@ internal static class FastTransferStreamLexer
 
         if (MarkerNames.TryGetValue(tag, out var markerName))
         {
-            var isRecoveryError = tag == 0x40180003
-                && grammar.Root is FastTransferRootKind.ContentsSync or FastTransferRootKind.MessageList;
+            var recoveryDepth = tag == 0x40180003
+                ? FastTransferGrammar.RecoverySyntaxDepth(grammar)
+                : null;
+            var isRecoveryError = recoveryDepth.HasValue;
             if (isRecoveryError)
             {
                 pendingSpecialMarker = null;
@@ -249,7 +251,10 @@ internal static class FastTransferStreamLexer
             var marker = LexMarker(ref reader, index, markerName, tag, ref syntaxStack, warnings, budget, depth);
             if (isRecoveryError)
             {
-                syntaxStack = ImmutableArray<FastTransferSyntaxFrame>.Empty;
+                var retainedDepth = recoveryDepth!.Value;
+                syntaxStack = syntaxStack.RemoveRange(
+                    retainedDepth,
+                    syntaxStack.Length - retainedDepth);
             }
             grammar = FastTransferGrammar.AdvanceMarker(
                 grammar, tag, marker.Offset, depthBefore, syntaxStack.Length);
@@ -281,7 +286,8 @@ internal static class FastTransferStreamLexer
             budget,
             depth,
             cancellationToken);
-        grammar = FastTransferGrammar.AdvanceProperty(grammar, tag, property.Offset);
+        grammar = FastTransferGrammar.AdvanceProperty(
+            grammar, tag, property.Offset, syntaxStack.Length);
         return property;
     }
 

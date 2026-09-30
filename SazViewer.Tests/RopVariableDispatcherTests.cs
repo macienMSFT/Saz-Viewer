@@ -653,6 +653,67 @@ public sealed class RopVariableDispatcherTests
         Assert.True(context.FastTransferAssembler.StateFor(resolved).Complete);
     }
 
+    [Theory]
+    [InlineData((byte)0x4B, (int)FastTransferRootKind.MessageList)]
+    [InlineData((byte)0x4C, (int)FastTransferRootKind.TopFolder)]
+    public void CopyProvenanceSelectsAndValidatesItsFastTransferRoot(
+        byte ropId,
+        int expectedRootValue)
+    {
+        var expectedRoot = (FastTransferRootKind)expectedRootValue;
+        const uint ownerHandle = 0x10203040;
+        const uint transferHandle = 0x50607080;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("copy-configure", "logical-connection");
+        context.RegisterLogonCorrelationScope("copy-transfer", "logical-connection");
+        var request = ropId == 0x4B
+            ? Concat([ropId, 0x00, 0x00, 0x01], Le((ushort)0), [0x00, 0x00])
+            : [ropId, 0x00, 0x00, 0x01, 0x00, 0x00];
+
+        RopBufferParser.Parse(
+            Frame(request, ownerHandle, uint.MaxValue),
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "copy-configure",
+            context);
+        RopBufferParser.Parse(
+            Frame(Concat([ropId, 0x01], Le(0u)), ownerHandle, transferHandle),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "copy-configure",
+            context);
+        context.CompleteHttpSession("copy-configure");
+
+        var key = new FastTransferStreamKey("logical-connection", transferHandle);
+        Assert.Equal(expectedRoot, context.FastTransferAssembler.StateFor(key).Grammar.Root);
+        var transfer = expectedRoot == FastTransferRootKind.MessageList
+            ? Concat(Le(0x400C0003u), Le(0x400D0003u))
+            : Concat(Le(0x40090003u), Le(0x400B0003u));
+        var warnings = new List<string>();
+        RopBufferParser.Parse(
+            Frame(BuildFastTransferGetBufferResponse(0, 0x0003, transfer), transferHandle),
+            0,
+            MapiDirection.Response,
+            warnings,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context.FastTransferAssembler,
+            "copy-transfer",
+            context);
+
+        Assert.Empty(warnings);
+        Assert.True(context.FastTransferAssembler.StateFor(key).Grammar.IsComplete);
+        Assert.True(context.FastTransferAssembler.StateFor(key).Complete);
+    }
+
     [Fact]
     public void DoneStatusReportsAnIncompleteProvenanceSelectedRoot()
     {

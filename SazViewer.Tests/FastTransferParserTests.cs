@@ -759,6 +759,404 @@ public sealed class FastTransferParserTests
     }
 
     [Fact]
+    public void ValidatesMessageListPrefixesMessagesAndLegalEndOfStream()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                Le(0x4008001Eu),
+                Le(0u),
+                Le(0x400F0003u),
+                Le(0u),
+                Le(0x400C0003u),
+                property,
+                Le(0x40030003u),
+                property,
+                Le(0x40040003u),
+                Le(0x40000003u),
+                Le((ushort)0x0003),
+                Le((ushort)0x0E21),
+                Le(1u),
+                Le(0x400E0003u),
+                Le(0x400D0003u),
+                Le(0x40100003u),
+                property,
+                Le(0x400D0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.MessageList,
+                "test copy messages"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Equal(FastTransferGrammarPhase.MessageListReady, result.State.Grammar.Phase);
+        Assert.Null(result.State.CompletionIssue);
+        Assert.True(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void RejectsMessageListPropertiesAtTheRoot()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var rootProperty = LexWithState(
+            property,
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.MessageList,
+                "test copy messages"));
+        Assert.True(rootProperty.State.Desynchronized);
+        Assert.Contains(rootProperty.Warnings, warning =>
+            warning.Contains("MessageListReady", StringComparison.Ordinal)
+            && warning.Contains("property value", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AllowsRepeatedOptionalMessageListPrefixesWithoutMessages()
+    {
+        var repeatedPrefixes = LexWithState(
+            Concat(
+                Le(0x4008001Eu),
+                Le(0u),
+                Le(0x4008001Eu),
+                Le(0u),
+                Le(0x400F0003u),
+                Le(0u),
+                Le(0x400F0003u),
+                Le(0u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.MessageList,
+                "test copy messages"));
+
+        Assert.Empty(repeatedPrefixes.Warnings);
+        Assert.False(repeatedPrefixes.State.Desynchronized);
+        Assert.Null(repeatedPrefixes.State.CompletionIssue);
+    }
+
+    [Fact]
+    public void ValidatesMessageListRecoverModeErrorAndRequiresItsBinaryProperty()
+    {
+        var extendedErrorInfo = new byte[88];
+        var valid = LexWithState(
+            Concat(
+                Le(0x400C0003u),
+                Le(0x40030003u),
+                Le(0x40180003u),
+                Le((ushort)0x0102),
+                Le((ushort)0x0000),
+                Le((uint)extendedErrorInfo.Length),
+                extendedErrorInfo),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.MessageList,
+                "test RecoverMode copy messages"));
+
+        Assert.Empty(valid.Warnings);
+        Assert.Equal(0, valid.State.MarkerDepth);
+        Assert.Equal(FastTransferGrammarPhase.MessageListReady, valid.State.Grammar.Phase);
+        Assert.Null(valid.State.CompletionIssue);
+
+        var invalid = LexWithState(
+            Concat(
+                Le(0x40180003u),
+                Le((ushort)0x0003),
+                Le((ushort)0x3001),
+                Le(1u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.MessageList,
+                "test RecoverMode copy messages"));
+        Assert.True(invalid.State.Desynchronized);
+        Assert.Contains(invalid.Warnings, warning =>
+            warning.Contains("MessageListErrorInfo", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidatesTopFolderPropertiesMessagesAndRecursiveSubFolders()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                Le(0x4008001Eu),
+                Le(0u),
+                Le(0x40090003u),
+                property,
+                Le(0x4008001Eu),
+                Le(0u),
+                Le(0x400F0003u),
+                Le(0u),
+                Le(0x400C0003u),
+                property,
+                Le(0x400D0003u),
+                Le(0x400A0003u),
+                property,
+                Le(0x400B0003u),
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test copy folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.True(result.State.Grammar.IsComplete);
+        Assert.Null(result.State.CompletionIssue);
+    }
+
+    [Fact]
+    public void RejectsTopFolderMessagesAndPropertiesAfterSubFoldersBegin()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var lateMessage = LexWithState(
+            Concat(
+                Le(0x40090003u),
+                Le(0x400A0003u),
+                Le(0x400B0003u),
+                Le(0x400C0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test copy folder"));
+        Assert.True(lateMessage.State.Desynchronized);
+        Assert.Contains(lateMessage.Warnings, warning =>
+            warning.Contains("TopFolderSubFolders", StringComparison.Ordinal)
+            && warning.Contains("StartMessage", StringComparison.Ordinal));
+
+        var lateProperty = LexWithState(
+            Concat(
+                Le(0x40090003u),
+                Le(0x400C0003u),
+                Le(0x400D0003u),
+                property),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test copy folder"));
+        Assert.True(lateProperty.State.Desynchronized);
+        Assert.Contains(lateProperty.Warnings, warning =>
+            warning.Contains("TopFolderMessageReady", StringComparison.Ordinal)
+            && warning.Contains("property value", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ReportsIncompleteTopFolderUntilItsRequiredEndMarker()
+    {
+        var result = LexWithState(
+            Le(0x40090003u),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test copy folder"));
+
+        Assert.Equal(FastTransferGrammarPhase.TopFolderProperties, result.State.Grammar.Phase);
+        Assert.Contains("TopFolderProperties", result.State.CompletionIssue);
+        Assert.False(result.State.AsComplete().Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void TopFolderRecoveryUnwindsOnlyTheFailedMessage()
+    {
+        var extendedErrorInfo = new byte[88];
+        var result = LexWithState(
+            Concat(
+                Le(0x40090003u),
+                Le(0x400C0003u),
+                Le(0x40180003u),
+                Le((ushort)0x0102),
+                Le((ushort)0x0000),
+                Le((uint)extendedErrorInfo.Length),
+                extendedErrorInfo,
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test RecoverMode copy folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Equal(0, result.State.MarkerDepth);
+        Assert.True(result.State.Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void TreatsInitialTopFolderEcWarningAsAFolderPropertyWhenFollowedByAProperty()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                Le(0x40090003u),
+                Le(0x400F0003u),
+                Le(0u),
+                Le(0x400F0003u),
+                Le(0u),
+                property,
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test copy folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.True(result.State.Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void RejectsARecipientAfterAttachmentProcessingBegins()
+    {
+        var result = LexWithState(
+            Concat(
+                Le(0x400C0003u),
+                Le(0x40000003u),
+                Le((ushort)0x0003),
+                Le((ushort)0x0E21),
+                Le(1u),
+                Le(0x400E0003u),
+                Le(0x40030003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.MessageList,
+                "test copy messages"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("ObjectMessageAttachments", StringComparison.Ordinal)
+            && warning.Contains("StartRecip", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RejectsAnIncrementalSyncMarkerInsideARecursiveFolder()
+    {
+        var result = LexWithState(
+            Concat(
+                Le(0x40090003u),
+                Le(0x400A0003u),
+                Le(0x40120003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test copy folder"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("TopFolderProperties", StringComparison.Ordinal)
+            && warning.Contains("IncrSyncChg", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RequiresAttachNumberBeforeAttachmentContent()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                Le(0x400C0003u),
+                Le(0x40000003u),
+                property),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.MessageList,
+                "test copy messages"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("ObjectAttachmentAwaitNumber", StringComparison.Ordinal)
+            && warning.Contains("property value", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void EnforcesEmbeddedMessageOrderingWithinAnAttachment()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                Le(0x400C0003u),
+                Le(0x40000003u),
+                Le((ushort)0x0003),
+                Le((ushort)0x0E21),
+                Le(1u),
+                Le(0x40010003u),
+                property,
+                Le(0x40020003u),
+                property),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.MessageList,
+                "test copy messages"));
+
+        Assert.True(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("ObjectAttachmentAfterEmbedded", StringComparison.Ordinal)
+            && warning.Contains("property value", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidatesAnEmbeddedMessageWithinAttachmentContent()
+    {
+        var property = Concat(Le((ushort)0x0003), Le((ushort)0x3001), Le(7u));
+        var result = LexWithState(
+            Concat(
+                Le(0x400C0003u),
+                Le(0x40000003u),
+                Le((ushort)0x0003),
+                Le((ushort)0x0E21),
+                Le(1u),
+                property,
+                Le(0x40010003u),
+                property,
+                Le(0x40020003u),
+                Le(0x400E0003u),
+                Le(0x400D0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.MessageList,
+                "test copy messages"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.Equal(FastTransferGrammarPhase.MessageListReady, result.State.Grammar.Phase);
+    }
+
+    [Fact]
+    public void RecoversFromAnErrorWhileSerializingTopFolderProperties()
+    {
+        var extendedErrorInfo = new byte[88];
+        var result = LexWithState(
+            Concat(
+                Le(0x40090003u),
+                Le((ushort)0x0003),
+                Le((ushort)0x3001),
+                Le(7u),
+                Le(0x40180003u),
+                Le((ushort)0x0102),
+                Le((ushort)0x0000),
+                Le((uint)extendedErrorInfo.Length),
+                extendedErrorInfo,
+                Le(0x400B0003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test RecoverMode copy folder"));
+
+        Assert.Empty(result.Warnings);
+        Assert.False(result.State.Desynchronized);
+        Assert.True(result.State.Grammar.IsComplete);
+    }
+
+    [Fact]
+    public void RetainsObjectProductionStateAcrossBuffers()
+    {
+        var first = LexWithState(
+            Concat(
+                Le(0x40090003u),
+                Le(0x400C0003u),
+                Le(0x40000003u)),
+            FastTransferStreamState.ForRoot(
+                FastTransferRootKind.TopFolder,
+                "test copy folder"));
+
+        Assert.False(first.State.Desynchronized);
+        Assert.Equal(FastTransferGrammarPhase.ObjectAttachmentAwaitNumber, first.State.Grammar.Phase);
+        Assert.Equal(3, first.State.MarkerDepth);
+
+        var second = LexWithState(
+            Concat(
+                Le((ushort)0x0003),
+                Le((ushort)0x0E21),
+                Le(1u),
+                Le(0x400E0003u),
+                Le(0x400D0003u),
+                Le(0x400B0003u)),
+            first.State);
+
+        Assert.Empty(second.Warnings);
+        Assert.False(second.State.Desynchronized);
+        Assert.True(second.State.Grammar.IsComplete);
+        Assert.Equal(0, second.State.MarkerDepth);
+    }
+
+    [Fact]
     public void RecoverModeErrorInfoUnwindsToContentsSyncAndRequiresOneBinaryProperty()
     {
         var extendedErrorInfo = new byte[88];
