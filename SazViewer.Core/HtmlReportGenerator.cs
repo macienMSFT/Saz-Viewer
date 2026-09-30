@@ -43,6 +43,7 @@ public sealed class HtmlReportGenerator
 :root{color-scheme:light dark;--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--warn:#d29922;--selected:#1f6feb55}
 *{box-sizing:border-box}html{scrollbar-gutter:stable}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
 body.inspector-open{overflow:hidden}
+body.inspector-only main{display:none}
 main{width:100%;padding:4px}h2,h3,h4{margin:.25em 0}.muted,.format-status{color:var(--muted)}
 .controls{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 4px}input,select,button{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:7px 10px}
 input{min-width:280px;flex:1}button{cursor:pointer}
@@ -64,6 +65,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .inspector-nav{display:flex;align-items:center;gap:6px}
 .inspector-position{color:var(--muted);font-size:12px;white-space:nowrap;min-width:70px;text-align:center}
 .inspector-close{font-size:16px;line-height:1;padding:6px 10px}
+.inspector-open-status{flex-basis:100%;min-height:0;color:var(--muted)}.inspector-open-status.warning{color:var(--text)}
 .session-details{flex:0 0 auto;max-height:30vh;overflow:auto;margin:2px 14px 0}.session-details summary{font-size:12px}
 .inspector-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .primary-tab-strip{padding:0 14px;background:var(--panel2);flex:0 0 auto}
@@ -107,7 +109,9 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 <span id="inspectorPosition" class="inspector-position" aria-live="polite"></span>
 <button type="button" id="inspectorNext" aria-label="Next session">Next &#9654;</button>
 </div>
+<button type="button" id="inspectorOpenTab" aria-label="Open in new tab: this session inspector" title="Open this session inspector in a new tab">Open in new tab</button>
 <button type="button" id="inspectorClose" class="inspector-close" aria-label="Close session inspector">&#10005;</button>
+<span id="inspectorOpenStatus" class="inspector-open-status" role="status" aria-live="polite"></span>
 </header>
 <div id="inspectorBody" class="inspector-body"></div>
 </dialog>
@@ -120,8 +124,11 @@ const inspectorTitle=document.getElementById('inspectorTitle');
 const inspectorPrev=document.getElementById('inspectorPrev');
 const inspectorNext=document.getElementById('inspectorNext');
 const inspectorPosition=document.getElementById('inspectorPosition');
+const inspectorOpenTab=document.getElementById('inspectorOpenTab');
 const inspectorClose=document.getElementById('inspectorClose');
-let currentRow=null,originRow=null,renderGeneration=0;
+const inspectorOpenStatus=document.getElementById('inspectorOpenStatus');
+const reportStatus=document.getElementById('reportStatus');
+let currentRow=null,originRow=null,renderGeneration=0,inspectorOnly=false;
 function renderProtocolTrees(root){
   root.querySelectorAll('[data-protocol]').forEach(host=>{
     let data;
@@ -417,8 +424,52 @@ function bindFilter(inputId,selectId,tableId){
     });
   }
   input.addEventListener('input',apply);select.addEventListener('change',apply);
+  return apply;
 }
-bindFilter('httpSearch','httpFilter','httpTable');
+const httpSearch=document.getElementById('httpSearch');
+const httpFilter=document.getElementById('httpFilter');
+const applyHttpFilter=bindFilter('httpSearch','httpFilter','httpTable');
+const INSPECTOR_HASH_PREFIX='#saz-inspector?';
+const MAX_INSPECTOR_HASH_LENGTH=4096;
+const MAX_INSPECTOR_QUERY_LENGTH=512;
+const ALLOWED_INSPECTOR_FILTERS=new Set(['','mapi','0','2','3','4','5']);
+function serializeInspectorState(row){
+  if(httpSearch.value.length>MAX_INSPECTOR_QUERY_LENGTH)return null;
+  const params=new URLSearchParams();
+  params.set('v','1');
+  params.set('session',row.dataset.detail);
+  if(httpSearch.value)params.set('q',httpSearch.value);
+  if(httpFilter.value)params.set('filter',httpFilter.value);
+  const hash=`${INSPECTOR_HASH_PREFIX}${params.toString()}`;
+  return hash.length<=MAX_INSPECTOR_HASH_LENGTH?hash:null;
+}
+function parseInspectorState(hash){
+  if(!hash.startsWith(INSPECTOR_HASH_PREFIX))return null;
+  if(hash.length>MAX_INSPECTOR_HASH_LENGTH)return{error:'Inspector link state is too large. Return to the session table and open the session again.'};
+  try{
+    const params=new URLSearchParams(hash.slice(INSPECTOR_HASH_PREFIX.length));
+    const entries=[...params.entries()];
+    if(entries.length>8)return{error:'Inspector link state has too many settings.'};
+    if(entries.some(([key])=>!['v','session','q','filter'].includes(key)))return{error:'Inspector link state contains an unsupported setting.'};
+    if(params.get('v')!=='1')return{error:'Inspector link version is not supported.'};
+    const session=params.get('session')||'';
+    const query=params.get('q')||'';
+    const filter=params.get('filter')||'';
+    if(!/^http-detail-\d{1,9}$/.test(session))return{error:'Inspector link does not identify a valid session.'};
+    if(query.length>MAX_INSPECTOR_QUERY_LENGTH)return{error:'Inspector search text is too long.'};
+    if(!ALLOWED_INSPECTOR_FILTERS.has(filter))return{error:'Inspector link contains an unsupported filter.'};
+    return{session,query,filter};
+  }catch{
+    return{error:'Inspector link state could not be read.'};
+  }
+}
+function inspectorUrl(row){
+  const state=serializeInspectorState(row);
+  if(!state)return null;
+  const url=new URL(window.location.href);
+  url.hash=state.slice(1);
+  return url.href;
+}
 const preferredTab={};
 function tabsOf(tablist){return [...tablist.querySelectorAll('[role="tab"]')]}
 function activateTab(tablist,key,options){
@@ -521,6 +572,14 @@ function highlightSelected(root){
   });
 }
 function visibleRows(){return httpRows.filter(row=>!row.classList.contains('hidden'))}
+function setInspectorStatus(message,warning){
+  inspectorOpenStatus.textContent=message||'';
+  inspectorOpenStatus.classList.toggle('warning',Boolean(message&&warning));
+}
+function showReportStatus(message){
+  reportStatus.textContent=message;
+  reportStatus.classList.toggle('hidden',!message);
+}
 function updateNavState(){
   const rows=visibleRows();
   const index=rows.indexOf(currentRow);
@@ -550,6 +609,7 @@ function loadRow(row){
   currentRow=row;row.classList.add('selected');row.setAttribute('aria-selected','true');
   row.scrollIntoView({block:'nearest'});
   inspectorTitle.textContent=row.dataset.summary||'';
+  setInspectorStatus('',false);
   Object.keys(preferredTab).forEach(key=>delete preferredTab[key]);
   renderGeneration++;
   const generation=renderGeneration;
@@ -577,13 +637,41 @@ function openInspector(row){
   document.body.classList.add('inspector-open');
   inspector.showModal();
 }
+function openInspectorInNewTab(){
+  if(!currentRow)return;
+  const url=inspectorUrl(currentRow);
+  if(!url){
+    setInspectorStatus('The current search is too long to preserve safely in a new-tab link. Shorten it, then try again.',true);
+    return;
+  }
+  const popup=window.open(url,'_blank');
+  if(!popup){
+    setInspectorStatus('The browser blocked the new tab. Allow popups for this local report, then try again.',true);
+    return;
+  }
+  try{popup.opener=null}catch{}
+  setInspectorStatus('Opened this session in a new tab.',false);
+}
+function leaveInspectorOnlyMode(){
+  inspectorOnly=false;
+  document.body.classList.remove('inspector-only');
+  inspectorOpenTab.hidden=false;
+  inspectorClose.textContent='\u2715';
+  inspectorClose.setAttribute('aria-label','Close session inspector');
+  inspectorClose.title='';
+  const cleanUrl=new URL(window.location.href);
+  cleanUrl.hash='';
+  try{history.replaceState(null,'',cleanUrl.href)}catch{window.location.hash=''}
+}
 function closeInspector(){inspector.close()}
 inspector.addEventListener('close',()=>{
+  if(inspectorOnly)leaveInspectorOnlyMode();
   document.body.classList.remove('inspector-open');
   if(currentRow){currentRow.classList.remove('selected');currentRow.setAttribute('aria-selected','false')}
   currentRow=null;
   originRow?.focus();
 });
+inspectorOpenTab.addEventListener('click',openInspectorInNewTab);
 inspectorClose.addEventListener('click',closeInspector);
 function navigate(delta){
   const rows=visibleRows();
@@ -606,6 +694,44 @@ httpRows.forEach(row=>{
     if(event.key==='Enter'||event.key===' '){event.preventDefault();openInspector(row)}
   });
 });
+function enterInspectorOnlyMode(state){
+  inspectorOnly=true;
+  document.body.classList.add('inspector-only');
+  inspectorOpenTab.hidden=true;
+  inspectorClose.textContent='Back to sessions';
+  inspectorClose.setAttribute('aria-label','Back to sessions');
+  inspectorClose.title='Return to the session table in this tab';
+  httpSearch.value=state.query;
+  httpFilter.value=state.filter;
+  applyHttpFilter();
+  const rows=visibleRows();
+  let row=rows.find(candidate=>candidate.dataset.detail===state.session);
+  let status='';
+  if(!row&&rows.length){
+    row=rows[0];
+    status='The requested session is not visible under the restored filters; showing the first matching session.';
+  }
+  if(row){
+    openInspector(row);
+    if(status)setInspectorStatus(status,true);
+    return;
+  }
+  inspectorTitle.textContent='Session unavailable';
+  inspectorBody.replaceChildren();
+  const warning=document.createElement('div');
+  warning.className='warning';
+  warning.textContent='No HTTP sessions match the restored inspector filters. Use Back to sessions to adjust the filters.';
+  inspectorBody.append(warning);
+  inspectorPrev.disabled=true;
+  inspectorNext.disabled=true;
+  inspectorPosition.textContent='0 of 0';
+  setInspectorStatus('The requested session could not be opened.',true);
+  document.body.classList.add('inspector-open');
+  inspector.showModal();
+}
+const initialInspectorState=parseInspectorState(window.location.hash);
+if(initialInspectorState?.error)showReportStatus(initialInspectorState.error);
+else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
 })();
 </script>
 </body></html>
@@ -619,6 +745,7 @@ httpRows.forEach(row=>{
 <section class="http-workspace" aria-label="HTTP sessions">
 <div class="controls"><input id="httpSearch" type="search" aria-label="Search HTTP sessions" placeholder="Search method, URL, status, content type, endpoints...">
 <select id="httpFilter" aria-label="Filter HTTP status or protocol"><option value="">All sessions</option><option value="mapi">MAPI/NSPI only</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option></select></div>
+<div id="reportStatus" class="warning hidden" role="status" aria-live="polite"></div>
 <div class="http-table-scroll"><table id="httpTable"><thead><tr><th class="http-time">Time</th><th class="http-id">ID</th><th class="http-method">Method</th><th class="http-protocol">Protocol</th><th class="http-url">URL</th><th class="http-status">Status</th><th class="http-bytes num">Req</th><th class="http-bytes num">Resp</th></tr></thead><tbody>
 """);
         for (var index = 0; index < sessions.Count; index++)

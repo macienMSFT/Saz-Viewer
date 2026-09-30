@@ -153,6 +153,53 @@ public sealed class HtmlReportGeneratorTests
     }
 
     [Fact]
+    public void NewTabInspectorUsesBoundedEncodedStateAndSafeRestoration()
+    {
+        var report = new SazReport { SourceName = "new tab.saz" };
+        report.Sessions.Add(
+            new HttpSession
+            {
+                Id = "1",
+                ArchiveOrder = 0,
+                Method = "GET",
+                Url = "https://example.test/path?q=<script>globalThis.pwned=true</script>",
+                StatusCode = 200,
+                Request = Message("GET / HTTP/1.1", "text/plain", "safe"),
+            });
+
+        var html = new HtmlReportGenerator().Generate(report);
+
+        Assert.Contains(
+            "id=\"inspectorOpenTab\" aria-label=\"Open in new tab: this session inspector\"",
+            html,
+            StringComparison.Ordinal);
+        Assert.Contains("id=\"inspectorOpenStatus\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"reportStatus\"", html, StringComparison.Ordinal);
+        Assert.Contains("const INSPECTOR_HASH_PREFIX='#saz-inspector?'", html, StringComparison.Ordinal);
+        Assert.Contains("const MAX_INSPECTOR_HASH_LENGTH=4096", html, StringComparison.Ordinal);
+        Assert.Contains("const MAX_INSPECTOR_QUERY_LENGTH=512", html, StringComparison.Ordinal);
+        Assert.Contains("new URLSearchParams()", html, StringComparison.Ordinal);
+        Assert.Contains("new URLSearchParams(hash.slice(INSPECTOR_HASH_PREFIX.length))", html, StringComparison.Ordinal);
+        Assert.Contains("entries.length>8", html, StringComparison.Ordinal);
+        Assert.Contains("!/^http-detail-\\d{1,9}$/.test(session)", html, StringComparison.Ordinal);
+        Assert.Contains("ALLOWED_INSPECTOR_FILTERS.has(filter)", html, StringComparison.Ordinal);
+        Assert.Contains("if(httpSearch.value.length>MAX_INSPECTOR_QUERY_LENGTH)return null", html, StringComparison.Ordinal);
+        Assert.Contains("return hash.length<=MAX_INSPECTOR_HASH_LENGTH?hash:null", html, StringComparison.Ordinal);
+        Assert.Contains("url.hash=state.slice(1)", html, StringComparison.Ordinal);
+        Assert.Contains("popup.opener=null", html, StringComparison.Ordinal);
+        Assert.Contains("The browser blocked the new tab.", html, StringComparison.Ordinal);
+        Assert.Contains("httpSearch.value=state.query", html, StringComparison.Ordinal);
+        Assert.Contains("httpFilter.value=state.filter", html, StringComparison.Ordinal);
+        Assert.Contains("rows.find(candidate=>candidate.dataset.detail===state.session)", html, StringComparison.Ordinal);
+        Assert.Contains("document.body.classList.add('inspector-only')", html, StringComparison.Ordinal);
+        Assert.Contains("inspectorClose.textContent='Back to sessions'", html, StringComparison.Ordinal);
+        Assert.Contains("No HTTP sessions match the restored inspector filters.", html, StringComparison.Ordinal);
+        Assert.Contains("warning.textContent=", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("document.write", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<script>globalThis.pwned=true</script>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WiresFullKeyboardAndRovingTabindexBehaviorForTabs()
     {
         var report = new SazReport { SourceName = "keyboard.saz" };
