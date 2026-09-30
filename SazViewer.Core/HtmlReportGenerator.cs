@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -15,6 +16,26 @@ public sealed class HtmlReportGenerator
     private const int TreeMaxDepth = 40;
     private const int TreeMaxChildrenPerNode = 300;
     private const int TreeMaxScalarLength = 300;
+    private const int MaxCopyCharacters = 1024 * 1024;
+    private const int MaxHydratedDisplayCharacters = 256 * 1024;
+
+    private sealed record CopySource(
+        string AccessibleName,
+        string Description,
+        string? Text,
+        string? Kind = null,
+        string? Error = null,
+        int BodyStart = -1,
+        int BodyLength = 0,
+        int CapturedStart = -1,
+        int CapturedLength = 0);
+    private readonly record struct BuiltCopyText(
+        string? Text,
+        bool TooLarge,
+        int BodyStart = -1,
+        int BodyLength = 0,
+        int CapturedStart = -1,
+        int CapturedLength = 0);
 
     // Each tree level round-trips through two JSON.NET-serializer nesting levels (an object, then
     // its "children" array before the next object), so a TreeMaxDepth-limited document can need
@@ -86,6 +107,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .protocol-meta{margin-bottom:6px}.protocol-block{margin-top:6px}.protocol-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:5px 0}.protocol-toolbar input{min-width:160px}.protocol-tree{overflow:visible;border:1px solid var(--line);padding:6px;background:var(--panel)}.protocol-node{margin-left:14px}.protocol-node>summary{display:flex;gap:7px;align-items:baseline}.protocol-field{display:flex;gap:7px;margin-left:16px;padding:2px 0}.protocol-offset{color:var(--muted);font:12px ui-monospace,Consolas,monospace}.protocol-value{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}.protocol-kind{color:var(--accent);font-size:12px}.protocol-hidden{display:none!important}
 .syn-key{color:#79c0ff}.syn-string{color:#a5d6ff}.syn-number{color:#ffa657}.syn-literal{color:#ff7b72}.syn-punct{color:#8b949e}.syn-tag{color:#7ee787}.syn-attr{color:#d2a8ff}.syn-comment{color:#8b949e;font-style:italic}.syn-value{color:#a5d6ff}
 .tree-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 6px}.view-toggle{display:flex;gap:2px}.view-toggle button[aria-pressed=true]{border-color:var(--accent);color:var(--text)}
+.copy-toolbar{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin:0 0 6px}.copy-toolbar button{padding:4px 9px}.copy-status{min-height:1.2em;color:var(--muted);font-size:12px}.copy-toolbar button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .tree-view{font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
 .tree-item{margin:1px 0}.tree-row{display:flex;gap:6px;align-items:baseline;cursor:default;border-radius:4px;padding:1px 4px}
 .tree-item[role=treeitem]{outline:none}.tree-item[role=treeitem]:focus-visible>.tree-row,.tree-status:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
@@ -135,6 +157,7 @@ function renderProtocolTrees(root){
     try{data=JSON.parse(host.dataset.protocol)}
     catch{host.textContent='Protocol tree data could not be loaded.';host.className='warning';return}
     host.removeAttribute('data-protocol');
+    host._protocolData=data;
     const toolbar=document.createElement('div');toolbar.className='protocol-toolbar';
     const search=document.createElement('input');search.type='search';search.placeholder='Search protocol fields...';search.setAttribute('aria-label','Search protocol tree');
     const expand=document.createElement('button');expand.type='button';expand.textContent='Expand all';
@@ -413,6 +436,147 @@ function setupTreeToggles(root){
     toolbar.querySelector('.tree-collapse-all')?.addEventListener('click',()=>setAllExpanded(treeView,false));
   });
 }
+const MAX_COPY_CHARACTERS=1048576;
+function protocolCopyText(data){
+  let text='',exceeded=false;
+  function append(line){
+    const addition=(text?'\n':'')+line;
+    if(text.length+addition.length>MAX_COPY_CHARACTERS){exceeded=true;return false}
+    text+=addition;return true;
+  }
+  const state=data.complete?'complete':'partial';
+  if(!append(`MAPI protocol (${state}; ${data.parsedBytes} of ${data.totalBytes} bytes)`))return{error:'MAPI copy exceeds the 1 MiB safety limit.'};
+  (data.warnings||[]).forEach(warning=>append(`[Warning] ${warning}`));
+  if(data.omittedWarnings>0)append(`[Warning] ${data.omittedWarnings} additional warning(s) omitted from the report.`);
+  function visit(node,depth){
+    if(exceeded)return;
+    const indent='  '.repeat(Math.min(depth,64));
+    const value=node.value===null||node.value===undefined?'':` = ${String(node.value)}`;
+    if(!append(`${indent}${node.name} [${node.kind}] @${node.offset} +${node.length}${value}`))return;
+    (node.children||[]).forEach(child=>visit(child,depth+1));
+  }
+  visit(data.root,0);
+  return exceeded?{error:'MAPI copy exceeds the 1 MiB safety limit.'}:{text};
+}
+function copySource(button){
+  if(button.dataset.copyError)return{error:button.dataset.copyError};
+  if(button.dataset.copyKind==='mapi'){
+    const host=button.closest('[role="tabpanel"]').querySelector('.protocol-block');
+    if(!host)return{error:'MAPI protocol data is unavailable.'};
+    let data=host._protocolData;
+    if(!data&&host.dataset.protocol){
+      try{data=JSON.parse(host.dataset.protocol)}catch{return{error:'MAPI protocol data could not be read.'}}
+    }
+    return data?protocolCopyText(data):{error:'MAPI protocol data is unavailable.'};
+  }
+  const panel=button.closest('.message-panel');
+  if(panel?._copyModelError)return{error:panel._copyModelError};
+  const text=panel?._copyModel?.[button.dataset.copyKey];
+  if(typeof text!=='string')return{error:'Copy source could not be decoded.'};
+  if(text.length>MAX_COPY_CHARACTERS)return{error:'Copy source exceeds the 1 MiB safety limit.'};
+  return{text};
+}
+async function loadCopyModel(panel){
+  const encoded=panel.dataset.copyModel;
+  if(!encoded)return{};
+  if(typeof DecompressionStream!=='function')throw new Error('This browser does not support local report copy data.');
+  const binary=atob(encoded),bytes=new Uint8Array(binary.length);
+  for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
+  const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  const text=await new Response(stream).text();
+  const model=JSON.parse(text);
+  if(!model||typeof model!=='object'||Array.isArray(model))throw new Error('Copy data has an invalid format.');
+  Object.values(model).forEach(value=>{
+    if(typeof value!=='string'||value.length>MAX_COPY_CHARACTERS)throw new Error('Copy data exceeds the 1 MiB safety limit.');
+  });
+  panel.removeAttribute('data-copy-model');
+  return model;
+}
+function hydrateCopyModel(panel,model){
+  panel.querySelectorAll('[data-copy-field]').forEach(target=>{
+    const text=model[target.dataset.copyField];
+    if(typeof text!=='string')return;
+    const start=Number.parseInt(target.dataset.copyStart||'0',10);
+    const length=Number.parseInt(target.dataset.copyLength||String(text.length),10);
+    if(!Number.isSafeInteger(start)||!Number.isSafeInteger(length)||start<0||length<0||start+length>text.length)return;
+    target.textContent=text.slice(start,start+length);
+  });
+}
+function fallbackCopyText(text,button){
+  const active=document.activeElement;
+  const selection=document.getSelection();
+  const ranges=[];
+  if(selection)for(let index=0;index<selection.rangeCount;index++)ranges.push(selection.getRangeAt(index).cloneRange());
+  const textarea=document.createElement('textarea');
+  textarea.value=text;textarea.readOnly=true;textarea.setAttribute('aria-hidden','true');
+  textarea.style.position='fixed';textarea.style.left='-10000px';textarea.style.top='0';
+  const host=button.closest('dialog')||document.body;
+  host.append(textarea);textarea.focus();textarea.select();
+  let copied=false,transferred=false;
+  const transfer=event=>{
+    if(!event.clipboardData)return;
+    event.preventDefault();
+    event.clipboardData.setData('text/plain',text);
+    transferred=true;
+  };
+  document.addEventListener('copy',transfer);
+  if(document.activeElement===textarea){
+    try{copied=document.execCommand('copy')&&transferred}catch{}
+  }
+  document.removeEventListener('copy',transfer);
+  textarea.remove();
+  if(selection){selection.removeAllRanges();ranges.forEach(range=>selection.addRange(range))}
+  const restore=active&&active!==document.body&&host.contains(active)?active:button;
+  restore.focus({preventScroll:true});
+  return copied;
+}
+async function writeClipboardText(text,button){
+  if(navigator.clipboard&&typeof navigator.clipboard.writeText==='function'){
+    try{await navigator.clipboard.writeText(text);return true}catch{}
+  }
+  return fallbackCopyText(text,button);
+}
+function setupCopyControls(root){
+  root.querySelectorAll('.message-panel').forEach(panel=>{
+    const buttons=[...panel.querySelectorAll('.copy-button[data-copy-key]')];
+    buttons.forEach(button=>{button.disabled=true;button.setAttribute('aria-disabled','true');button.setAttribute('aria-busy','true')});
+    loadCopyModel(panel).then(model=>{
+      panel._copyModel=model;
+      hydrateCopyModel(panel,model);
+      highlightSelected(panel);
+      buttons.forEach(button=>{button.disabled=false;button.removeAttribute('aria-disabled');button.removeAttribute('aria-busy')});
+    }).catch(error=>{
+      panel._copyModelError=`Copy data could not be prepared. ${error.message}`;
+      panel.querySelectorAll('[data-copy-field]').forEach(target=>{
+        target.textContent='Content could not be displayed because this browser could not read the compressed local report data.';
+        target.classList.add('warning');
+      });
+      buttons.forEach(button=>{button.disabled=false;button.removeAttribute('aria-disabled');button.removeAttribute('aria-busy')});
+    });
+  });
+  root.querySelectorAll('.copy-button').forEach(button=>{
+    button.addEventListener('click',async()=>{
+      if(button.disabled)return;
+      const status=button.parentElement.querySelector('.copy-status');
+      const source=copySource(button);
+      if(source.error){
+        status.textContent=source.error;
+        button.textContent='Copy';
+        return;
+      }
+      const copied=await writeClipboardText(source.text,button);
+      if(!copied){
+        status.textContent='Copy failed. Check clipboard permissions or select and copy the content manually.';
+        button.textContent='Copy';
+        return;
+      }
+      button.textContent='Copied';
+      status.textContent=`Copied ${button.dataset.copyDescription}.`;
+      clearTimeout(button._copyResetTimer);
+      button._copyResetTimer=setTimeout(()=>{button.textContent='Copy'},1500);
+    });
+  });
+}
 function bindFilter(inputId,selectId,tableId){
   const input=document.getElementById(inputId),select=document.getElementById(selectId),rows=document.querySelectorAll(`#${tableId} tbody tr`);
   function apply(){
@@ -614,11 +778,11 @@ function loadRow(row){
   renderGeneration++;
   const generation=renderGeneration;
   inspectorBody.replaceChildren(template.content.cloneNode(true));
-  highlightSelected(inspectorBody);
   renderProtocolTrees(inspectorBody);
   renderValueTrees(inspectorBody,generation);
   setupTabs(inspectorBody);
   setupTreeToggles(inspectorBody);
+  setupCopyControls(inspectorBody);
   updateNavState();
   // Request is always the default-selected primary tab after (re)loading a row (see
   // initialTabFor's "request,response" priority and the preferredTab reset above), so it is a
@@ -867,8 +1031,6 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         HttpMessage? message,
         MapiMessageParse? protocol)
     {
-        html.Append("<section class=\"message-panel\">");
-
         var lowerTitle = title.ToLowerInvariant();
         var body = message is null ? null : bodyFormatter.Format(message.Body, message.Header("Content-Type"));
         var jsonEnabled = body is { Format: BodyFormat.Json, CanToggle: true };
@@ -877,6 +1039,30 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         var headersEnabled = message is not null && message.Headers.Count > 0;
         var rawEnabled = message is not null;
         var anyEnabled = jsonEnabled || xmlEnabled || mapiEnabled || headersEnabled || rawEnabled;
+        var jsonCopy = CopyText(
+            $"Copy {lowerTitle} JSON pretty text",
+            $"{lowerTitle} JSON pretty text",
+            jsonEnabled ? body!.Formatted : null);
+        var xmlCopy = CopyText(
+            $"Copy {lowerTitle} XML pretty text",
+            $"{lowerTitle} XML pretty text",
+            xmlEnabled ? body!.Formatted : null);
+        var mapiCopy = new CopySource(
+            $"Copy {lowerTitle} MAPI protocol tree",
+            $"{lowerTitle} MAPI protocol tree",
+            null,
+            mapiEnabled ? "mapi" : null);
+        var headersCopy = CopyText(
+            $"Copy {lowerTitle} headers",
+            $"{lowerTitle} headers",
+            message is not null ? BuildHeadersText(message) : default);
+        var rawCopy = CopyText(
+            $"Copy {lowerTitle} raw message",
+            $"{lowerTitle} raw message",
+            rawEnabled ? BuildRawText(message!, body!) : default);
+        html.Append("<section class=\"message-panel\"");
+        AppendCopyModelAttribute(html, jsonCopy, xmlCopy, headersCopy, rawCopy, message, body);
+        html.Append('>');
 
         string? initial = !anyEnabled
             ? null
@@ -894,27 +1080,27 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
 
         html.Append("<div class=\"tab-panels\">");
         AppendTabPanel(
-            html, side, "json", initial == "json", jsonEnabled,
+            html, side, "json", initial == "json", jsonEnabled, jsonCopy,
             $"JSON view is not available: the {lowerTitle} body is not recognized, valid JSON.",
             jsonEnabled ? inner => AppendStructuredBody(inner, body!, "json") : null);
         AppendTabPanel(
-            html, side, "xml", initial == "xml", xmlEnabled,
+            html, side, "xml", initial == "xml", xmlEnabled, xmlCopy,
             $"XML view is not available: the {lowerTitle} body is not recognized, valid XML.",
             xmlEnabled ? inner => AppendStructuredBody(inner, body!, "xml") : null);
         AppendTabPanel(
-            html, side, "mapi", initial == "mapi", mapiEnabled,
+            html, side, "mapi", initial == "mapi", mapiEnabled, mapiCopy,
             $"MAPI view is not available: no protocol tree was parsed for this {lowerTitle}.",
             mapiEnabled ? inner => AppendProtocol(inner, protocol!) : null);
         AppendTabPanel(
-            html, side, "headers", initial == "headers", headersEnabled,
+            html, side, "headers", initial == "headers", headersEnabled, headersCopy,
             message is null
                 ? $"No {lowerTitle} entry was captured."
                 : $"No headers were captured for this {lowerTitle}.",
-            headersEnabled ? inner => AppendHeadersOnly(inner, message!) : null);
+            headersEnabled ? inner => AppendHeadersOnly(inner, headersCopy) : null);
         AppendTabPanel(
-            html, side, "raw", initial == "raw", rawEnabled,
+            html, side, "raw", initial == "raw", rawEnabled, rawCopy,
             $"No {lowerTitle} entry was captured.",
-            rawEnabled ? inner => AppendRawView(inner, message!, body!) : null);
+            rawEnabled ? inner => AppendRawView(inner, message!, body!, headersCopy, rawCopy) : null);
         if (!anyEnabled)
         {
             html.Append("<div class=\"tab-empty\">No ").Append(lowerTitle).Append(" entry was captured.</div>");
@@ -969,6 +1155,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         string key,
         bool selected,
         bool enabled,
+        CopySource copy,
         string unavailableMessage,
         Action<StringBuilder>? content)
     {
@@ -980,6 +1167,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             html.Append(" hidden");
         }
         html.Append('"').Append('>');
+        AppendCopyToolbar(html, key, enabled, copy);
         if (enabled && content is not null)
         {
             content(html);
@@ -993,15 +1181,270 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         html.Append("</div>");
     }
 
-    private static void AppendHeadersOnly(StringBuilder html, HttpMessage message)
+    private static void AppendCopyToolbar(StringBuilder html, string key, bool enabled, CopySource source)
     {
-        html.Append("<pre class=\"headers\">");
-        Text(html, message.StartLine + "\n");
+        html.Append("<div class=\"copy-toolbar\"><button type=\"button\" class=\"copy-button\" aria-label=\"");
+        Attribute(html, source.AccessibleName);
+        html.Append("\" data-copy-description=\"");
+        Attribute(html, source.Description);
+        html.Append('"');
+        if (!enabled)
+        {
+            html.Append(" disabled aria-disabled=\"true\"");
+        }
+        else if (source.Kind is not null)
+        {
+            html.Append(" data-copy-kind=\"");
+            Attribute(html, source.Kind);
+            html.Append('"');
+        }
+        else if (source.Error is not null)
+        {
+            html.Append(" data-copy-error=\"");
+            Attribute(html, source.Error);
+            html.Append('"');
+        }
+        else if (source.Text is not null)
+        {
+            html.Append(" data-copy-key=\"");
+            Attribute(html, key);
+            html.Append('"');
+        }
+        html.Append(">Copy</button><span class=\"copy-status\" role=\"status\" aria-live=\"polite\"></span></div>");
+    }
+
+    private static void AppendCopyModelAttribute(
+        StringBuilder html,
+        CopySource json,
+        CopySource xml,
+        CopySource headers,
+        CopySource raw,
+        HttpMessage? message,
+        BodyPresentation? body)
+    {
+        var model = new Dictionary<string, string>(StringComparer.Ordinal);
+        Add("json", json);
+        Add("xml", xml);
+        Add("headers", headers);
+        Add("raw", raw);
+        if (message is not null && headers.Text is null)
+        {
+            model.Add("displayHeaders", BuildHeadersDisplayText(message));
+        }
+        if (message is not null && body is not null && raw.Text is null)
+        {
+            model.Add("displayRawBody", BoundDisplayText(
+                body.Raw,
+                "[Body display truncated at the 256 KiB rendering limit.]"));
+            if (message.Body.CapturedBytesPreview is not null)
+            {
+                var captured = message.Body.CapturedBytesPreview
+                    + (message.Body.CapturedBytesPreviewTruncated
+                        ? "\n[Captured byte preview truncated]"
+                        : string.Empty);
+                model.Add("displayCaptured", BoundDisplayText(
+                    captured,
+                    "[Captured-byte display truncated at the 256 KiB rendering limit.]"));
+            }
+        }
+        if (model.Count == 0)
+        {
+            return;
+        }
+
+        var serialized = JsonSerializer.SerializeToUtf8Bytes(model);
+        using var output = new MemoryStream();
+        using (var gzip = new GZipStream(output, CompressionLevel.SmallestSize, leaveOpen: true))
+        {
+            gzip.Write(serialized);
+        }
+        html.Append(" data-copy-model=\"").Append(Convert.ToBase64String(output.GetBuffer(), 0, checked((int)output.Length))).Append('"');
+
+        void Add(string key, CopySource source)
+        {
+            if (source.Text is not null)
+            {
+                model.Add(key, source.Text);
+            }
+        }
+    }
+
+    private static string BuildHeadersDisplayText(HttpMessage message)
+    {
+        const string marker = "[Header display truncated at the 256 KiB rendering limit.]\n";
+        var text = new StringBuilder(Math.Min(MaxHydratedDisplayCharacters, 16 * 1024));
+        if (!Append(message.StartLine + "\n"))
+        {
+            return text.ToString();
+        }
         foreach (var header in message.Headers)
         {
-            Text(html, $"{header.Name}: {header.Value}\n");
+            if (!Append($"{header.Name}: {header.Value}\n"))
+            {
+                break;
+            }
         }
-        html.Append("</pre>");
+        return text.ToString();
+
+        bool Append(string value)
+        {
+            var remaining = MaxHydratedDisplayCharacters - marker.Length - text.Length;
+            if (remaining <= 0)
+            {
+                text.Append(marker);
+                return false;
+            }
+            if (value.Length <= remaining)
+            {
+                text.Append(value);
+                return true;
+            }
+            text.Append(value.AsSpan(0, remaining)).Append(marker);
+            return false;
+        }
+    }
+
+    private static string BoundDisplayText(string value, string marker)
+    {
+        if (value.Length <= MaxHydratedDisplayCharacters)
+        {
+            return value;
+        }
+        var prefixLength = MaxHydratedDisplayCharacters - marker.Length - 1;
+        return string.Concat(value.AsSpan(0, prefixLength), "\n", marker);
+    }
+
+    private static CopySource CopyText(string accessibleName, string description, string? text)
+    {
+        if (text is null)
+        {
+            return new CopySource(accessibleName, description, null);
+        }
+        return text.Length <= MaxCopyCharacters
+            ? new CopySource(accessibleName, description, text)
+            : new CopySource(
+                accessibleName,
+                description,
+                null,
+                Error: "Copy source exceeds the 1 MiB safety limit.");
+    }
+
+    private static CopySource CopyText(string accessibleName, string description, BuiltCopyText text) =>
+        text.TooLarge
+            ? new CopySource(
+                accessibleName,
+                description,
+                null,
+                Error: "Copy source exceeds the 1 MiB safety limit.")
+            : new CopySource(
+                accessibleName,
+                description,
+                text.Text,
+                BodyStart: text.BodyStart,
+                BodyLength: text.BodyLength,
+                CapturedStart: text.CapturedStart,
+                CapturedLength: text.CapturedLength);
+
+    private static BuiltCopyText BuildHeadersText(HttpMessage message)
+    {
+        var text = new StringBuilder();
+        if (!AppendCopyText(text, message.StartLine + "\n"))
+        {
+            return new BuiltCopyText(null, true);
+        }
+        foreach (var header in message.Headers)
+        {
+            if (!AppendCopyText(text, $"{header.Name}: {header.Value}\n"))
+            {
+                return new BuiltCopyText(null, true);
+            }
+        }
+        return new BuiltCopyText(text.ToString(), false);
+    }
+
+    private static BuiltCopyText BuildRawText(HttpMessage message, BodyPresentation body)
+    {
+        var source = message.Body;
+        var text = new StringBuilder();
+        if (!AppendCopyText(text, "Original headers\n")
+            || !AppendCopyText(text, message.StartLine + "\n"))
+        {
+            return new BuiltCopyText(null, true);
+        }
+        foreach (var header in message.Headers)
+        {
+            if (!AppendCopyText(text, $"{header.Name}: {header.Value}\n"))
+            {
+                return new BuiltCopyText(null, true);
+            }
+        }
+
+        var size = source.WasDecoded
+            ? $"{FormatBytes(source.Length)} decoded; {FormatBytes(source.CapturedLength)} captured"
+            : FormatBytes(source.Length);
+        if (!AppendCopyText(text, $"\n{(source.WasDecoded ? "Decoded body" : "Body")} ({size})\n")
+            || !AppendCopyText(text, $"Format: {body.Label}\n")
+            || !AppendCopyText(text, $"Status: {body.Status}\n"))
+        {
+            return new BuiltCopyText(null, true);
+        }
+        if (source.DecodingStatus is not null
+            && !AppendCopyText(text, $"Decode status: {source.DecodingStatus}\n"))
+        {
+            return new BuiltCopyText(null, true);
+        }
+        var bodyStart = text.Length;
+        if (!AppendCopyText(text, body.Raw))
+        {
+            return new BuiltCopyText(null, true);
+        }
+        var bodyLength = text.Length - bodyStart;
+        if (body.IsTruncated
+            && !AppendCopyText(text, "\n[Body preview truncated; the complete body is not retained in this report.]"))
+        {
+            return new BuiltCopyText(null, true);
+        }
+        var capturedStart = -1;
+        var capturedLength = 0;
+        if (source.CapturedBytesPreview is not null)
+        {
+            if (!AppendCopyText(text, "\n\nCaptured bytes (pre-decode)\n"))
+            {
+                return new BuiltCopyText(null, true);
+            }
+            capturedStart = text.Length;
+            if (!AppendCopyText(text, source.CapturedBytesPreview)
+                || (source.CapturedBytesPreviewTruncated
+                    && !AppendCopyText(text, "\n[Captured byte preview truncated]")))
+            {
+                return new BuiltCopyText(null, true);
+            }
+            capturedLength = text.Length - capturedStart;
+        }
+        return new BuiltCopyText(
+            text.ToString(),
+            false,
+            bodyStart,
+            bodyLength,
+            capturedStart,
+            capturedLength);
+    }
+
+    private static bool AppendCopyText(StringBuilder target, string value)
+    {
+        if (target.Length + (long)value.Length > MaxCopyCharacters)
+        {
+            return false;
+        }
+        target.Append(value);
+        return true;
+    }
+
+    private static void AppendHeadersOnly(StringBuilder html, CopySource headersCopy)
+    {
+        html.Append("<pre class=\"headers\" data-copy-field=\"")
+            .Append(headersCopy.Text is null ? "displayHeaders" : "headers")
+            .Append("\"></pre>");
     }
 
     private static void AppendStructuredBody(StringBuilder html, BodyPresentation body, string format)
@@ -1050,16 +1493,20 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         html.Append("</div>");
 
         html.Append("<div class=\"pretty-subview").Append(treeAvailable ? " hidden" : "")
-            .Append("\"><pre class=\"body-view formatted-view\" data-format=\"").Append(format).Append("\">");
-        Text(html, body.Formatted);
-        html.Append("</pre></div></div>");
+            .Append("\"><pre class=\"body-view formatted-view\" data-format=\"").Append(format)
+            .Append("\" data-copy-field=\"").Append(format).Append("\"></pre></div></div>");
     }
 
-    private static void AppendRawView(StringBuilder html, HttpMessage message, BodyPresentation body)
+    private static void AppendRawView(
+        StringBuilder html,
+        HttpMessage message,
+        BodyPresentation body,
+        CopySource headersCopy,
+        CopySource rawCopy)
     {
         var source = message.Body;
         html.Append("<h4>Original headers</h4>");
-        AppendHeadersOnly(html, message);
+        AppendHeadersOnly(html, headersCopy);
         html.Append("<h4>").Append(source.WasDecoded ? "Decoded body" : "Body").Append(" <span class=\"muted\">(");
         if (source.WasDecoded)
         {
@@ -1081,18 +1528,30 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             Text(html, source.DecodingStatus);
             html.Append("</div>");
         }
-        html.Append("<pre class=\"body-view\">");
-        Text(html, body.Raw);
-        html.Append("</pre>");
+        html.Append("<pre class=\"body-view\" data-copy-field=\"");
+        if (rawCopy.Text is null)
+        {
+            html.Append("displayRawBody");
+        }
+        else
+        {
+            html.Append("raw\" data-copy-start=\"").Append(rawCopy.BodyStart)
+                .Append("\" data-copy-length=\"").Append(rawCopy.BodyLength);
+        }
+        html.Append("\"></pre>");
         if (source.CapturedBytesPreview is not null)
         {
-            html.Append("<details class=\"captured-bytes\"><summary>Captured bytes (pre-decode)</summary><pre>");
-            Text(html, source.CapturedBytesPreview);
-            if (source.CapturedBytesPreviewTruncated)
+            html.Append("<details class=\"captured-bytes\"><summary>Captured bytes (pre-decode)</summary><pre data-copy-field=\"");
+            if (rawCopy.Text is null)
             {
-                Text(html, "\n[Captured byte preview truncated]");
+                html.Append("displayCaptured");
             }
-            html.Append("</pre></details>");
+            else
+            {
+                html.Append("raw\" data-copy-start=\"").Append(rawCopy.CapturedStart)
+                    .Append("\" data-copy-length=\"").Append(rawCopy.CapturedLength);
+            }
+            html.Append("\"></pre></details>");
         }
     }
 
@@ -1103,15 +1562,28 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             .Append(protocol.ParsedBytes.ToString("N0", CultureInfo.InvariantCulture)).Append(" of ")
             .Append(protocol.TotalBytes.ToString("N0", CultureInfo.InvariantCulture))
             .Append(" bytes)</div>");
-        foreach (var warning in protocol.Warnings.Take(50))
+        var warnings = protocol.Warnings.Take(50).ToArray();
+        foreach (var warning in warnings)
         {
             html.Append("<div class=\"warning\">");
             Text(html, warning);
             html.Append("</div>");
         }
+        var omittedWarnings = protocol.Warnings.Length - warnings.Length;
+        if (omittedWarnings > 0)
+        {
+            html.Append("<div class=\"warning\">");
+            Text(html, $"{omittedWarnings:N0} additional protocol warning(s) omitted from the report.");
+            html.Append("</div>");
+        }
         var payload = JsonSerializer.Serialize(new
         {
-            root = ToProtocolData(protocol.Root)
+            root = ToProtocolData(protocol.Root),
+            complete = protocol.Complete,
+            parsedBytes = protocol.ParsedBytes,
+            totalBytes = protocol.TotalBytes,
+            warnings,
+            omittedWarnings
         });
         html.Append("<div class=\"protocol-block\" data-protocol=\"");
         Attribute(html, payload);

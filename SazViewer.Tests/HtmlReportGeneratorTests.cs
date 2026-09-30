@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.IO.Compression;
 using System.Net;
 using System.Text.Json;
 using SazViewer.Core;
@@ -96,7 +97,8 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("syn-tag", html, StringComparison.Ordinal);
         Assert.Contains("document.createElement('span')", html, StringComparison.Ordinal);
         Assert.Contains("span.textContent=text", html, StringComparison.Ordinal);
-        Assert.Contains("highlightSelected(inspectorBody)", html, StringComparison.Ordinal);
+        Assert.Contains("hydrateCopyModel(panel,model);", html, StringComparison.Ordinal);
+        Assert.Contains("highlightSelected(panel);", html, StringComparison.Ordinal);
 
         // Global Formatted/Decoded/Captured toggle controls remain removed in favor of tabs.
         Assert.DoesNotContain("data-body-view", html, StringComparison.Ordinal);
@@ -106,7 +108,9 @@ public sealed class HtmlReportGeneratorTests
         Assert.DoesNotContain("<span class=\"syn-", html, StringComparison.Ordinal);
         Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);
         Assert.DoesNotContain(attack, html, StringComparison.Ordinal);
-        Assert.Contains("&lt;/script&gt;&lt;img src=x onerror=globalThis.pwned=true&gt;", html, StringComparison.Ordinal);
+        Assert.Equal(
+            new BodyFormatter().Format(report.Sessions[0].Request!.Body, "application/json").Formatted,
+            CopyTextForPanel(html, "request-panel-json"));
         Assert.Contains("default-src 'none'", html, StringComparison.Ordinal);
     }
 
@@ -200,6 +204,157 @@ public sealed class HtmlReportGeneratorTests
     }
 
     [Fact]
+    public void CopyControlsUseCompleteBoundedModelTextForEverySecondaryView()
+    {
+        const string attack = "</textarea><script>globalThis.pwned=true</script>";
+        const string requestBody = """{"payload":"</textarea><script>globalThis.pwned=true</script>","value":1}""";
+        const string responseBody = "<root><value>safe</value></root>";
+        var protocolRoot = new MapiNode(
+            "Execute",
+            MapiNodeKind.Operation,
+            0,
+            8,
+            "root",
+            [MapiNode.Leaf("PropertyValue", MapiNodeKind.Property, 4, 4, attack)]);
+        var protocol = new MapiMessageParse(
+            MapiDirection.Request,
+            protocolRoot,
+            ["synthetic warning"],
+            true,
+            8,
+            8);
+        var session = new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "POST",
+            Url = "https://example.test/copy",
+            StatusCode = 200,
+            Request = Message("POST /copy HTTP/1.1", "application/json", requestBody),
+            Response = Message("HTTP/1.1 200 OK", "application/xml", responseBody),
+        };
+        session.Mapi = new MapiSession(
+            "1",
+            0,
+            MapiEndpoint.Mailbox,
+            "Execute",
+            "0",
+            false,
+            protocol,
+            null,
+            ImmutableArray<string>.Empty);
+        var report = new SazReport { SourceName = "copy.saz" };
+        report.Sessions.Add(session);
+
+        var html = new HtmlReportGenerator().Generate(report);
+        var expectedJson = new BodyFormatter().Format(session.Request.Body, "application/json").Formatted;
+        var expectedXml = new BodyFormatter().Format(session.Response.Body, "application/xml").Formatted;
+
+        Assert.Equal(10, html.Split("class=\"copy-button\"", StringSplitOptions.None).Length - 1);
+        Assert.Equal(expectedJson, CopyTextForPanel(html, "request-panel-json"));
+        Assert.Equal(expectedXml, CopyTextForPanel(html, "response-panel-xml"));
+        Assert.Equal(
+            "POST /copy HTTP/1.1\nContent-Type: application/json\n",
+            CopyTextForPanel(html, "request-panel-headers"));
+        Assert.Equal(
+            $"Original headers\nPOST /copy HTTP/1.1\nContent-Type: application/json\n\n" +
+            $"Body ({requestBody.Length} B)\nFormat: JSON\n" +
+            "Status: Parsed as JSON from Content-Type and body content.\n" +
+            requestBody,
+            CopyTextForPanel(html, "request-panel-raw"));
+        Assert.Contains("aria-label=\"Copy request JSON pretty text\"", PanelCopyButton(html, "request-panel-json"));
+        Assert.Contains("data-copy-kind=\"mapi\"", PanelCopyButton(html, "request-panel-mapi"));
+        Assert.Contains("disabled aria-disabled=\"true\"", PanelCopyButton(html, "response-panel-mapi"));
+        Assert.Contains("synthetic warning", WebUtility.HtmlDecode(html), StringComparison.Ordinal);
+        Assert.DoesNotContain(attack, html, StringComparison.Ordinal);
+        Assert.Contains("setupCopyControls(inspectorBody)", html, StringComparison.Ordinal);
+        Assert.Contains("navigator.clipboard.writeText(text)", html, StringComparison.Ordinal);
+        Assert.Contains("document.execCommand('copy')", html, StringComparison.Ordinal);
+        Assert.Contains("textarea.remove()", html, StringComparison.Ordinal);
+        Assert.Contains("button.textContent='Copied'", html, StringComparison.Ordinal);
+        Assert.Contains("role=\"status\" aria-live=\"polite\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RawCopyLabelsBinaryTruncationAndRejectsSourcesOverTheCopyCap()
+    {
+        var binary = new HttpMessage
+        {
+            StartLine = "HTTP/1.1 200 OK",
+            Body = new BodyPreview
+            {
+                Length = 5000,
+                CapturedLength = 32,
+                IsBinary = true,
+                IsTruncated = true,
+                Preview = "Binary body (5,000 bytes)\n00 FF 10 20",
+                CapturedBytesPreview = "00FF1020",
+                CapturedBytesPreviewTruncated = true,
+            },
+        };
+        binary.Headers.Add(new HttpHeader("Content-Type", "application/octet-stream"));
+        var report = new SazReport { SourceName = "binary.saz" };
+        report.Sessions.Add(
+            new HttpSession
+            {
+                Id = "1",
+                ArchiveOrder = 0,
+                Response = binary,
+            });
+        var html = new HtmlReportGenerator().Generate(report);
+        var raw = CopyTextForPanel(html, "response-panel-raw");
+
+        Assert.Contains("Format: Binary / hex", raw, StringComparison.Ordinal);
+        Assert.Contains("Binary body; showing a bounded, truncated hex preview.", raw, StringComparison.Ordinal);
+        Assert.Contains("[Body preview truncated; the complete body is not retained in this report.]", raw, StringComparison.Ordinal);
+        Assert.Contains("Captured bytes (pre-decode)\n00FF1020\n[Captured byte preview truncated]", raw, StringComparison.Ordinal);
+        Assert.Contains("disabled aria-disabled=\"true\"", PanelCopyButton(html, "response-panel-json"));
+
+        var oversized = Message(
+            "POST /large HTTP/1.1",
+            "text/plain",
+            new string('x', (1024 * 1024) + 1));
+        var oversizedReport = new SazReport { SourceName = "oversized.saz" };
+        oversizedReport.Sessions.Add(
+            new HttpSession
+            {
+                Id = "2",
+                ArchiveOrder = 0,
+                Request = oversized,
+            });
+        var oversizedHtml = new HtmlReportGenerator().Generate(oversizedReport);
+        var oversizedButton = PanelCopyButton(oversizedHtml, "request-panel-raw");
+        Assert.Contains("data-copy-error=\"Copy source exceeds the 1 MiB safety limit.\"", oversizedButton);
+        Assert.DoesNotContain("data-copy-key=", oversizedButton, StringComparison.Ordinal);
+        Assert.Contains("data-copy-field=\"displayRawBody\"", oversizedHtml, StringComparison.Ordinal);
+        Assert.Contains(
+            "[Body display truncated at the 256 KiB rendering limit.]",
+            CopyModelTextForPanel(oversizedHtml, "request-panel-raw", "displayRawBody"),
+            StringComparison.Ordinal);
+
+        var oversizedHeaders = Message("GET /headers HTTP/1.1", "text/plain", "body");
+        oversizedHeaders.Headers.Add(new HttpHeader("X-Large", new string('h', (1024 * 1024) + 1)));
+        var oversizedHeadersReport = new SazReport { SourceName = "oversized-headers.saz" };
+        oversizedHeadersReport.Sessions.Add(new HttpSession
+        {
+            Id = "3",
+            ArchiveOrder = 0,
+            Request = oversizedHeaders,
+        });
+        var oversizedHeadersHtml = new HtmlReportGenerator().Generate(oversizedHeadersReport);
+        Assert.Contains(
+            "data-copy-error=\"Copy source exceeds the 1 MiB safety limit.\"",
+            PanelCopyButton(oversizedHeadersHtml, "request-panel-headers"),
+            StringComparison.Ordinal);
+        Assert.Contains("data-copy-field=\"displayHeaders\"", oversizedHeadersHtml, StringComparison.Ordinal);
+        Assert.Contains(
+            "[Header display truncated at the 256 KiB rendering limit.]",
+            CopyModelTextForPanel(oversizedHeadersHtml, "request-panel-headers", "displayHeaders"),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WiresFullKeyboardAndRovingTabindexBehaviorForTabs()
     {
         var report = new SazReport { SourceName = "keyboard.saz" };
@@ -247,7 +402,7 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains(".tab-strip [role=tab]:disabled{color:", html, StringComparison.Ordinal);
 
         // setupTabs/highlighting/tree/protocol rendering runs on every row load.
-        Assert.Contains("highlightSelected(inspectorBody);", html, StringComparison.Ordinal);
+        Assert.Contains("highlightSelected(panel);", html, StringComparison.Ordinal);
         Assert.Contains("renderProtocolTrees(inspectorBody);", html, StringComparison.Ordinal);
         Assert.Contains("renderValueTrees(inspectorBody,generation);", html, StringComparison.Ordinal);
         Assert.Contains("setupTabs(inspectorBody);", html, StringComparison.Ordinal);
@@ -964,8 +1119,8 @@ public sealed class HtmlReportGeneratorTests
             "id=\"response-tab-xml\" aria-controls=\"response-panel-xml\" aria-selected=\"false\" data-tab=\"xml\" tabindex=\"-1\" disabled aria-disabled=\"true\">XML",
             html,
             StringComparison.Ordinal);
-        Assert.Contains("{not valid json", html, StringComparison.Ordinal);
-        Assert.Contains("&lt;root&gt;&lt;unterminated&gt;", html, StringComparison.Ordinal);
+        Assert.Contains("{not valid json", CopyTextForPanel(html, "request-panel-raw"), StringComparison.Ordinal);
+        Assert.Contains("<root><unterminated>", CopyTextForPanel(html, "response-panel-raw"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -990,11 +1145,9 @@ public sealed class HtmlReportGeneratorTests
         var html = new HtmlReportGenerator().Generate(report);
         var capturedCharacters = payload.Length * report.Sessions.Count;
 
-        // Each session legitimately embeds the body up to three times (raw text in the Raw tab,
-        // pretty-printed/indented text in the Pretty Text subview, and a capped tree payload), so
-        // growth is proportional but not one-to-one with the captured preview length. What must
-        // NOT happen is per-token server-side syntax-highlighting markup (one <span> per token),
-        // which would multiply size by roughly the token count instead of a small constant factor.
+        // Display/copy strings share one compressed per-side model while the capped tree payload
+        // remains separately available for lazy rendering. Server-side token markup must not
+        // multiply report size by the token count.
         Assert.True(
             html.Length < capturedCharacters * 16,
             $"Expected compact bounded rendering, but {capturedCharacters:N0} captured characters produced {html.Length:N0} HTML characters.");
@@ -1196,13 +1349,14 @@ public sealed class HtmlReportGeneratorTests
         var rawSection = rawPanelEnd > rawPanelStart ? html[rawPanelStart..rawPanelEnd] : html[rawPanelStart..];
 
         Assert.Contains("Original headers", rawSection, StringComparison.Ordinal);
-        Assert.Contains("Content-Encoding: gzip", rawSection, StringComparison.Ordinal);
         Assert.Contains("Decoded body", rawSection, StringComparison.Ordinal);
         Assert.Contains("decode-status", rawSection, StringComparison.Ordinal);
         Assert.Contains("Decoded in wire-removal order: content: gzip.", rawSection, StringComparison.Ordinal);
-        Assert.Contains("hello", rawSection, StringComparison.Ordinal);
         Assert.Contains("<details class=\"captured-bytes\"><summary>Captured bytes (pre-decode)</summary>", rawSection, StringComparison.Ordinal);
-        Assert.Contains("1F 8B 08 00 00 00 00 00", rawSection, StringComparison.Ordinal);
+        var rawCopy = CopyTextForPanel(html, "response-panel-raw");
+        Assert.Contains("Content-Encoding: gzip", rawCopy, StringComparison.Ordinal);
+        Assert.Contains("hello", rawCopy, StringComparison.Ordinal);
+        Assert.Contains("1F 8B 08 00 00 00 00 00", rawCopy, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1249,7 +1403,7 @@ public sealed class HtmlReportGeneratorTests
             html,
             StringComparison.Ordinal);
         Assert.Contains("Binary / hex", html, StringComparison.Ordinal);
-        Assert.Contains("DE AD BE EF", html, StringComparison.Ordinal);
+        Assert.Contains("DE AD BE EF", CopyTextForPanel(html, "response-panel-raw"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1337,15 +1491,52 @@ public sealed class HtmlReportGeneratorTests
         Assert.DoesNotContain(headerAttack, html, StringComparison.Ordinal);
         Assert.DoesNotContain(mapiAttack, html, StringComparison.Ordinal);
         Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);
-        Assert.Contains("&lt;/script&gt;&lt;svg onload=alert(&#39;json&#39;)&gt;", html, StringComparison.Ordinal);
-        Assert.Contains("&lt;/script&gt;&lt;svg onload=alert(&#39;xml&#39;)&gt;", html, StringComparison.Ordinal);
-        Assert.Contains("&lt;/script&gt;&lt;svg onload=alert(&#39;header&#39;)&gt;", html, StringComparison.Ordinal);
+        Assert.Equal(
+            new BodyFormatter().Format(request.Body, "application/json").Formatted,
+            CopyTextForPanel(html, "request-panel-json"));
+        Assert.Contains(xmlAttack, CopyTextForPanel(html, "response-panel-raw"), StringComparison.Ordinal);
+        Assert.Contains(headerAttack, CopyTextForPanel(html, "request-panel-headers"), StringComparison.Ordinal);
 
         // The JSON tree payload itself (client-parsed via JSON.parse, never innerHTML) must also
         // never carry the raw, unescaped attack string.
         using var payload = ExtractTreePayload(html, "data-json-tree");
         var value = payload.RootElement.GetProperty("children")[0].GetProperty("value").GetString();
         Assert.Equal(jsonAttack, value);
+    }
+
+    private static string PanelCopyButton(string html, string panelId)
+    {
+        var panelStart = html.IndexOf($"id=\"{panelId}\"", StringComparison.Ordinal);
+        Assert.True(panelStart >= 0, $"Panel {panelId} was not found.");
+        var buttonStart = html.IndexOf("<button", panelStart, StringComparison.Ordinal);
+        var buttonEnd = html.IndexOf("</button>", buttonStart, StringComparison.Ordinal);
+        Assert.True(buttonStart >= 0 && buttonEnd > buttonStart, $"Copy button for {panelId} was not found.");
+        return html[buttonStart..(buttonEnd + "</button>".Length)];
+    }
+
+    private static string CopyTextForPanel(string html, string panelId)
+    {
+        var key = panelId[(panelId.LastIndexOf('-') + 1)..];
+        return CopyModelTextForPanel(html, panelId, key);
+    }
+
+    private static string CopyModelTextForPanel(string html, string panelId, string key)
+    {
+        var panelStart = html.IndexOf($"id=\"{panelId}\"", StringComparison.Ordinal);
+        Assert.True(panelStart >= 0, $"Panel {panelId} was not found.");
+        var messagePanelStart = html.LastIndexOf("<section class=\"message-panel\"", panelStart, StringComparison.Ordinal);
+        Assert.True(messagePanelStart >= 0, $"Message panel for {panelId} was not found.");
+        const string marker = "data-copy-model=\"";
+        var start = html.IndexOf(marker, messagePanelStart, StringComparison.Ordinal);
+        Assert.True(start >= 0 && start < panelStart, $"Copy model for {panelId} was not found.");
+        start += marker.Length;
+        var end = html.IndexOf('"', start);
+        Assert.True(end >= start, $"Copy model for {panelId} was malformed.");
+        var compressed = Convert.FromBase64String(html[start..end]);
+        using var input = new MemoryStream(compressed);
+        using var gzip = new GZipStream(input, CompressionMode.Decompress);
+        using var document = JsonDocument.Parse(gzip);
+        return document.RootElement.GetProperty(key).GetString()!;
     }
 
     private static JsonDocument ExtractTreePayload(string html, string attributeName)

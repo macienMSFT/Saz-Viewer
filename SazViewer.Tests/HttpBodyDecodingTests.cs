@@ -428,7 +428,9 @@ public sealed class HttpBodyDecodingTests
         var html = new HtmlReportGenerator().Generate(new SazParser().Parse(saz));
 
         Assert.DoesNotContain("</script><img src=x onerror=alert(1)>", html, StringComparison.Ordinal);
-        Assert.Contains("&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;", html, StringComparison.Ordinal);
+        Assert.Contains("\\u003C/script\\u003E\\u003Cimg src=x onerror=alert(1)\\u003E", html, StringComparison.Ordinal);
+        Assert.Contains("data-copy-model=", html, StringComparison.Ordinal);
+        Assert.Contains("target.textContent=text.slice", html, StringComparison.Ordinal);
         Assert.Contains("Decoded body", html, StringComparison.Ordinal);
         Assert.Contains("Decoded in wire-removal order: content: gzip.", html, StringComparison.Ordinal);
         Assert.Contains("Captured bytes", html, StringComparison.Ordinal);

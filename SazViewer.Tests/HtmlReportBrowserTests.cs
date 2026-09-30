@@ -7,6 +7,8 @@ namespace SazViewer.Tests;
 public sealed class HtmlReportBrowserTests
 {
     private const string InjectionText = "<img src=x onerror=globalThis.pwned=true>";
+    private const string RequestBody = """{"payload":{"enabled":true},"items":[1,2]}""";
+    private const string ResponseBody = "<root><value>safe</value></root>";
 
     [WindowsEdgeFact]
     public async Task GeneratedReportInspectorIsVisibleAndInteractiveAtDesktopAndNarrowWidths()
@@ -29,6 +31,7 @@ public sealed class HtmlReportBrowserTests
             await VerifyInspectorAsync(browser, reportPath, 480, exerciseAllControls: false);
             await VerifyNewTabInspectorAsync(browser, reportPath);
             await VerifyInvalidInspectorStateAsync(browser, reportPath);
+            await VerifyCopyModelFailureStatesAsync(browser, tempDirectory);
         }
         finally
         {
@@ -50,6 +53,7 @@ public sealed class HtmlReportBrowserTests
         {
             ViewportSize = new ViewportSize { Width = width, Height = 900 },
         });
+        await InstallClipboardTestHookAsync(page);
         page.PageError += (_, error) => errors.Add($"page error: {error}");
         page.Console += (_, message) =>
         {
@@ -82,6 +86,23 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal("true", await page.Locator("#primary-tab-request").GetAttributeAsync("aria-selected"));
             Assert.Contains("payload", await page.Locator("#primary-panel-request").InnerTextAsync());
 
+            await page.Locator("#request-tab-json").ClickAsync();
+            Assert.False(await page.Locator("#request-panel-json .tree-subview").EvaluateAsync<bool>(
+                "tree => tree.classList.contains('hidden')"));
+            Assert.Equal(ExpectedJson(), await CopyAndReadAsync(page, "request-panel-json"));
+            var jsonCopyButton = page.Locator("#request-panel-json .copy-button");
+            Assert.Equal("Copied", await jsonCopyButton.InnerTextAsync());
+            Assert.Contains("Copied request JSON pretty text", await page.Locator("#request-panel-json .copy-status").InnerTextAsync());
+            await page.WaitForTimeoutAsync(1600);
+            Assert.Equal("Copy", await jsonCopyButton.InnerTextAsync());
+
+            await page.Locator("#request-tab-headers").ClickAsync();
+            Assert.Equal(
+                "POST /formatted HTTP/1.1\nContent-Type: application/json\n",
+                await CopyAndReadAsync(page, "request-panel-headers", keyboard: true));
+            await page.Locator("#request-tab-raw").ClickAsync();
+            Assert.Equal(ExpectedRequestRaw(), await CopyAndReadAsync(page, "request-panel-raw"));
+
             await page.Locator("#primary-tab-response").ClickAsync();
             Assert.Equal("true", await page.Locator("#primary-tab-response").GetAttributeAsync("aria-selected"));
             Assert.False(await page.Locator("#primary-panel-response").EvaluateAsync<bool>(
@@ -89,17 +110,35 @@ public sealed class HtmlReportBrowserTests
             Assert.True(await page.Locator("#primary-panel-request").EvaluateAsync<bool>(
                 "panel => panel.classList.contains('hidden')"));
             Assert.Contains("safe", await page.Locator("#response-panel-xml").InnerTextAsync());
+            Assert.Equal(ExpectedXml(), await CopyAndReadAsync(page, "response-panel-xml"));
+            Assert.True(await page.Locator("#response-panel-mapi .copy-button").IsDisabledAsync());
 
             await page.Locator("#response-tab-headers").ClickAsync();
             Assert.Contains("Content-Type: application/xml", await page.Locator("#response-panel-headers").InnerTextAsync());
+            Assert.Equal(
+                "HTTP/1.1 200 OK\nContent-Type: application/xml\n",
+                await CopyAndReadAsync(page, "response-panel-headers"));
             await page.Locator("#response-tab-raw").ClickAsync();
             Assert.Contains("<root><value>safe</value></root>", await page.Locator("#response-panel-raw").InnerTextAsync());
+            Assert.Equal(ExpectedResponseRaw(), await CopyAndReadAsync(page, "response-panel-raw", mode: "fallback"));
+            Assert.True(await page.EvaluateAsync<bool>("globalThis.__fallbackFocusedInInspector"));
+
+            await page.EvaluateAsync("globalThis.__clipboardMode='failure';globalThis.__copiedText=null");
+            await page.Locator("#response-panel-raw .copy-button").ClickAsync();
+            await Assertions.Expect(page.Locator("#response-panel-raw .copy-status"))
+                .ToContainTextAsync("Copy failed");
+            Assert.Equal("Copy", await page.Locator("#response-panel-raw .copy-button").InnerTextAsync());
 
             if (exerciseAllControls)
             {
                 await page.Locator("#inspectorNext").ClickAsync();
                 Assert.Equal("true", await page.Locator("#primary-tab-request").GetAttributeAsync("aria-selected"));
+                await Assertions.Expect(page.Locator("#request-panel-raw .copy-button")).ToBeEnabledAsync();
                 Assert.Contains("Binary body", await page.Locator("#request-panel-raw").InnerTextAsync());
+                await page.Locator("#request-panel-raw .captured-bytes summary").ClickAsync();
+                Assert.Contains(
+                    "00FF1020\n[Captured byte preview truncated]",
+                    await page.Locator("#request-panel-raw .captured-bytes pre").InnerTextAsync());
                 await page.Locator("#primary-tab-response").ClickAsync();
                 Assert.Contains("No response entry was captured", await page.Locator("#primary-panel-response").InnerTextAsync());
 
@@ -115,6 +154,10 @@ public sealed class HtmlReportBrowserTests
                     .GetByRole(AriaRole.Button, new() { Name = "Expand all" })
                     .ClickAsync();
                 Assert.Contains("PropertyValue", await page.Locator("#request-panel-mapi").InnerTextAsync());
+                await page.Locator("#request-panel-mapi")
+                    .GetByRole(AriaRole.Button, new() { Name = "Collapse all" })
+                    .ClickAsync();
+                Assert.Equal(ExpectedMapi(), await CopyAndReadAsync(page, "request-panel-mapi"));
                 await page.Keyboard.PressAsync("Escape");
                 Assert.False(await page.Locator("#httpInspector").EvaluateAsync<bool>("dialog => dialog.open"));
             }
@@ -135,6 +178,7 @@ public sealed class HtmlReportBrowserTests
         {
             ViewportSize = new ViewportSize { Width = 1280, Height = 800 },
         });
+        await InstallClipboardTestHookAsync(page);
         CaptureErrors(page, originalErrors);
         IPage? popup = null;
         try
@@ -167,6 +211,11 @@ public sealed class HtmlReportBrowserTests
             var popupRequest = await popup.Locator("#primary-panel-request").BoundingBoxAsync();
             Assert.NotNull(popupRequest);
             Assert.True(popupRequest.Y < 300 && popupRequest.Height > 400);
+            await popup.Locator("#request-tab-json").ClickAsync();
+            Assert.Equal(
+                ExpectedJson(),
+                await CopyAndReadAsync(popup, "request-panel-json", mode: "fallback"));
+            Assert.True(await popup.EvaluateAsync<bool>("globalThis.__fallbackFocusedInInspector"));
 
             await popup.Locator("#primary-tab-response").ClickAsync();
             await popup.Locator("#response-tab-raw").ClickAsync();
@@ -269,6 +318,170 @@ public sealed class HtmlReportBrowserTests
         };
     }
 
+    private static async Task VerifyCopyModelFailureStatesAsync(IBrowser browser, string tempDirectory)
+    {
+        var oversizedMessage = Message(
+            "POST /oversized HTTP/1.1",
+            "text/plain",
+            new string('x', (1024 * 1024) + 1));
+        oversizedMessage.Headers.Add(new HttpHeader("X-Large", new string('h', (1024 * 1024) + 1)));
+        var oversizedReport = new SazReport { SourceName = "oversized-browser.saz" };
+        oversizedReport.Sessions.Add(new HttpSession
+        {
+            Id = "oversized",
+            ArchiveOrder = 0,
+            Request = oversizedMessage,
+        });
+        var oversizedPath = Path.Combine(tempDirectory, "oversized report.html");
+        await File.WriteAllTextAsync(oversizedPath, new HtmlReportGenerator().Generate(oversizedReport));
+
+        var oversizedPage = await browser.NewPageAsync();
+        try
+        {
+            await oversizedPage.GotoAsync(new Uri(oversizedPath).AbsoluteUri);
+            await oversizedPage.Locator("#httpTable tbody tr").ClickAsync();
+            await Assertions.Expect(oversizedPage.Locator("#request-panel-raw .body-view"))
+                .ToContainTextAsync("[Body display truncated at the 256 KiB rendering limit.]");
+            await Assertions.Expect(oversizedPage.Locator("#request-panel-raw .headers"))
+                .ToContainTextAsync("[Header display truncated at the 256 KiB rendering limit.]");
+            var copy = oversizedPage.Locator("#request-panel-raw .copy-button");
+            await copy.ClickAsync();
+            await Assertions.Expect(oversizedPage.Locator("#request-panel-raw .copy-status"))
+                .ToContainTextAsync("Copy source exceeds the 1 MiB safety limit.");
+        }
+        finally
+        {
+            await oversizedPage.CloseAsync();
+        }
+
+        await using var unsupportedContext = await browser.NewContextAsync();
+        await unsupportedContext.AddInitScriptAsync(
+            "Object.defineProperty(globalThis,'DecompressionStream',{configurable:true,value:undefined})");
+        var unsupportedPage = await unsupportedContext.NewPageAsync();
+        var errors = new List<string>();
+        CaptureErrors(unsupportedPage, errors);
+        try
+        {
+            var standardPath = Path.Combine(tempDirectory, "capture report.html");
+            await unsupportedPage.GotoAsync(new Uri(standardPath).AbsoluteUri);
+            await unsupportedPage.Locator("#httpTable tbody tr").First.ClickAsync();
+            await unsupportedPage.Locator("#request-tab-raw").ClickAsync();
+            await Assertions.Expect(unsupportedPage.Locator("#request-panel-raw .body-view"))
+                .ToContainTextAsync("Content could not be displayed because this browser could not read the compressed local report data.");
+            var copy = unsupportedPage.Locator("#request-panel-raw .copy-button");
+            await Assertions.Expect(copy).ToBeEnabledAsync();
+            await copy.ClickAsync();
+            await Assertions.Expect(unsupportedPage.Locator("#request-panel-raw .copy-status"))
+                .ToContainTextAsync("Copy data could not be prepared.");
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            await unsupportedPage.CloseAsync();
+        }
+    }
+
+    private static async Task InstallClipboardTestHookAsync(IPage page)
+    {
+        await page.Context.AddInitScriptAsync(
+            """
+            globalThis.__clipboardMode='modern';
+            globalThis.__copiedText=null;
+            globalThis.__fallbackFocusedInInspector=false;
+            Object.defineProperty(navigator,'clipboard',{
+              configurable:true,
+              value:{
+                writeText(text){
+                  if(globalThis.__clipboardMode==='modern'){
+                    globalThis.__copiedText=text;
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error('clipboard denied for test'));
+                }
+              }
+            });
+            const nativeExecCommand=Document.prototype.execCommand;
+            window.addEventListener('copy',event=>{
+              if(globalThis.__clipboardMode!=='fallback')return;
+              globalThis.__fallbackFocusedInInspector=
+                document.activeElement?.matches('textarea[aria-hidden="true"]')===true&&
+                document.activeElement?.closest('dialog')?.id==='httpInspector';
+              globalThis.__copiedText=event.clipboardData?.getData('text/plain')??null;
+            });
+            Document.prototype.execCommand=function(command,...args){
+              if(command==='copy'&&globalThis.__clipboardMode==='failure')return false;
+              return nativeExecCommand.call(this,command,...args);
+            };
+            """);
+    }
+
+    private static async Task<string?> CopyAndReadAsync(
+        IPage page,
+        string panelId,
+        string mode = "modern",
+        bool keyboard = false)
+    {
+        await page.EvaluateAsync(
+            "mode=>{globalThis.__clipboardMode=mode;globalThis.__copiedText=null;globalThis.__fallbackFocusedInInspector=false}",
+            mode);
+        var button = page.Locator($"#{panelId} .copy-button");
+        await Assertions.Expect(button).ToBeEnabledAsync();
+        if (keyboard)
+        {
+            await button.FocusAsync();
+            await page.Keyboard.PressAsync("Enter");
+        }
+        else
+        {
+            await button.ClickAsync();
+        }
+        await Assertions.Expect(button).ToHaveTextAsync("Copied");
+        return await page.EvaluateAsync<string?>("globalThis.__copiedText");
+    }
+
+    private static string ExpectedJson() =>
+        new BodyFormatter().Format(
+            new BodyPreview
+            {
+                Length = RequestBody.Length,
+                CapturedLength = RequestBody.Length,
+                Preview = RequestBody,
+            },
+            "application/json").Formatted;
+
+    private static string ExpectedXml() =>
+        new BodyFormatter().Format(
+            new BodyPreview
+            {
+                Length = ResponseBody.Length,
+                CapturedLength = ResponseBody.Length,
+                Preview = ResponseBody,
+            },
+            "application/xml").Formatted;
+
+    private static string ExpectedMapi() =>
+        "MAPI protocol (complete; 8 of 8 bytes)\n" +
+        "Execute [Operation] @0 +8\n" +
+        "  PropertyValue [Property] @4 +4 = safe";
+
+    private static string ExpectedRequestRaw() =>
+        "Original headers\n" +
+        "POST /formatted HTTP/1.1\n" +
+        "Content-Type: application/json\n\n" +
+        $"Body ({RequestBody.Length} B)\n" +
+        "Format: JSON\n" +
+        "Status: Parsed as JSON from Content-Type and body content.\n" +
+        RequestBody;
+
+    private static string ExpectedResponseRaw() =>
+        "Original headers\n" +
+        "HTTP/1.1 200 OK\n" +
+        "Content-Type: application/xml\n\n" +
+        $"Body ({ResponseBody.Length} B)\n" +
+        "Format: XML\n" +
+        "Status: Parsed as XML from Content-Type and body content.\n" +
+        ResponseBody;
+
     private static SazReport CreateReport()
     {
         var report = new SazReport { SourceName = "browser-test.saz" };
@@ -283,11 +496,11 @@ public sealed class HtmlReportBrowserTests
             Request = Message(
                 "POST /formatted HTTP/1.1",
                 "application/json",
-                """{"payload":{"enabled":true},"items":[1,2]}"""),
+                RequestBody),
             Response = Message(
                 "HTTP/1.1 200 OK",
                 "application/xml",
-                "<root><value>safe</value></root>"),
+                ResponseBody),
         };
         formatted.Warnings.Add("Synthetic warning that reproduces the collapsed session-details layout.");
         report.Sessions.Add(formatted);
@@ -367,6 +580,8 @@ public sealed class HtmlReportBrowserTests
                 CapturedLength = 4,
                 IsBinary = true,
                 Preview = "Binary body (4 bytes)\n00 FF 10 20",
+                CapturedBytesPreview = "00FF1020",
+                CapturedBytesPreviewTruncated = true,
             },
         };
         message.Headers.Add(new HttpHeader("Content-Type", "application/octet-stream"));
