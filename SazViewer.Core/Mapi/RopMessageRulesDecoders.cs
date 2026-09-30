@@ -33,11 +33,8 @@ namespace SazViewer.Core;
 /// [MS-OXCPERM] and [MS-OXCNOTIF].
 ///
 /// Explicitly UNSUPPORTED (named on purpose, never guessed):
-///  - RopNotify response (0x2A) "TableRowData" payload content: MS-OXCNOTIF ties its internal
-///    PropertyRow layout to whichever RopSetColumns a client issued on the notified table, which is
-///    external, capture-wide state this module has no access to. The *boundary* (TableRowDataSize
-///    plus that many bytes) is fully deterministic and is decoded; only the payload's internal
-///    structure is left as bounded raw bytes.
+///  - RopNotify response (0x2A) "TableRowData" payload content when no unambiguous successful prior
+///    RopSetColumns can be correlated to NotificationHandle. Its size-prefixed boundary remains raw.
 ///  - ReadRecipientRow (used by RopReadRecipients response, 0x0F): unlike RopModifyRecipients and
 ///    RopOpenMessage/RopReloadCachedInformation/RopOpenEmbeddedMessage, this response carries no
 ///    RecipientColumns array of its own, so there is no deterministic column list to decode each
@@ -123,7 +120,8 @@ internal static class RopMessageRulesDecoders
         MapiNodeBudget budget,
         CancellationToken cancellationToken,
         MapiCaptureContext? context = null,
-        string? captureScope = null)
+        string? captureScope = null,
+        List<string>? warnings = null)
     {
         var ropId = reader.PeekByte("RopId");
         if (!Supports(direction, ropId))
@@ -160,7 +158,8 @@ internal static class RopMessageRulesDecoders
             (MapiDirection.Response, 0x1F) => ParseGetMessageStatusResponse(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Response, 0x20) => ParseSetMessageStatusResponse(ref reader, operationIndex, handleReferences, budget),
             (MapiDirection.Response, 0x23) => ParseCreateAttachmentResponse(ref reader, operationIndex, handleReferences, budget),
-            (MapiDirection.Response, 0x2A) => ParseNotifyResponse(ref reader, operationIndex, budget, cancellationToken),
+            (MapiDirection.Response, 0x2A) => ParseNotifyResponse(
+                ref reader, operationIndex, budget, cancellationToken, context, captureScope, warnings),
             (MapiDirection.Response, 0x46) => ParseOpenEmbeddedMessageResponse(ref reader, operationIndex, handleReferences, budget, cancellationToken),
             (MapiDirection.Response, 0x52) => ParseGetValidAttachmentsResponse(ref reader, operationIndex, handleReferences, budget, cancellationToken),
             (MapiDirection.Response, 0x66) => ParseSetReadFlagsResponse(ref reader, operationIndex, handleReferences, budget),
@@ -577,7 +576,11 @@ internal static class RopMessageRulesDecoders
         for (var index = 0; index < columnCount; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var (declaredType, propertyId) = columns[index];
+            var (declaredTypeWithFlags, propertyId) = columns[index];
+            var declaredType = (ushort)(
+                (declaredTypeWithFlags & 0x2000) != 0
+                    ? declaredTypeWithFlags & ~0x3000
+                    : declaredTypeWithFlags);
             var valueStart = reader.Position;
             var valueChildren = ImmutableArray.CreateBuilder<MapiNode>();
             var actualType = declaredType;
@@ -843,7 +846,15 @@ internal static class RopMessageRulesDecoders
         _ => $"Unknown 0x{value:X4}",
     };
 
-    private static MapiNode ParseNotificationData(ref MapiReader reader, string name, MapiNodeBudget budget, CancellationToken cancellationToken)
+    private static MapiNode ParseNotificationData(
+        ref MapiReader reader,
+        string name,
+        MapiNodeBudget budget,
+        CancellationToken cancellationToken,
+        uint notificationHandle,
+        MapiCaptureContext? context,
+        string? captureScope,
+        List<string>? warnings)
     {
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
@@ -852,9 +863,11 @@ internal static class RopMessageRulesDecoders
         var flags = reader.ReadUInt16("NotificationFlags");
         ExtendedBufferParser.AddField(children, "NotificationFlags", flagsOffset, 2, FormatNotificationFlags(flags), budget);
         bool Has(ushort bit) => (flags & bit) != 0;
+        var notificationType = (ushort)(flags & NotificationTypeMask);
+        bool IsType(ushort type) => notificationType == type;
 
         ushort? tableEventType = null;
-        if (Has(NfTableModified))
+        if (IsType(NfTableModified))
         {
             var tableEventOffset = reader.Position;
             var value = reader.ReadUInt16("TableEventType");
@@ -863,12 +876,12 @@ internal static class RopMessageRulesDecoders
         }
 
         var isMessage = Has(NfM);
-        var notModifiedExtended = !Has(NfTableModified) && !Has(NfExtended);
-        var isCreateDeleteMovedCopied = Has(NfObjectCreated) || Has(NfObjectDeleted) || Has(NfObjectMoved) || Has(NfObjectCopied);
+        var notModifiedExtended = !IsType(NfTableModified) && !IsType(NfExtended);
+        var isCreateDeleteMovedCopied = IsType(NfObjectCreated) || IsType(NfObjectDeleted) || IsType(NfObjectMoved) || IsType(NfObjectCopied);
         var isSearchFolderMessage = Has(NfS) && Has(NfM);
         var isFolderEvent = !Has(NfS) && !Has(NfM);
-        var isMovedCopied = Has(NfObjectMoved) || Has(NfObjectCopied);
-        var isCreateModify = Has(NfObjectCreated) || Has(NfObjectModified);
+        var isMovedCopied = IsType(NfObjectMoved) || IsType(NfObjectCopied);
+        var isCreateModify = IsType(NfObjectCreated) || IsType(NfObjectModified);
 
         if (tableEventType is { } te)
         {
@@ -883,9 +896,12 @@ internal static class RopMessageRulesDecoders
                     AddUInt32Decimal(ref reader, children, "TableRowInstance", budget);
                 }
             }
-            if (isAm && isMessage)
+            if (isAm)
             {
                 children.Add(ParseFolderOrMessageId(ref reader, "InsertAfterTableRowFolderID", budget));
+            }
+            if (isAm && isMessage)
+            {
                 children.Add(ParseFolderOrMessageId(ref reader, "InsertAfterTableRowID", budget));
                 AddUInt32Decimal(ref reader, children, "InsertAfterTableRowInstance", budget);
             }
@@ -894,11 +910,49 @@ internal static class RopMessageRulesDecoders
                 var size = AddCount16(ref reader, children, "TableRowDataSize", budget);
                 var dataOffset = reader.Position;
                 var data = reader.ReadBytes(size, "TableRowData");
-                children.Add(ExtendedBufferParser.RawNode(
-                    "TableRowData (property columns require a prior RopSetColumns on this table; not decodable from this operation alone)",
-                    data,
-                    dataOffset,
-                    budget));
+                if (context is not null
+                    && context.TryGetTableColumnsByHandleValue(captureScope, notificationHandle, out var columns))
+                {
+                    var rowReader = new MapiReader(data, cancellationToken, dataOffset);
+                    try
+                    {
+                        var row = ParseRopPropertyRow(
+                            ref rowReader,
+                            "TableRowData",
+                            columns,
+                            columns.Length,
+                            budget,
+                            depth: 1,
+                            cancellationToken);
+                        if (!rowReader.End)
+                        {
+                            throw new MapiParseException(
+                                rowReader.Position,
+                                $"TableRowData has {rowReader.Remaining:N0} trailing byte(s) beyond its correlated PropertyRow.");
+                        }
+                        children.Add(row);
+                    }
+                    catch (MapiParseException exception)
+                    {
+                        warnings?.Add(
+                            $"RopNotify TableRowData could not be decoded against the correlated RopSetColumns list: {exception.Message}");
+                        children.Add(ExtendedBufferParser.RawNode(
+                            $"TableRowData (correlated columns did not consume the declared size: {exception.Message}; retained raw)",
+                            data,
+                            dataOffset,
+                            new MapiNodeBudget()));
+                    }
+                }
+                else
+                {
+                    warnings?.Add(
+                        $"RopNotify TableRowData for NotificationHandle 0x{notificationHandle:X8} has no unambiguous prior RopSetColumns list; bytes were retained raw.");
+                    children.Add(ExtendedBufferParser.RawNode(
+                        "TableRowData (no unambiguous prior RopSetColumns for NotificationHandle; retained raw)",
+                        data,
+                        dataOffset,
+                        budget));
+                }
             }
         }
 
@@ -1410,7 +1464,14 @@ internal static class RopMessageRulesDecoders
 
     // ---- MSOXCNOTIF response decoders -------------------------------------------------------------
 
-    private static MapiNode ParseNotifyResponse(ref MapiReader reader, int operationIndex, MapiNodeBudget budget, CancellationToken cancellationToken)
+    private static MapiNode ParseNotifyResponse(
+        ref MapiReader reader,
+        int operationIndex,
+        MapiNodeBudget budget,
+        CancellationToken cancellationToken,
+        MapiCaptureContext? context,
+        string? captureScope,
+        List<string>? warnings)
     {
         var start = reader.Position;
         var children = ImmutableArray.CreateBuilder<MapiNode>();
@@ -1418,10 +1479,18 @@ internal static class RopMessageRulesDecoders
 
         // NotificationHandle is an opaque server object handle value, not a byte-sized index into
         // the trailing handle table, so it is intentionally not added to handleReferences.
-        AddUInt32Hex(ref reader, children, "NotificationHandle", budget);
+        var notificationHandle = AddUInt32Hex(ref reader, children, "NotificationHandle", budget);
         ReadLogonId(ref reader, children, budget);
 
-        children.Add(ParseNotificationData(ref reader, "NotificationData", budget, cancellationToken));
+        children.Add(ParseNotificationData(
+            ref reader,
+            "NotificationData",
+            budget,
+            cancellationToken,
+            notificationHandle,
+            context,
+            captureScope,
+            warnings));
 
         return BuildOperation(ref reader, operationIndex, ropId, children, start, budget);
     }

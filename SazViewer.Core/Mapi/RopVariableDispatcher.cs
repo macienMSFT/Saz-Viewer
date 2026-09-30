@@ -51,7 +51,8 @@ internal static class RopVariableDispatcher
         var ropId = reader.PeekByte("RopId");
         if (RopFolderTableDecoders.Supports(direction, ropId))
         {
-            return RopFolderTableDecoders.Parse(ref reader, operationIndex, direction, handleReferences, budget, cancellationToken);
+            return RopFolderTableDecoders.Parse(
+                ref reader, operationIndex, direction, handleReferences, budget, cancellationToken, context, captureScope);
         }
 
         if (RopPropertyStoreDecoders.Supports(direction, ropId))
@@ -62,7 +63,15 @@ internal static class RopVariableDispatcher
         if (RopMessageRulesDecoders.Supports(direction, ropId))
         {
             return RopMessageRulesDecoders.Parse(
-                ref reader, operationIndex, direction, handleReferences, budget, cancellationToken, context, captureScope);
+                ref reader,
+                operationIndex,
+                direction,
+                handleReferences,
+                budget,
+                cancellationToken,
+                context,
+                captureScope,
+                warnings);
         }
 
         if (RopFastTransferDecoders.Supports(direction, ropId))

@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
 
 namespace SazViewer.Core;
@@ -41,6 +42,22 @@ internal static class RopBufferParser
 
         var listOffset = reader.Position;
         var ropList = reader.ReadBytes(ropSize - 2, "RopsList");
+        var malformedHandleTable = (reader.Remaining & 3) != 0;
+        if (malformedHandleTable)
+        {
+            context?.ClearSessionHandles(captureScope);
+            warnings.Add($"Server object handle table has {reader.Remaining} bytes, which is not divisible by four.");
+        }
+        else if (context is not null)
+        {
+            var values = ImmutableArray.CreateBuilder<uint>(reader.Remaining / sizeof(uint));
+            var handleBytes = decoded.Slice(reader.LocalPosition, reader.Remaining);
+            for (var offset = 0; offset < handleBytes.Length; offset += sizeof(uint))
+            {
+                values.Add(BinaryPrimitives.ReadUInt32LittleEndian(handleBytes[offset..]));
+            }
+            context.RecordSessionHandles(captureScope, values.ToImmutable());
+        }
         var handleReferences = new List<RopHandleReference>();
         if (!ropList.IsEmpty)
         {
@@ -66,9 +83,8 @@ internal static class RopBufferParser
         }
 
         var handlesOffset = reader.Position;
-        if ((reader.Remaining & 3) != 0)
+        if (malformedHandleTable)
         {
-            warnings.Add($"Server object handle table has {reader.Remaining} bytes, which is not divisible by four.");
             nodes.Add(ExtendedBufferParser.RawNode(
                 "Malformed server object handle table",
                 reader.ReadRemaining("handle table"),

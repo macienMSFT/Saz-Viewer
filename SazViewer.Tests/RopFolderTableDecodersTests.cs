@@ -553,9 +553,8 @@ public sealed class RopFolderTableDecodersTests
     }
 
     // ---------------------------------------------------------------------------------------------
-    // The three "ambiguous row data" responses: clean at RowCount==0/HasRowData==false, throw
-    // MapiParseException only when the specific captured instance truly has row data (which requires
-    // a prior RopSetColumns context this decoder does not - and must not - track globally).
+    // Table rows decode only against a successfully committed RopSetColumns list for the same logical
+    // connection and server object handle. Missing state retains the previous safe raw-fallback behavior.
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
@@ -601,6 +600,294 @@ public sealed class RopFolderTableDecodersTests
         var withRows = Concat([0x59, 0x00], Le((uint)0), Le((uint)5), Le((ushort)5));
         var exception = CaptureParseException(withRows, MapiDirection.Response);
         Assert.Contains("RopExpandRow", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DecodesQueryRowsAgainstColumnsCommittedBySuccessfulSetColumnsResponse()
+    {
+        var context = EstablishColumns(
+            "set-columns",
+            "mailbox-a",
+            0xAABBCCDD,
+            PropertyTag(0x0003, 0x3001),
+            PropertyTag(0x001F, 0x3002));
+        context.RegisterLogonCorrelationScope("query-rows", "mailbox-a");
+        context.RecordSessionHandles("query-rows", [0xAABBCCDD]);
+
+        var row1 = Concat([0x00], Le(42), Encoding.Unicode.GetBytes("Alpha\0"));
+        var row2 = Concat([0x00], Le(84), Encoding.Unicode.GetBytes("Beta\0"));
+        var response = Concat(
+            [0x15, 0x00],
+            Le((uint)0),
+            [0x00],
+            Le((ushort)2),
+            row1,
+            row2);
+
+        var op = ParseOneWithSentinel(
+            response,
+            MapiDirection.Response,
+            out var remaining,
+            context,
+            "query-rows");
+
+        var rows = Find(op.Children, "RowData");
+        Assert.Equal(2, rows.Children.Length);
+        Assert.Contains("42", Flatten(rows.Children[0]).Select(node => node.Value));
+        Assert.Contains("Alpha", Flatten(rows.Children[0]).Select(node => node.Value));
+        Assert.Contains("84", Flatten(rows.Children[1]).Select(node => node.Value));
+        Assert.Contains("Beta", Flatten(rows.Children[1]).Select(node => node.Value));
+        Assert.Equal([0xEE], remaining);
+    }
+
+    [Theory]
+    [InlineData((byte)0x4F)]
+    [InlineData((byte)0x59)]
+    public void DecodesFindAndExpandRowsAgainstCommittedColumns(byte ropId)
+    {
+        var context = EstablishColumns(
+            "set-columns",
+            "mailbox-a",
+            0x01020304,
+            PropertyTag(0x0003, 0x3001));
+        context.RegisterLogonCorrelationScope("rows", "mailbox-a");
+        context.RecordSessionHandles("rows", [0x01020304]);
+        var row = Concat([0x00], Le(123));
+        var response = ropId == 0x4F
+            ? Concat([ropId, 0x00], Le((uint)0), [0x00, 0x01], row)
+            : Concat([ropId, 0x00], Le((uint)0), Le((uint)1), Le((ushort)1), row);
+
+        var op = ParseOneWithSentinel(response, MapiDirection.Response, out var remaining, context, "rows");
+
+        Assert.Contains("123", Flatten(Find(op.Children, "RowData")).Select(node => node.Value));
+        Assert.Equal([0xEE], remaining);
+    }
+
+    [Fact]
+    public void FailedSetColumnsInvalidatesThePreviouslyCommittedColumnList()
+    {
+        var context = EstablishColumns(
+            "first-set",
+            "mailbox-a",
+            0x11111111,
+            PropertyTag(0x0003, 0x3001));
+        context.RegisterLogonCorrelationScope("failed-set", "mailbox-a");
+        context.RecordSessionHandles("failed-set", [0x11111111]);
+        var request = Concat(
+            [0x12, 0x00, 0x00, 0x00],
+            Le((ushort)1),
+            PropertyTag(0x0002, 0x3001));
+        ParseOneWithSentinel(request, MapiDirection.Request, out _, context, "failed-set");
+        var failure = Concat([0x12, 0x00], Le((uint)0x80000001));
+        ParseOneWithSentinel(failure, MapiDirection.Response, out _, context, "failed-set");
+
+        context.RegisterLogonCorrelationScope("query", "mailbox-a");
+        context.RecordSessionHandles("query", [0x11111111]);
+        var row = Concat([0x15, 0x00], Le((uint)0), [0x00], Le((ushort)1), [0x00], Le(123456));
+        var exception = CaptureParseException(row, MapiDirection.Response, context, "query");
+
+        Assert.Contains("no unambiguous active column list", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TableColumnsNeverLeakAcrossLogicalConnectionsThatReuseAHandleValue()
+    {
+        var context = EstablishColumns(
+            "set-columns",
+            "mailbox-a",
+            0x22222222,
+            PropertyTag(0x0003, 0x3001));
+        context.RegisterLogonCorrelationScope("other-mailbox", "mailbox-b");
+        context.RecordSessionHandles("other-mailbox", [0x22222222]);
+        var response = Concat(
+            [0x15, 0x00],
+            Le((uint)0),
+            [0x00],
+            Le((ushort)1),
+            [0x00],
+            Le(7));
+
+        var exception = CaptureParseException(
+            response,
+            MapiDirection.Response,
+            context,
+            "other-mailbox");
+
+        Assert.Contains("no unambiguous active column list", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RopReleaseInvalidatesColumnsForTheReleasedServerHandle()
+    {
+        var context = EstablishColumns(
+            "set-columns",
+            "mailbox-a",
+            0x33333333,
+            PropertyTag(0x0003, 0x3001));
+        context.RegisterLogonCorrelationScope("release", "mailbox-a");
+        context.RecordSessionHandles("release", [0x33333333]);
+        Assert.True(context.TryGetTableColumns("release", 0, out _));
+
+        var operations = RopSemanticParser.ParseOperations(
+            [0x01, 0x00, 0x00],
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            [],
+            CancellationToken.None,
+            captureScope: "release",
+            context: context);
+
+        Assert.Single(operations);
+        Assert.False(context.TryGetTableColumns("release", 0, out _));
+    }
+
+    [Fact]
+    public void SuccessfulRopResetTableInvalidatesColumns()
+    {
+        var context = EstablishColumns(
+            "set-columns",
+            "mailbox-a",
+            0x44444444,
+            PropertyTag(0x0003, 0x3001));
+        context.RegisterLogonCorrelationScope("reset", "mailbox-a");
+        context.RecordSessionHandles("reset", [0x44444444]);
+        Assert.True(context.TryGetTableColumns("reset", 0, out _));
+
+        var requestOperations = RopSemanticParser.ParseOperations(
+            [0x81, 0x00, 0x00],
+            0,
+            MapiDirection.Request,
+            [],
+            new MapiNodeBudget(),
+            [],
+            CancellationToken.None,
+            captureScope: "reset",
+            context: context);
+        context.RecordSessionHandles("reset", [uint.MaxValue]);
+        var responseOperations = RopSemanticParser.ParseOperations(
+            Concat([0x81, 0x00], Le((uint)0)),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            [],
+            CancellationToken.None,
+            captureScope: "reset",
+            context: context);
+
+        context.RegisterLogonCorrelationScope("query-after-reset", "mailbox-a");
+        context.RecordSessionHandles("query-after-reset", [0x44444444]);
+        Assert.Single(requestOperations);
+        Assert.Single(responseOperations);
+        Assert.False(context.TryGetTableColumns("query-after-reset", 0, out _));
+    }
+
+    [Fact]
+    public void SetColumnsResolvesRequestPlaceholderFromTheResponseHandleTable()
+    {
+        const string scope = "set-columns";
+        const uint serverHandle = 0x55555555;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope(scope, "mailbox-a");
+        context.RecordSessionHandles(scope, [uint.MaxValue]);
+        var request = Concat(
+            [0x12, 0x00, 0x00, 0x00],
+            Le((ushort)1),
+            PropertyTag(0x0003, 0x3001));
+        ParseOneWithSentinel(request, MapiDirection.Request, out _, context, scope);
+
+        context.RecordSessionHandles(scope, [serverHandle]);
+        var response = Concat([0x12, 0x00], Le((uint)0), [0x00]);
+        ParseOneWithSentinel(response, MapiDirection.Response, out _, context, scope);
+
+        Assert.True(context.TryGetTableColumns(scope, 0, out var columns));
+        Assert.Equal([(Type: (ushort)0x0003, Id: (ushort)0x3001)], columns);
+    }
+
+    [Fact]
+    public void MissingSetColumnsResponseInvalidatesTheOldColumnListAtSessionEnd()
+    {
+        var context = EstablishColumns(
+            "original",
+            "mailbox-a",
+            0x66666666,
+            PropertyTag(0x0003, 0x3001));
+        context.RegisterLogonCorrelationScope("missing-response", "mailbox-a");
+        context.RecordSessionHandles("missing-response", [0x66666666]);
+        var replacementRequest = Concat(
+            [0x12, 0x00, 0x00, 0x00],
+            Le((ushort)1),
+            PropertyTag(0x0002, 0x3001));
+        ParseOneWithSentinel(
+            replacementRequest,
+            MapiDirection.Request,
+            out _,
+            context,
+            "missing-response");
+
+        context.CompleteHttpSession("missing-response");
+        context.RegisterLogonCorrelationScope("query", "mailbox-a");
+        context.RecordSessionHandles("query", [0x66666666]);
+
+        Assert.False(context.TryGetTableColumns("query", 0, out _));
+    }
+
+    [Fact]
+    public void SuccessfulOutputHandleAssignmentInvalidatesColumnsForAReusedHandle()
+    {
+        var context = EstablishColumns(
+            "original",
+            "mailbox-a",
+            0x77777777,
+            PropertyTag(0x0003, 0x3001));
+        context.RegisterLogonCorrelationScope("reuse", "mailbox-a");
+        context.RecordSessionHandles("reuse", [0x77777777]);
+        Assert.True(context.TryGetTableColumns("reuse", 0, out _));
+
+        var operations = RopSemanticParser.ParseOperations(
+            Concat([0x21, 0x00], Le((uint)0)),
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            [],
+            CancellationToken.None,
+            captureScope: "reuse",
+            context: context);
+
+        Assert.Single(operations);
+        Assert.False(context.TryGetTableColumns("reuse", 0, out _));
+    }
+
+    [Fact]
+    public void MalformedHandleTableClearsTheCurrentSessionsHandleResolution()
+    {
+        var context = EstablishColumns(
+            "original",
+            "mailbox-a",
+            0x88888888,
+            PropertyTag(0x0003, 0x3001));
+        context.RegisterLogonCorrelationScope("malformed", "mailbox-a");
+        context.RecordSessionHandles("malformed", [0x88888888]);
+        Assert.True(context.TryGetTableColumns("malformed", 0, out _));
+        var warnings = new List<string>();
+
+        var nodes = RopBufferParser.Parse(
+            [0x05, 0x00, 0x16, 0x00, 0x00, 0xEE],
+            0,
+            MapiDirection.Request,
+            warnings,
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            captureScope: "malformed",
+            context: context);
+
+        Assert.False(context.TryGetTableColumns("malformed", 0, out _));
+        Assert.Contains(warnings, warning => warning.Contains("not divisible by four", StringComparison.Ordinal));
+        Assert.Equal("RopGetStatus", Find(nodes, "ROP list").Children[0].Value!.Split(' ')[0]);
+        Assert.Contains(nodes, node => node.Name == "Malformed server object handle table");
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -699,11 +986,24 @@ public sealed class RopFolderTableDecodersTests
     /// byte, and asserts the decoder consumed exactly <paramref name="bytes"/>.Length bytes (proving
     /// the operation boundary is exact and multi-operation-safe), leaving only the sentinel behind.
     /// </summary>
-    private static MapiNode ParseOneWithSentinel(byte[] bytes, MapiDirection direction, out byte[] remaining)
+    private static MapiNode ParseOneWithSentinel(
+        byte[] bytes,
+        MapiDirection direction,
+        out byte[] remaining,
+        MapiCaptureContext? context = null,
+        string? captureScope = null)
     {
         var framed = Concat(bytes, [0xEE]);
         var reader = new MapiReader(framed, CancellationToken.None);
-        var node = RopFolderTableDecoders.Parse(ref reader, 0, direction, [], new MapiNodeBudget(), CancellationToken.None);
+        var node = RopFolderTableDecoders.Parse(
+            ref reader,
+            0,
+            direction,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context,
+            captureScope);
         Assert.Equal(bytes.Length, node.Length);
         Assert.Equal(bytes.Length, reader.Position);
         remaining = reader.ReadRemaining("sentinel").ToArray();
@@ -719,12 +1019,24 @@ public sealed class RopFolderTableDecodersTests
     /// try/catch (rather than <c>Assert.Throws</c> with a lambda) because <see cref="MapiReader"/> is
     /// a ref struct and cannot be captured by a delegate.
     /// </summary>
-    private static MapiParseException CaptureParseException(byte[] bytes, MapiDirection direction)
+    private static MapiParseException CaptureParseException(
+        byte[] bytes,
+        MapiDirection direction,
+        MapiCaptureContext? context = null,
+        string? captureScope = null)
     {
         var reader = new MapiReader(bytes, CancellationToken.None);
         try
         {
-            RopFolderTableDecoders.Parse(ref reader, 0, direction, [], new MapiNodeBudget(), CancellationToken.None);
+            RopFolderTableDecoders.Parse(
+                ref reader,
+                0,
+                direction,
+                [],
+                new MapiNodeBudget(),
+                CancellationToken.None,
+                context,
+                captureScope);
         }
         catch (MapiParseException ex)
         {
@@ -732,6 +1044,37 @@ public sealed class RopFolderTableDecodersTests
         }
         Assert.Fail("Expected a MapiParseException to be thrown.");
         return null!; // Unreachable; Assert.Fail always throws.
+    }
+
+    private static MapiCaptureContext EstablishColumns(
+        string captureScope,
+        string connectionScope,
+        uint serverHandle,
+        params byte[][] columns)
+    {
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope(captureScope, connectionScope);
+        context.RecordSessionHandles(captureScope, [serverHandle]);
+        var request = Concat(
+            [0x12, 0x00, 0x00, 0x00],
+            Le((ushort)columns.Length),
+            Concat(columns));
+        ParseOneWithSentinel(request, MapiDirection.Request, out _, context, captureScope);
+        var response = Concat([0x12, 0x00], Le((uint)0), [0x00]);
+        ParseOneWithSentinel(response, MapiDirection.Response, out _, context, captureScope);
+        return context;
+    }
+
+    private static IEnumerable<MapiNode> Flatten(MapiNode node)
+    {
+        yield return node;
+        foreach (var child in node.Children)
+        {
+            foreach (var descendant in Flatten(child))
+            {
+                yield return descendant;
+            }
+        }
     }
 
     /// <summary>MS-OXCDATA 2.12.3.4 Exist restriction: RestrictionType(0x08) + PropertyTag(4 bytes).</summary>

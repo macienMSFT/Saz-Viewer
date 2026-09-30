@@ -1032,7 +1032,84 @@ public sealed class RopMessageRulesDecodersTests
         Assert.Equal("TableRowAdded", Find(node, "TableEventType").Value);
         Assert.Equal(
             "010203",
-            Find(node, "TableRowData (property columns require a prior RopSetColumns on this table; not decodable from this operation alone)").Value);
+            Find(node, "TableRowData (no unambiguous prior RopSetColumns for NotificationHandle; retained raw)").Value);
+    }
+
+    [Fact]
+    public void ParsesRopNotifyTableRowDataAgainstColumnsForTheNotificationHandle()
+    {
+        const string scope = "notify-session";
+        const uint tableHandle = 0x01020304;
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope(scope, "mailbox-a");
+        context.RecordSessionHandles(scope, [tableHandle]);
+        context.EnqueueSetColumns(
+            scope,
+            0,
+            [(Type: (ushort)0x3003, Id: (ushort)0x3001)]); // Multivalue + MultivalueInstance means one expanded scalar.
+        context.CompleteSetColumns(scope, 0, success: true);
+        Assert.True(context.TryGetTableColumnsByHandleValue(scope, tableHandle, out _));
+        var rowData = Concat([0x00], Le((uint)42));
+        var body = Concat(
+            Le((ushort)0x8100),
+            Le((ushort)3),
+            FolderOrMessageId(),
+            FolderOrMessageId(),
+            Le((uint)0),
+            FolderOrMessageId(),
+            FolderOrMessageId(),
+            Le((uint)0),
+            Le((ushort)rowData.Length),
+            rowData);
+        var ropList = Concat([0x2A], Le(tableHandle), [0x00], body);
+        var reader = NewReader(ropList);
+
+        var node = RopMessageRulesDecoders.Parse(
+            ref reader,
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None,
+            context,
+            scope);
+
+        Assert.True(reader.End);
+        var tableRow = AllNodes(node).FirstOrDefault(candidate => candidate.Name == "TableRowData");
+        Assert.True(
+            tableRow is not null,
+            string.Join(" | ", AllNodes(node).Select(candidate => candidate.Name)));
+        Assert.Equal("42", Find(tableRow!, "Value").Value);
+        Assert.Empty(FindAll(node.Children, "TableRowData (no unambiguous prior RopSetColumns for NotificationHandle; retained raw)"));
+    }
+
+    [Fact]
+    public void ParsesHierarchyTableRowAddedInsertAfterFolderIdWithoutMessageFlag()
+    {
+        byte[] rowData = [0x00];
+        var body = Concat(
+            Le((ushort)0x0100),
+            Le((ushort)3),
+            FolderOrMessageId(),
+            FolderOrMessageId(),
+            Le((ushort)rowData.Length),
+            rowData);
+        var ropList = Concat([0x2A], Le((uint)1), [0x00], body);
+        var reader = NewReader(ropList);
+
+        var node = RopMessageRulesDecoders.Parse(
+            ref reader,
+            0,
+            MapiDirection.Response,
+            [],
+            new MapiNodeBudget(),
+            CancellationToken.None);
+
+        Assert.True(reader.End);
+        Assert.NotNull(Find(node, "InsertAfterTableRowFolderID"));
+        Assert.Equal(
+            "00",
+            Find(node, "TableRowData (no unambiguous prior RopSetColumns for NotificationHandle; retained raw)").Value);
     }
 
     [Fact]
@@ -1398,6 +1475,18 @@ public sealed class RopMessageRulesDecodersTests
     }
 
     private static MapiNode Find(MapiNode root, string name) => Find(new[] { root }, name);
+
+    private static IEnumerable<MapiNode> AllNodes(MapiNode root)
+    {
+        yield return root;
+        foreach (var child in root.Children)
+        {
+            foreach (var descendant in AllNodes(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
 
     private static MapiNode Find(IEnumerable<MapiNode> nodes, string name)
     {

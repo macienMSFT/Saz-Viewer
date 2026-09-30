@@ -113,7 +113,7 @@
       },
       "totalRequest": 77,
       "totalResponse": 78,
-      "note": "Each family exposes disjoint Supports/Parse ROP-id-and-direction sets, verified pairwise and against the fixed-width schema catalog with no overlap; routed centrally by RopVariableDispatcher, which is invoked per-operation from RopSemanticParser.ParseOperations with capture-local FastTransfer reassembly state and, for the five state-dependent cases (RopWritePerUserInformation request, RopSetMessageReadFlag request, RopGetPropertiesSpecific/RopLogon/RopBufferTooSmall responses), an optional capture-local MapiCaptureContext for deterministic, bounded, transactional correlation. Same-round-trip state is keyed by HTTP session; logon privacy is keyed by logical MAPI connection plus LogonId, and conflicting observations become ambiguous raw fallback rather than last-writer-wins."
+      "note": "Each family exposes disjoint Supports/Parse ROP-id-and-direction sets, verified pairwise and against the fixed-width schema catalog with no overlap; routed centrally by RopVariableDispatcher, which is invoked per-operation from RopSemanticParser.ParseOperations with capture-local FastTransfer reassembly state and an optional capture-local MapiCaptureContext for deterministic, bounded, transactional correlation. Same-round-trip state is keyed by HTTP session; logon privacy is keyed by logical MAPI connection plus LogonId; table columns are keyed by logical connection plus server object handle and committed only after successful RopSetColumns. Failure, RopRelease, RopResetTable, reuse, or conflicting observations invalidate state and force raw fallback rather than guessing."
     },
     "auxiliaryPayloadSemanticDispatch": {
       "count": 40,
@@ -160,7 +160,8 @@
   },
   "remainingSemanticAreas": [
     "FastTransfer and ICS lexical/syntactical grammars and partial-stream reconstruction beyond the wired RopFastTransferDecoders/FastTransferStreamLexer boundary decoding; reassembly is capture-local and joins buffers only within the same MAPI/HTTP session, not across separate HTTP round-trips",
-    "Capture-local table-column and notification correlation beyond framing (e.g. RopQueryRows/RopFindRow/RopExpandRow row data and RopNotify response TableRowData internals, both of which depend on an earlier RopSetColumns elsewhere in the session)"
+    "RopReadRecipients response RecipientRow property internals remain bounded raw because that response carries no RecipientColumns array and the protocol does not identify a deterministic external column source",
+    "Generic property-value arrays intentionally refuse PtypRestriction, PtypRuleAction, and types outside the fixed MS-OXCDATA property table when no deterministic self-delimiting grammar is available"
   ],
   "safetyDivergences": [
     "Unknown operations, properties, restrictions, and auxiliary blocks are retained as bounded offset/length raw nodes with warnings.",
@@ -168,6 +169,8 @@
     "Extended-rule EntryID sizes and recipient/property counts use the 32-bit widths required by MS-OXORULE rather than the pinned upstream parser's narrower reads.",
     "All declared lengths, counts, strings, allocations, recursion, nodes, and payloads are explicitly bounded.",
     "Parser state is per capture rather than upstream static global state.",
+    "Table-column state is committed only after a successful RopSetColumns response and invalidated on failure, RopRelease, and successful RopResetTable; pinned upstream caches request state eagerly and does not perform those invalidations.",
+    "Hierarchy-table RopNotify row-added/row-modified parsing includes InsertAfterTableRowFolderID even when the Message flag is clear, correcting a pinned-upstream field-presence bug contradicted by MS-OXCNOTIF examples.",
     "Auxiliary offset-referenced trailer fields (e.g. MachineName/UserName/ServerDN/ProcessName/annotation strings) are resolved via bounds-checked random-access reads from validated offsets rather than upstream's unchecked sequential pointer arithmetic; out-of-range offsets warn and omit the field, while zero offsets represent absent fields and are omitted without warning.",
     "AUX_EXCEPTION_TRACE is decoded into an \"ExceptionMessage\" array of individual ExceptionMessage[0..N] line fields split on CR/LF from the bounded remainder after the fixed RopIndex header, rather than upstream's raw single-string dump; this is a readability enhancement and does not change the underlying bytes considered or bounds enforced."
   ]

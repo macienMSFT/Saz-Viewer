@@ -162,6 +162,63 @@ public sealed class MapiParserTests
                 && warning.Contains("could not be parsed", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void ReconstructsQueryRowsAcrossExecuteRoundTripsFromCommittedSetColumns()
+    {
+        const uint tableHandle = 0x12345678;
+        var setColumnsRequest = BuildBody(
+            stream =>
+            {
+                stream.Write([0x12, 0x00, 0x00, 0x00]);
+                WriteUInt16(stream, 1);
+                WriteUInt16(stream, 0x0003);
+                WriteUInt16(stream, 0x3001);
+            });
+        byte[] setColumnsResponse = [0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        byte[] queryRowsRequest = [0x15, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00];
+        var queryRowsResponse = BuildBody(
+            stream =>
+            {
+                stream.Write([0x15, 0x00]);
+                WriteUInt32(stream, 0);
+                stream.WriteByte(0);
+                WriteUInt16(stream, 1);
+                stream.WriteByte(0);
+                WriteUInt32(stream, 42);
+            });
+
+        using var saz = Fixture(
+            ("raw/30_c.txt", Http(
+                "POST /mapi/emsmdb/?MailboxId=mailbox-a HTTP/1.1",
+                ExecuteRequest(setColumnsRequest, tableHandle),
+                ("Host", "example.test"),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Execute"),
+                ("X-ClientInfo", "client-a"))),
+            ("raw/30_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                ExecuteResponse(setColumnsResponse, tableHandle),
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"))),
+            ("raw/31_c.txt", Http(
+                "POST /mapi/emsmdb/?MailboxId=mailbox-a HTTP/1.1",
+                ExecuteRequest(queryRowsRequest, tableHandle),
+                ("Host", "example.test"),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Execute"),
+                ("X-ClientInfo", "client-a"))),
+            ("raw/31_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                ExecuteResponse(queryRowsResponse, tableHandle),
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"))));
+
+        var report = new SazParser().Parse(saz);
+        var queryResponse = report.Sessions[1].Mapi!.Response!;
+        Assert.True(queryResponse.Complete);
+        Assert.Equal("42", Find(Find(queryResponse.Root, "RowData"), "Value").Value);
+    }
+
     [Theory]
     [InlineData(new byte[] { 0, 0, 0, 0, 0x41, 0x42, 0x43 }, 3, "ABC")]
     [InlineData(new byte[] { 0, 0, 0, 0x20, 0x41, 0x42, 0x09, 0 }, 6, "ABABAB")]
@@ -1280,14 +1337,14 @@ public sealed class MapiParserTests
         return result;
     }
 
-    private static byte[] ExecuteRequest(byte[] operation)
+    private static byte[] ExecuteRequest(byte[] operation, uint serverHandle = 0xFFFFFFFF)
     {
         var ropPayload = BuildBody(
             stream =>
             {
                 WriteUInt16(stream, checked((ushort)(2 + operation.Length)));
                 stream.Write(operation);
-                WriteUInt32(stream, 0xFFFFFFFF);
+                WriteUInt32(stream, serverHandle);
             });
         var extended = ExtendedBuffer(ropPayload, flags: 0x0004);
         return BuildBody(
@@ -1298,6 +1355,25 @@ public sealed class MapiParserTests
                 stream.Write(extended);
                 WriteUInt32(stream, 4096);
                 WriteUInt32(stream, 0);
+            });
+    }
+
+    private static byte[] ExecuteResponse(byte[] operation, uint serverHandle)
+    {
+        var ropPayload = BuildBody(
+            stream =>
+            {
+                WriteUInt16(stream, checked((ushort)(2 + operation.Length)));
+                stream.Write(operation);
+                WriteUInt32(stream, serverHandle);
+            });
+        var extended = ExtendedBuffer(ropPayload, flags: 0x0004);
+        return BuildResponse(
+            stream =>
+            {
+                WriteUInt32(stream, 0);
+                WriteUInt32(stream, checked((uint)extended.Length));
+                stream.Write(extended);
             });
     }
 

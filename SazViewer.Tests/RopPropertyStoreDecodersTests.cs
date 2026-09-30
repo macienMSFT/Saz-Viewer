@@ -921,7 +921,7 @@ public sealed class RopPropertyStoreDecodersTests
         // [MS-OXCSTOR] 2.2.3.4.2: RowCount(UInt32) followed by that many fixed-column PropertyRow
         // structures against PidTagFolderId(PtypInteger64)/PidTagMessageClass(PtypString8)/
         // PidTagLastModificationTime(PtypTime) - a protocol-fixed column list, not one supplied by an
-        // earlier RopSetColumns (unlike RopQueryRows/RopFindRow/RopExpandRow, which remain unsupported).
+        // earlier RopSetColumns (unlike RopQueryRows/RopFindRow/RopExpandRow, which use correlated state).
         var row1 = Concat([0x00], Le((ulong)1), Encoding.ASCII.GetBytes("IPM.Note"), [0x00], Le((ulong)0x0102030405060708));
         var row2 = Concat([0x00], Le((ulong)2), Encoding.ASCII.GetBytes("IPM.Appointment"), [0x00], Le((ulong)0x0807060504030201));
         var opBytes = Concat([0x68, 0x00], Le((uint)0), Le((uint)2), row1, row2);

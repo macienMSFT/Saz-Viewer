@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Globalization;
 
@@ -191,8 +192,23 @@ internal static class RopSemanticParser
                 }
                 operations.Add(node);
                 index++;
+                var newReferences = handleReferences
+                    .Where(reference => reference.OperationIndex == index - 1)
+                    .ToArray();
+                if (direction == MapiDirection.Response
+                    && ropList.Length - opStartLocal >= 6
+                    && BinaryPrimitives.ReadUInt32LittleEndian(ropList[(opStartLocal + 2)..]) == 0)
+                {
+                    foreach (var output in newReferences.Where(reference => reference.FieldName == "OutputHandleIndex"))
+                    {
+                        context?.InvalidateTableColumns(captureScope, output.Index);
+                    }
+                }
                 if (ropId == 0x01)
                 {
+                    var releaseHandle = newReferences.LastOrDefault(
+                        reference => reference.FieldName == "InputHandleIndex");
+                    context?.InvalidateTableColumns(captureScope, releaseHandle.Index);
                     if (checkpoints is not null)
                     {
                         checkpoints[^1] = reader.LocalPosition;
@@ -201,6 +217,17 @@ internal static class RopSemanticParser
                 else
                 {
                     checkpoints?.Add(reader.LocalPosition);
+                }
+                if (direction == MapiDirection.Response && ropId == 0x81)
+                {
+                    context?.CompleteResetTable(
+                        captureScope,
+                        ropList[opStartLocal + 1],
+                        BinaryPrimitives.ReadUInt32LittleEndian(ropList[(opStartLocal + 2)..]) == 0);
+                }
+                else if (direction == MapiDirection.Request && ropId == 0x81)
+                {
+                    context?.EnqueueResetTable(captureScope, ropList[opStartLocal + 2]);
                 }
             }
             catch (MapiParseException ex)

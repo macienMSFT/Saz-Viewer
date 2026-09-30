@@ -16,16 +16,11 @@ namespace SazViewer.Core;
 /// against [MS-OXCFOLD], [MS-OXCTABL], [MS-OXCDATA] (FolderID/MessageID/PropertyTag/restriction
 /// structures), and [MS-OXCROPS] (buffer framing).
 ///
-/// Row-bearing table responses (RopQueryRows, RopFindRow, RopExpandRow) embed a PropertyRow whose
-/// exact byte width depends on the property list established by a *different* (earlier)
-/// RopSetColumns operation. No cross-operation/table-column state is threaded into this decoder
-/// (per-operation, no global state), so those three responses decode their deterministic prefix
-/// (handle/ReturnValue/Origin/RowCount or RowNoLongerVisible+HasRowData) and, only when the actual
-/// captured bytes indicate row data truly follows (RowCount != 0, or HasRowData == true), throw
-/// <see cref="MapiParseException"/> instead of guessing a boundary. That exception is caught by the
-/// (future) caller's existing transactional per-operation fallback - identical to how any other
-/// malformed operation is handled - so every failure/empty-result instance of these three ROPs is
-/// still fully decoded, and only the genuinely indeterminate instances fall back to raw.
+/// Row-bearing table responses (RopQueryRows, RopFindRow, RopExpandRow) embed PropertyRows whose
+/// exact byte widths depend on the property list established by an earlier RopSetColumns operation.
+/// The optional capture context correlates that list by logical MAPI connection and server object
+/// handle. Missing, failed, released, reused, or ambiguous state throws into the caller's existing
+/// transactional raw fallback rather than guessing an operation boundary.
 ///
 /// <c>RopVariableDispatcher</c> routes supported folder/table operations here after the fixed
 /// semantic catalog declines them. The same <c>Supports</c>/<c>Parse</c> contract remains directly
@@ -100,7 +95,9 @@ internal static class RopFolderTableDecoders
         MapiDirection direction,
         List<RopHandleReference> handleReferences,
         MapiNodeBudget budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MapiCaptureContext? context = null,
+        string? captureScope = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var start = reader.Position;
@@ -112,11 +109,12 @@ internal static class RopFolderTableDecoders
 
         if (direction == MapiDirection.Request)
         {
-            ParseRequest(ref reader, ropId, operationIndex, handleReferences, budget, children);
+            ParseRequest(ref reader, ropId, operationIndex, handleReferences, budget, children, context, captureScope);
         }
         else
         {
-            ParseResponse(ref reader, ropId, operationIndex, handleReferences, budget, children);
+            ParseResponse(
+                ref reader, ropId, operationIndex, handleReferences, budget, children, context, captureScope, cancellationToken);
         }
 
         budget.Claim(0);
@@ -139,7 +137,9 @@ internal static class RopFolderTableDecoders
         int operationIndex,
         List<RopHandleReference> handleReferences,
         MapiNodeBudget budget,
-        ImmutableArray<MapiNode>.Builder children)
+        ImmutableArray<MapiNode>.Builder children,
+        MapiCaptureContext? context,
+        string? captureScope)
     {
         switch (ropId)
         {
@@ -223,11 +223,16 @@ internal static class RopFolderTableDecoders
                 return;
             }
             case 0x12: // RopSetColumns
+            {
                 AddLogonId(ref reader, children, budget);
-                AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                var handleIndex = AddHandleIndex(
+                    ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
                 AddByteField(ref reader, children, "SetColumnsFlags", budget);
-                AddCountedPropertyTags(ref reader, children, "PropertyTagCount", "PropertyTags", budget);
+                var columns = AddCountedPropertyTags(
+                    ref reader, children, "PropertyTagCount", "PropertyTags", budget);
+                context?.EnqueueSetColumns(captureScope, handleIndex, columns);
                 return;
+            }
             case 0x13: // RopSortTable
             {
                 AddLogonId(ref reader, children, budget);
@@ -310,7 +315,10 @@ internal static class RopFolderTableDecoders
         int operationIndex,
         List<RopHandleReference> handleReferences,
         MapiNodeBudget budget,
-        ImmutableArray<MapiNode>.Builder children)
+        ImmutableArray<MapiNode>.Builder children,
+        MapiCaptureContext? context,
+        string? captureScope,
+        CancellationToken cancellationToken)
     {
         switch (ropId)
         {
@@ -381,10 +389,12 @@ internal static class RopFolderTableDecoders
             case 0x05: // RopGetContentsTable
             case 0x04: // RopGetHierarchyTable
             {
-                AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                var handleIndex = AddHandleIndex(
+                    ref reader, children, "OutputHandleIndex", operationIndex, handleReferences, budget);
                 var success = AddReturnValue(ref reader, children, budget, out _);
                 if (success)
                 {
+                    context?.InvalidateTableColumns(captureScope, handleIndex);
                     AddUInt32Field(ref reader, children, "RowCount", budget);
                 }
                 return;
@@ -404,7 +414,6 @@ internal static class RopFolderTableDecoders
                 return;
             }
             case 0x38: // RopAbort
-            case 0x12: // RopSetColumns
             case 0x13: // RopSortTable
             case 0x14: // RopRestrict
             {
@@ -414,6 +423,18 @@ internal static class RopFolderTableDecoders
                 {
                     AddByteField(ref reader, children, "TableStatus", budget);
                 }
+                return;
+            }
+            case 0x12: // RopSetColumns
+            {
+                var handleIndex = AddHandleIndex(
+                    ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                var success = AddReturnValue(ref reader, children, budget, out _);
+                if (success)
+                {
+                    AddByteField(ref reader, children, "TableStatus", budget);
+                }
+                context?.CompleteSetColumns(captureScope, handleIndex, success);
                 return;
             }
             case 0x18: // RopSeekRow
@@ -489,9 +510,10 @@ internal static class RopFolderTableDecoders
                 }
                 return;
             }
-            case 0x15: // RopQueryRows - deterministic prefix; throws when row data is actually present.
+            case 0x15: // RopQueryRows
             {
-                AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                var handleIndex = AddHandleIndex(
+                    ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
                 var success = AddReturnValue(ref reader, children, budget, out _);
                 if (!success)
                 {
@@ -502,17 +524,16 @@ internal static class RopFolderTableDecoders
                 var rowCount = AddUInt16Field(ref reader, children, "RowCount", budget);
                 if (rowCount != 0)
                 {
-                    throw new MapiParseException(
-                        rowCountOffset,
-                        $"RopQueryRows response reports {rowCount} row(s); their byte width depends on a prior " +
-                        "RopSetColumns request's property list, which is not tracked across operations, so the " +
-                        "operation boundary cannot be determined safely.");
+                    var columns = RequireTableColumns(context, captureScope, handleIndex, rowCountOffset, "RopQueryRows");
+                    AddPropertyRows(
+                        ref reader, children, "RowData", rowCount, columns, budget, cancellationToken);
                 }
                 return;
             }
-            case 0x4F: // RopFindRow - deterministic prefix; throws when a row is actually present.
+            case 0x4F: // RopFindRow
             {
-                AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                var handleIndex = AddHandleIndex(
+                    ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
                 var success = AddReturnValue(ref reader, children, budget, out _);
                 if (!success)
                 {
@@ -523,17 +544,22 @@ internal static class RopFolderTableDecoders
                 var hasRowData = AddBoolField(ref reader, children, "HasRowData", budget);
                 if (hasRowData)
                 {
-                    throw new MapiParseException(
-                        hasRowDataOffset,
-                        "RopFindRow response reports HasRowData=true; the row's byte width depends on a prior " +
-                        "RopSetColumns request's property list, which is not tracked across operations, so the " +
-                        "operation boundary cannot be determined safely.");
+                    var columns = RequireTableColumns(context, captureScope, handleIndex, hasRowDataOffset, "RopFindRow");
+                    children.Add(RopMessageRulesDecoders.ParseRopPropertyRow(
+                        ref reader,
+                        "RowData",
+                        columns,
+                        columns.Length,
+                        budget,
+                        depth: 1,
+                        cancellationToken));
                 }
                 return;
             }
-            case 0x59: // RopExpandRow - deterministic prefix; throws when row data is actually present.
+            case 0x59: // RopExpandRow
             {
-                AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
+                var handleIndex = AddHandleIndex(
+                    ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
                 var success = AddReturnValue(ref reader, children, budget, out _);
                 if (!success)
                 {
@@ -544,17 +570,67 @@ internal static class RopFolderTableDecoders
                 var rowCount = AddUInt16Field(ref reader, children, "RowCount", budget);
                 if (rowCount != 0)
                 {
-                    throw new MapiParseException(
-                        rowCountOffset,
-                        $"RopExpandRow response reports {rowCount} row(s); their byte width depends on a prior " +
-                        "RopSetColumns request's property list, which is not tracked across operations, so the " +
-                        "operation boundary cannot be determined safely.");
+                    var columns = RequireTableColumns(context, captureScope, handleIndex, rowCountOffset, "RopExpandRow");
+                    AddPropertyRows(
+                        ref reader, children, "RowData", rowCount, columns, budget, cancellationToken);
                 }
                 return;
             }
             default:
                 throw new MapiParseException(reader.Position, $"RopFolderTableDecoders has no response decoder for 0x{ropId:X2}.");
         }
+    }
+
+    private static ImmutableArray<(ushort Type, ushort Id)> RequireTableColumns(
+        MapiCaptureContext? context,
+        string? captureScope,
+        uint handleIndex,
+        long offset,
+        string operationName)
+    {
+        if (context is not null
+            && context.TryGetTableColumns(captureScope, handleIndex, out var columns))
+        {
+            return columns;
+        }
+
+        throw new MapiParseException(
+            offset,
+            $"{operationName} response row data depends on a successful prior RopSetColumns for this " +
+            "logical connection and server object handle; no unambiguous active column list was available.");
+    }
+
+    private static void AddPropertyRows(
+        ref MapiReader reader,
+        ImmutableArray<MapiNode>.Builder children,
+        string name,
+        int rowCount,
+        ImmutableArray<(ushort Type, ushort Id)> columns,
+        MapiNodeBudget budget,
+        CancellationToken cancellationToken)
+    {
+        var start = reader.Position;
+        var rows = ImmutableArray.CreateBuilder<MapiNode>(rowCount);
+        for (var index = 0; index < rowCount; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            rows.Add(RopMessageRulesDecoders.ParseRopPropertyRow(
+                ref reader,
+                $"{name}[{index}]",
+                columns,
+                columns.Length,
+                budget,
+                depth: 1,
+                cancellationToken));
+        }
+        budget.Claim(0, rowCount);
+        children.Add(new MapiNode(
+            name,
+            MapiNodeKind.Array,
+            start,
+            reader.Position - start,
+            $"{rowCount:N0} row(s)",
+            rows.ToImmutable()));
     }
 
     // -------------------------------------------------------------------------------------------
@@ -746,7 +822,7 @@ internal static class RopFolderTableDecoders
             array.ToImmutable()));
     }
 
-    private static void AddCountedPropertyTags(
+    private static ImmutableArray<(ushort Type, ushort Id)> AddCountedPropertyTags(
         ref MapiReader reader,
         ImmutableArray<MapiNode>.Builder children,
         string countFieldName,
@@ -757,9 +833,11 @@ internal static class RopFolderTableDecoders
         var count = reader.ReadCount16(countFieldName);
         ExtendedBufferParser.AddField(children, countFieldName, countOffset, 2, count.ToString(CultureInfo.InvariantCulture), budget);
         var array = ImmutableArray.CreateBuilder<MapiNode>(count);
+        var values = ImmutableArray.CreateBuilder<(ushort Type, ushort Id)>(count);
         for (var i = 0; i < count; i++)
         {
-            array.Add(ReadPropertyTag(ref reader, $"{arrayFieldName}[{i}]", budget));
+            array.Add(ReadPropertyTag(ref reader, $"{arrayFieldName}[{i}]", budget, out var value));
+            values.Add(value);
         }
         budget.Claim(0, count);
         children.Add(new MapiNode(
@@ -769,6 +847,7 @@ internal static class RopFolderTableDecoders
             array.Sum(n => n.Length),
             $"{count:N0} entrie(s)",
             array.ToImmutable()));
+        return values.ToImmutable();
     }
 
     /// <summary>
@@ -821,13 +900,18 @@ internal static class RopFolderTableDecoders
     }
 
     /// <summary>[MS-OXCDATA] 2.9: PropertyType(UInt16) + PropertyId(UInt16).</summary>
-    private static MapiNode ReadPropertyTag(ref MapiReader reader, string name, MapiNodeBudget budget)
+    private static MapiNode ReadPropertyTag(
+        ref MapiReader reader,
+        string name,
+        MapiNodeBudget budget,
+        out (ushort Type, ushort Id) value)
     {
         var start = reader.Position;
         var typeOffset = reader.Position;
         var propertyType = reader.ReadUInt16($"{name}.PropertyType");
         var idOffset = reader.Position;
         var propertyId = reader.ReadUInt16($"{name}.PropertyId");
+        value = (propertyType, propertyId);
         var nested = ImmutableArray.CreateBuilder<MapiNode>(2);
         ExtendedBufferParser.AddField(nested, "PropertyType", typeOffset, 2, NspiPropertyParser.PropertyTypeName(propertyType), budget);
         ExtendedBufferParser.AddField(nested, "PropertyId", idOffset, 2, MapiPropertyNames.FormatPidTag(propertyId), budget);

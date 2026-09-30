@@ -73,6 +73,7 @@ internal static class MapiCaptureParser
                 warnings,
                 session.Id,
                 cancellationToken);
+            context.CompleteHttpSession(session.Id);
             var result = new MapiSession(
                 session.Id,
                 index,
@@ -107,11 +108,11 @@ internal static class MapiCaptureParser
                 "Folder/table operations (MS-OXCFOLD/MS-OXCTABL)",
                 "Property/stream/store operations (MS-OXCPRPT/MS-OXCSTOR)",
                 "Message/rule/permission/notification operations (MS-OXCMSG/MS-OXORULE/MS-OXCPERM/MS-OXCNOTIF)",
-                "Bulk data transfer / incremental change synchronization (MS-OXCFXICS)"
+                "Bulk data transfer / incremental change synchronization (MS-OXCFXICS)",
+                "Capture-local table columns and row/notification reconstruction"
             ],
             [
-                "RopQueryRows/RopFindRow/RopExpandRow responses whose row data depends on a prior RopSetColumns (decoded when no row data is present; raw fallback only when it is)",
-                "RopNotify response TableRowData internals (depend on an originating RopSetColumns elsewhere in the session)",
+                "RopReadRecipients response RecipientRow property internals remain bounded raw because that response carries no RecipientColumns array and the protocol does not identify a deterministic external column source",
                 "In the property/stream/store family's generic property-value arrays (RopGetPropertiesSpecific/RopSetProperties and similar), PtypRestriction/PtypRuleAction values and any property type outside the fixed MS-OXCDATA 2.11.1 table are intentionally refused rather than guessed; the message/rule/permission family's own RuleData/PermissionData arrays and the folder/table family's own restrictions do fully decode both types with an explicit ROP-buffer-vs-extended-rule width boundary",
                 "FastTransfer reconstruction spans multiple operations within the same MAPI/HTTP session only; joining buffers across separate HTTP round-trips is not attempted"
             ]);
