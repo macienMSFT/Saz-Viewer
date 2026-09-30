@@ -57,7 +57,16 @@ internal static class RopVariableDispatcher
 
         if (RopPropertyStoreDecoders.Supports(direction, ropId))
         {
-            return RopPropertyStoreDecoders.Parse(ref reader, operationIndex, direction, handleReferences, budget, cancellationToken, context, captureScope);
+            return RopPropertyStoreDecoders.Parse(
+                ref reader,
+                operationIndex,
+                direction,
+                handleReferences,
+                budget,
+                cancellationToken,
+                context,
+                captureScope,
+                warnings);
         }
 
         if (RopMessageRulesDecoders.Supports(direction, ropId))

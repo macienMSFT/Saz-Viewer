@@ -1597,6 +1597,136 @@ public sealed class FastTransferParserTests
     }
 
     [Fact]
+    public void LexesPtypServerIdSemanticFieldsAndIgnoresOuterLength()
+    {
+        var payload = Concat(
+            [0x01],
+            Le((ushort)0x1234),
+            [1, 2, 3, 4, 5, 6],
+            Le((ushort)0x5678),
+            [7, 8, 9, 10, 11, 12],
+            Le((uint)42));
+        var stream = Concat(
+            Le((ushort)0x00FB),
+            Le((ushort)0x3001),
+            // MS-OXCFXICS explicitly says this lexeme is not used for PtypServerId.
+            Le(0u),
+            Le((ushort)payload.Length),
+            payload);
+
+        var result = Lex(stream);
+
+        Assert.Single(result.Nodes);
+        Assert.Contains("server-defined", result.Nodes[0].Value, StringComparison.Ordinal);
+        Assert.Equal("0x01 (server-defined)", Find(result.Nodes[0].Children, "Ours").Value);
+        Assert.Equal("0x1234", Find(result.Nodes[0].Children, "ReplicaId").Value);
+        Assert.Equal("0x010203040506", Find(result.Nodes[0].Children, "GlobalCounter").Value);
+        Assert.Equal("42", Find(result.Nodes[0].Children, "Instance").Value);
+    }
+
+    [Fact]
+    public void RejectsMalformedServerDefinedPtypServerId()
+    {
+        var payload = new byte[20];
+        payload[0] = 0x01;
+        var stream = Concat(
+            Le((ushort)0x00FB),
+            Le((ushort)0x3001),
+            Le(0u),
+            Le((ushort)payload.Length),
+            payload);
+
+        var result = Lex(stream);
+
+        Assert.False(result.State.Desynchronized);
+        Assert.Contains(result.Warnings, warning =>
+            warning.Contains("21 are required", StringComparison.Ordinal) &&
+            warning.Contains("retained raw", StringComparison.Ordinal));
+        Assert.Equal(MapiNodeKind.Raw, Find(result.Nodes, "Malformed server-defined data").Kind);
+    }
+
+    [Fact]
+    public void ReassemblesPtypServerIdSplitInsideItsCountPrefix()
+    {
+        var payload = Concat(
+            [0x01],
+            Le((ushort)0x1234),
+            [1, 2, 3, 4, 5, 6],
+            Le((ushort)0x5678),
+            [7, 8, 9, 10, 11, 12],
+            Le((uint)42));
+        var head = Concat(
+            Le((ushort)0x00FB),
+            Le((ushort)0x3001),
+            Le(0u),
+            [(byte)payload.Length]);
+        var first = Lex(head);
+
+        Assert.NotNull(first.State.Pending);
+        Assert.Equal(1, first.State.Pending!.Value.RemainingLength);
+        Assert.Single(first.State.Pending.Value.AccumulatedBytes);
+
+        var nextProperty = Concat(
+            Le((ushort)0x0003),
+            Le((ushort)0x3013),
+            Le((uint)99));
+        var second = FastTransferStreamLexer.Lex(
+            Concat([0x00], payload, nextProperty),
+            head.Length,
+            first.State,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+
+        Assert.Null(second.State.Pending);
+        Assert.False(second.State.Desynchronized);
+        Assert.Equal("42", Find(second.Nodes, "Instance").Value);
+        Assert.Contains("reconstructed", Find(second.Nodes, "ServerId").Value, StringComparison.Ordinal);
+        Assert.Contains("99", second.Nodes[^1].Value, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReassemblesPtypServerIdSplitInsideItsPayloadWithoutConsumingTheNextProperty()
+    {
+        var payload = Concat(
+            [0x01],
+            Le((ushort)0x1234),
+            [1, 2, 3, 4, 5, 6],
+            Le((ushort)0x5678),
+            [7, 8, 9, 10, 11, 12],
+            Le((uint)42));
+        var head = Concat(
+            Le((ushort)0x00FB),
+            Le((ushort)0x3001),
+            Le((uint)(sizeof(ushort) + payload.Length)),
+            Le((ushort)payload.Length),
+            payload[..5]);
+        var first = Lex(head);
+
+        Assert.NotNull(first.State.Pending);
+        Assert.Equal(payload.Length - 5, first.State.Pending!.Value.RemainingLength);
+        Assert.True(first.State.Pending.Value.AccumulatedBytes.Length == sizeof(ushort) + 5);
+
+        var nextProperty = Concat(
+            Le((ushort)0x0003),
+            Le((ushort)0x3013),
+            Le((uint)99));
+        var second = FastTransferStreamLexer.Lex(
+            Concat(payload[5..], nextProperty),
+            head.Length,
+            first.State,
+            new MapiNodeBudget(),
+            0,
+            CancellationToken.None);
+
+        Assert.Null(second.State.Pending);
+        Assert.False(second.State.Desynchronized);
+        Assert.Equal("42", Find(second.Nodes, "Instance").Value);
+        Assert.Contains("reconstructed", Find(second.Nodes, "ServerId").Value, StringComparison.Ordinal);
+        Assert.Contains("99", second.Nodes[^1].Value, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LexesCodePageStringTypes()
     {
         var text = Encoding.Unicode.GetBytes("cp\0");

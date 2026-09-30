@@ -788,6 +788,22 @@ internal static class FastTransferStreamLexer
             specialMarker = null;
         }
 
+        // MS-OXCFXICS 2.2.4.1.1: PtypServerId retains its MS-OXCDATA Count16 field and does not
+        // use the outer length lexeme to delimit the value.
+        if (propertyType == 0x00FB)
+        {
+            return ParseFastTransferServerId(
+                ref reader,
+                propertyType,
+                propertyId,
+                multiValueRemaining,
+                children,
+                warnings,
+                budget,
+                depth,
+                out pending);
+        }
+
         if (length > reader.Remaining)
         {
             // MS-OXCFXICS 2.2.4.1: this is the only legal split point. Record the tail transactionally
@@ -811,6 +827,74 @@ internal static class FastTransferStreamLexer
             ref slice, propertyType, propertyId, specialMarker, children, budget, depth, warnings);
         AppendUnconsumed(ref slice, children, "Value trailing bytes", budget, warnings);
         return summary;
+    }
+
+    private static string ParseFastTransferServerId(
+        ref MapiReader reader,
+        ushort propertyType,
+        ushort propertyId,
+        int multiValueRemaining,
+        ImmutableArray<MapiNode>.Builder children,
+        List<string> warnings,
+        MapiNodeBudget budget,
+        int depth,
+        out FastTransferPendingValue? pending)
+    {
+        pending = null;
+        if (reader.Remaining < sizeof(ushort))
+        {
+            var partialOffset = reader.Position;
+            var partial = reader.ReadRemaining("PtypServerId.Count partial");
+            children.Add(ExtendedBufferParser.RawNode("PartialValue", partial, partialOffset, budget));
+            pending = new FastTransferPendingValue(
+                propertyType,
+                propertyId,
+                sizeof(ushort),
+                sizeof(ushort) - partial.Length,
+                multiValueRemaining,
+                AccumulatedBytes: [.. partial]);
+            return $"{partial.Length:N0} of 2 Count byte(s); value continues in a later buffer";
+        }
+
+        var countOffset = reader.Position;
+        var count = reader.ReadCount16("PtypServerId.Count");
+        ExtendedBufferParser.AddField(
+            children,
+            "Count",
+            countOffset,
+            sizeof(ushort),
+            count.ToString(CultureInfo.InvariantCulture),
+            budget);
+        if (count > reader.Remaining)
+        {
+            var partialOffset = reader.Position;
+            var partial = reader.ReadRemaining("PtypServerId partial payload");
+            children.Add(ExtendedBufferParser.RawNode("PartialValue", partial, partialOffset, budget));
+            pending = new FastTransferPendingValue(
+                propertyType,
+                propertyId,
+                sizeof(ushort) + count,
+                count - partial.Length,
+                multiValueRemaining,
+                AccumulatedBytes:
+                [
+                    (byte)(count & 0xFF),
+                    (byte)(count >> 8),
+                    .. partial
+                ]);
+            return $"{sizeof(ushort) + partial.Length:N0} of {sizeof(ushort) + count:N0} PtypServerId byte(s); " +
+                   "value continues in a later buffer";
+        }
+
+        var payload = reader.SliceReader(count, "PtypServerId.ServerId");
+        var serverId = MapiServerIdParser.ParsePayload(
+            ref payload,
+            "ServerId",
+            budget,
+            warnings,
+            depth + 1);
+        children.Add(serverId);
+        return $"PtypServerId ({serverId.Value})";
     }
 
     private static string DecodeVarValue(
@@ -863,7 +947,6 @@ internal static class FastTransferStreamLexer
                 children.Add(ExtendedBufferParser.RawNode("Value", bytes, offset, budget));
                 return $"{length:N0} byte(s) of PtypObject";
             }
-            case 0x00FB:
             case 0x0102:
             case 0x0003:
             default:
@@ -1070,6 +1153,11 @@ internal static class FastTransferStreamLexer
         MapiNodeBudget budget,
         int depth)
     {
+        if (pending.PropertyType == 0x00FB && !pending.AccumulatedBytes.IsDefault)
+        {
+            return ResumePendingServerId(ref reader, pending, nodes, warnings, budget, depth);
+        }
+
         var take = (int)Math.Min(pending.RemainingLength, reader.Remaining);
         var offset = reader.Position;
         var bytes = reader.ReadBytes(take, "PartialValueContinuation");
@@ -1166,6 +1254,83 @@ internal static class FastTransferStreamLexer
         }
 
         return null;
+    }
+
+    private static FastTransferPendingValue? ResumePendingServerId(
+        ref MapiReader reader,
+        FastTransferPendingValue pending,
+        ImmutableArray<MapiNode>.Builder nodes,
+        List<string> warnings,
+        MapiNodeBudget budget,
+        int depth)
+    {
+        var offset = reader.Position;
+        var accumulated = pending.AccumulatedBytes;
+        var currentBytes = ImmutableArray.CreateBuilder<byte>();
+        if (accumulated.Length < sizeof(ushort))
+        {
+            var take = Math.Min(sizeof(ushort) - accumulated.Length, reader.Remaining);
+            var prefix = reader.ReadBytes(take, "PtypServerId.Count continuation");
+            currentBytes.AddRange(prefix.ToArray());
+            accumulated = accumulated.AddRange(prefix.ToArray());
+        }
+
+        int? totalLength = null;
+        if (accumulated.Length >= sizeof(ushort))
+        {
+            var count = accumulated[0] | (accumulated[1] << 8);
+            totalLength = checked(sizeof(ushort) + count);
+            var take = Math.Min(totalLength.Value - accumulated.Length, reader.Remaining);
+            if (take > 0)
+            {
+                var payload = reader.ReadBytes(take, "PtypServerId payload continuation");
+                currentBytes.AddRange(payload.ToArray());
+                accumulated = accumulated.AddRange(payload.ToArray());
+            }
+        }
+
+        var expectedLength = totalLength ?? sizeof(ushort);
+        var remaining = expectedLength - accumulated.Length;
+        var children = ImmutableArray.CreateBuilder<MapiNode>();
+        if (remaining == 0 && totalLength.HasValue)
+        {
+            var reconstructedReader = new MapiReader(accumulated.AsSpan(), CancellationToken.None, 0);
+            var serverId = MapiServerIdParser.ParseCounted16(
+                ref reconstructedReader,
+                "ServerId",
+                budget,
+                warnings,
+                depth + 1);
+            children.Add(MarkReconstructed(serverId, offset, annotate: true));
+        }
+        else
+        {
+            children.Add(ExtendedBufferParser.RawNode(
+                "Bytes",
+                currentBytes.ToArray(),
+                offset,
+                budget));
+        }
+
+        budget.Claim(depth);
+        nodes.Add(new MapiNode(
+            "PartialValueContinuation",
+            MapiNodeKind.Property,
+            offset,
+            currentBytes.Count,
+            $"0x{pending.PropertyId:X4}:{pending.PropertyType:X4} " +
+            $"{accumulated.Length:N0}/{expectedLength:N0} PtypServerId byte(s)" +
+            (remaining > 0 ? "; value still continues" : "; value complete"),
+            children.ToImmutable()));
+
+        return remaining > 0
+            ? pending with
+            {
+                DeclaredLength = expectedLength,
+                RemainingLength = remaining,
+                AccumulatedBytes = accumulated,
+            }
+            : null;
     }
 
     private static MapiNode MarkReconstructed(MapiNode node, long currentBufferOffset, bool annotate) =>

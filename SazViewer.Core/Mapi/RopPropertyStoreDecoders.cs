@@ -177,7 +177,8 @@ internal static class RopPropertyStoreDecoders
         MapiNodeBudget budget,
         CancellationToken cancellationToken,
         MapiCaptureContext? context = null,
-        string? captureScope = null)
+        string? captureScope = null,
+        List<string>? warnings = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var start = reader.Position;
@@ -189,11 +190,11 @@ internal static class RopPropertyStoreDecoders
 
         if (direction == MapiDirection.Request)
         {
-            ParseRequest(ref reader, ropId, operationIndex, handleReferences, budget, children, context, captureScope);
+            ParseRequest(ref reader, ropId, operationIndex, handleReferences, budget, children, context, captureScope, warnings);
         }
         else
         {
-            ParseResponse(ref reader, ropId, operationIndex, handleReferences, budget, children, context, captureScope);
+            ParseResponse(ref reader, ropId, operationIndex, handleReferences, budget, children, context, captureScope, warnings);
         }
 
         budget.Claim(0);
@@ -218,7 +219,8 @@ internal static class RopPropertyStoreDecoders
         MapiNodeBudget budget,
         ImmutableArray<MapiNode>.Builder children,
         MapiCaptureContext? context,
-        string? captureScope)
+        string? captureScope,
+        List<string>? warnings)
     {
         switch (ropId)
         {
@@ -252,7 +254,7 @@ internal static class RopPropertyStoreDecoders
                 var count = AddUInt16Field(ref reader, children, "PropertyValueCount", budget);
                 var cap = Math.Max(0, propertyValueSize - sizeof(ushort));
                 var sub = reader.SliceReader(cap, "PropertyValues");
-                AddTaggedPropertyValueArray(ref sub, children, "PropertyValues", count, budget, stopWhenSubEmpty: true);
+                AddTaggedPropertyValueArray(ref sub, children, "PropertyValues", count, budget, stopWhenSubEmpty: true, warnings);
                 if (!sub.End)
                 {
                     var junkOffset = sub.Position;
@@ -417,7 +419,7 @@ internal static class RopPropertyStoreDecoders
                 AddHandleIndex(ref reader, children, "InputHandleIndex", operationIndex, handleReferences, budget);
                 AddUInt16Field(ref reader, children, "PropertyValueSize", budget);
                 var count = AddUInt16Field(ref reader, children, "PropertyValueCount", budget);
-                AddTaggedPropertyValueArray(ref reader, children, "PropertyValues", count, budget, stopWhenSubEmpty: false);
+                AddTaggedPropertyValueArray(ref reader, children, "PropertyValues", count, budget, stopWhenSubEmpty: false, warnings);
                 return;
             }
             case 0x7A: // RopDeletePropertiesNoReplicate
@@ -471,7 +473,8 @@ internal static class RopPropertyStoreDecoders
         MapiNodeBudget budget,
         ImmutableArray<MapiNode>.Builder children,
         MapiCaptureContext? context,
-        string? captureScope)
+        string? captureScope,
+        List<string>? warnings)
     {
         switch (ropId)
         {
@@ -507,7 +510,7 @@ internal static class RopPropertyStoreDecoders
                 var success = AddReturnValue(ref reader, children, budget, out _);
                 if (success)
                 {
-                    AddCountedTaggedPropertyValues(ref reader, children, "PropertyValueCount", "PropertyValues", budget);
+                    AddCountedTaggedPropertyValues(ref reader, children, "PropertyValueCount", "PropertyValues", budget, warnings);
                 }
                 return;
             }
@@ -640,7 +643,7 @@ internal static class RopPropertyStoreDecoders
                 if (success)
                 {
                     AddByteField(ref reader, children, "NoPropertiesReturned", budget);
-                    AddCountedTaggedPropertyValues(ref reader, children, "PropertyValueCount", "PropertyValues", budget);
+                    AddCountedTaggedPropertyValues(ref reader, children, "PropertyValueCount", "PropertyValues", budget, warnings);
                 }
                 return;
             }
@@ -1418,7 +1421,11 @@ internal static class RopPropertyStoreDecoders
     // -------------------------------------------------------------------------------------------
 
     /// <summary>[MS-OXCDATA] 2.11.4: PropertyTag(4 bytes) + PropertyValue (dispatched by PropertyType).</summary>
-    private static MapiNode AddTaggedPropertyValue(ref MapiReader reader, string name, MapiNodeBudget budget)
+    private static MapiNode AddTaggedPropertyValue(
+        ref MapiReader reader,
+        string name,
+        MapiNodeBudget budget,
+        List<string>? warnings)
     {
         var start = reader.Position;
         var typeOffset = reader.Position;
@@ -1428,7 +1435,7 @@ internal static class RopPropertyStoreDecoders
         var nested = ImmutableArray.CreateBuilder<MapiNode>(3);
         ExtendedBufferParser.AddField(nested, "PropertyType", typeOffset, 2, NspiPropertyParser.PropertyTypeName(type), budget);
         ExtendedBufferParser.AddField(nested, "PropertyId", idOffset, 2, MapiPropertyNames.FormatPidTag(id), budget);
-        nested.Add(AddPropertyValue(ref reader, type, "PropertyValue", budget));
+        nested.Add(AddPropertyValue(ref reader, type, "PropertyValue", budget, warnings));
         budget.Claim(0);
         return new MapiNode(name, MapiNodeKind.Property, start, reader.Position - start, $"0x{id:X4}:{type:X4}", nested.ToImmutable());
     }
@@ -1445,7 +1452,8 @@ internal static class RopPropertyStoreDecoders
         string arrayFieldName,
         int count,
         MapiNodeBudget budget,
-        bool stopWhenSubEmpty)
+        bool stopWhenSubEmpty,
+        List<string>? warnings)
     {
         var array = ImmutableArray.CreateBuilder<MapiNode>(count);
         for (var i = 0; i < count; i++)
@@ -1454,7 +1462,7 @@ internal static class RopPropertyStoreDecoders
             {
                 break;
             }
-            array.Add(AddTaggedPropertyValue(ref reader, $"{arrayFieldName}[{i}]", budget));
+            array.Add(AddTaggedPropertyValue(ref reader, $"{arrayFieldName}[{i}]", budget, warnings));
         }
         budget.Claim(0, array.Count);
         children.Add(new MapiNode(
@@ -1471,19 +1479,32 @@ internal static class RopPropertyStoreDecoders
         ImmutableArray<MapiNode>.Builder children,
         string countFieldName,
         string arrayFieldName,
-        MapiNodeBudget budget)
+        MapiNodeBudget budget,
+        List<string>? warnings)
     {
         var countOffset = reader.Position;
         var count = reader.ReadCount16(countFieldName);
         ExtendedBufferParser.AddField(children, countFieldName, countOffset, 2, count.ToString(CultureInfo.InvariantCulture), budget);
-        AddTaggedPropertyValueArray(ref reader, children, arrayFieldName, count, budget, stopWhenSubEmpty: false);
+        AddTaggedPropertyValueArray(
+            ref reader,
+            children,
+            arrayFieldName,
+            count,
+            budget,
+            stopWhenSubEmpty: false,
+            warnings);
     }
 
     /// <summary>
     /// [MS-OXCDATA] 2.11.2.1 PropertyValue dispatch, using "ROP buffers" counted-field widths.
     /// Handles both scalar values and the PtypMultiple* (array-of-values) form.
     /// </summary>
-    private static MapiNode AddPropertyValue(ref MapiReader reader, ushort type, string name, MapiNodeBudget budget)
+    private static MapiNode AddPropertyValue(
+        ref MapiReader reader,
+        ushort type,
+        string name,
+        MapiNodeBudget budget,
+        List<string>? warnings)
     {
         budget.Claim(0);
         var start = reader.Position;
@@ -1501,15 +1522,20 @@ internal static class RopPropertyStoreDecoders
             ExtendedBufferParser.AddField(nested, "Count", countOffset, 4, count.ToString(CultureInfo.InvariantCulture), budget);
             for (var i = 0; i < count; i++)
             {
-                nested.Add(AddScalarPropertyValue(ref reader, baseType, $"[{i}]", budget));
+                nested.Add(AddScalarPropertyValue(ref reader, baseType, $"[{i}]", budget, warnings));
             }
             budget.Claim(0, count);
             return new MapiNode(name, MapiNodeKind.Array, start, reader.Position - start, NspiPropertyParser.PropertyTypeName(type), nested.ToImmutable());
         }
-        return AddScalarPropertyValue(ref reader, type, name, budget);
+        return AddScalarPropertyValue(ref reader, type, name, budget, warnings);
     }
 
-    private static MapiNode AddScalarPropertyValue(ref MapiReader reader, ushort type, string name, MapiNodeBudget budget)
+    private static MapiNode AddScalarPropertyValue(
+        ref MapiReader reader,
+        ushort type,
+        string name,
+        MapiNodeBudget budget,
+        List<string>? warnings)
     {
         var start = reader.Position;
         switch (type)
@@ -1587,13 +1613,46 @@ internal static class RopPropertyStoreDecoders
                 budget.Claim(0);
                 return MapiNode.Leaf(name, MapiNodeKind.Property, start, reader.Position - start, value.ToString());
             }
-            case 0x00FB: // PtypServerId: always a 16-bit COUNT (per [MS-OXCDATA] 2.11.1), regardless of context.
+            case 0x00FB: // PtypServerId: 16-bit COUNT + deterministic server/client-defined payload.
+                return MapiServerIdParser.ParseCounted16(ref reader, name, budget, warnings);
             case 0x0102: // PtypBinary: 16-bit COUNT in ROP-buffer context ([MS-OXCDATA] 2.11.1.1).
                 return AddCountedBinary16(ref reader, name, budget);
-            case 0x00FD: // PtypRestriction: no COUNT field at all; genuinely undeterminable from its own bytes.
-            case 0x00FE: // PtypRuleAction: recursive rule-action structures whose width varies by ActionType.
-                throw new MapiParseException(
-                    start, $"{name} has property type 0x{type:X4}; its length cannot be determined without full recursive parsing.");
+            case 0x00FD: // PtypRestriction: recursively self-delimiting restriction grammar.
+            {
+                var restriction = NspiRestrictionParser.Parse(
+                    ref reader,
+                    budget,
+                    depth: 1,
+                    codePage: null,
+                    warnings: warnings,
+                    context: MapiWireWidthContext.RopBuffer);
+                budget.Claim(0);
+                return new MapiNode(
+                    name,
+                    MapiNodeKind.Property,
+                    start,
+                    reader.Position - start,
+                    "Restriction",
+                    [restriction]);
+            }
+            case 0x00FE: // PtypRuleAction: ActionLength and nested counts delimit each recursive action.
+            {
+                var action = RuleActionParser.Parse(
+                    ref reader,
+                    budget,
+                    depth: 1,
+                    codePage: null,
+                    warnings: warnings,
+                    context: MapiWireWidthContext.RopBuffer);
+                budget.Claim(0);
+                return new MapiNode(
+                    name,
+                    MapiNodeKind.Property,
+                    start,
+                    reader.Position - start,
+                    "RuleAction",
+                    [action]);
+            }
             default:
                 throw new MapiParseException(start, $"{name} has unsupported property type 0x{type:X4}; its length cannot be determined safely.");
         }

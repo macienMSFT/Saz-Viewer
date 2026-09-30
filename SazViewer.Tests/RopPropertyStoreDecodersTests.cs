@@ -1370,13 +1370,162 @@ public sealed class RopPropertyStoreDecodersTests
     // ---------------------------------------------------------------------------------------------
 
     [Fact]
-    public void PropertyValueThrowsForRestrictionAndRuleActionTypes()
+    public void PropertyValueParsesRestrictionAndRuleActionExactBoundaries()
     {
-        var restriction = Concat([0x08, 0x00], Le((uint)0), Le((ushort)1), Tag(0x00FD, 1), [0x00]);
-        AssertThrowsParse(restriction, MapiDirection.Response);
+        var existRestriction = Concat([0x08], Tag(0x0003, 0x3001));
+        var markAsReadAction = Concat(
+            Le((ushort)1),
+            Le((ushort)9),
+            [0x0B],
+            Le((uint)0),
+            Le((uint)0));
+        var bytes = Concat(
+            [0x08, 0x00],
+            Le((uint)0),
+            Le((ushort)2),
+            Tag(0x00FD, 1),
+            existRestriction,
+            Tag(0x00FE, 2),
+            markAsReadAction);
 
-        var ruleAction = Concat([0x08, 0x00], Le((uint)0), Le((ushort)1), Tag(0x00FE, 1), [0x00]);
-        AssertThrowsParse(ruleAction, MapiDirection.Response);
+        var (node, _) = ParseOne(bytes, MapiDirection.Response);
+
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.Equal("ExistRestriction", Find(node.Children, "RestrictionType").Value);
+        Assert.Equal("OP_MARK_AS_READ", Find(node.Children, "ActionType").Value);
+    }
+
+    [Fact]
+    public void PropertyValueRejectsMalformedAndOverDepthNestedStructures()
+    {
+        var malformedRestriction = Concat(
+            [0x08, 0x00], Le((uint)0), Le((ushort)1), Tag(0x00FD, 1), [0xFF]);
+        AssertThrowsParse(malformedRestriction, MapiDirection.Response);
+
+        var malformedRuleAction = Concat(
+            [0x08, 0x00], Le((uint)0), Le((ushort)1), Tag(0x00FE, 1),
+            Le((ushort)1), Le((ushort)8), new byte[8]);
+        AssertThrowsParse(malformedRuleAction, MapiDirection.Response);
+
+        var overDepthRestriction = Concat(
+            [0x08, 0x00],
+            Le((uint)0),
+            Le((ushort)1),
+            Tag(0x00FD, 1),
+            Enumerable.Repeat((byte)0x02, MapiParseLimits.MaxDepth + 1).ToArray(),
+            [0x08],
+            Tag(0x0003, 0x3001));
+        AssertThrowsParse(overDepthRestriction, MapiDirection.Response);
+    }
+
+    [Fact]
+    public void PropertyValueParsesServerDefinedServerId()
+    {
+        var payload = Concat(
+            [0x01],
+            Fid(0x1234, [1, 2, 3, 4, 5, 6]),
+            Fid(0x5678, [7, 8, 9, 10, 11, 12]),
+            Le((uint)42));
+        var bytes = Concat(
+            [0x08, 0x00],
+            Le((uint)0),
+            Le((ushort)1),
+            Tag(0x00FB, 1),
+            Le((ushort)payload.Length),
+            payload);
+
+        var (node, _) = ParseOne(bytes, MapiDirection.Response);
+
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.Equal("0x01 (server-defined)", Find(node.Children, "Ours").Value);
+        Assert.Equal("0x1234", Find(node.Children, "ReplicaId").Value);
+        Assert.Equal("42", Find(node.Children, "Instance").Value);
+        Assert.Equal("0x010203040506", Find(node.Children, "GlobalCounter").Value);
+    }
+
+    [Fact]
+    public void PropertyValueRetainsClientDefinedServerIdBytes()
+    {
+        var payload = new byte[] { 0x00, 0xAA, 0xBB, 0xCC };
+        var bytes = Concat(
+            [0x08, 0x00],
+            Le((uint)0),
+            Le((ushort)1),
+            Tag(0x00FB, 1),
+            Le((ushort)payload.Length),
+            payload);
+
+        var (node, _) = ParseOne(bytes, MapiDirection.Response);
+
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.Equal("0x00 (client-defined)", Find(node.Children, "Ours").Value);
+        Assert.Contains("AABBCC", Find(node.Children, "ClientData").Value, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(20)]
+    [InlineData(22)]
+    public void PropertyValueRetainsInvalidServerDefinedServerIdLengthAsLocalRaw(int declaredLength)
+    {
+        var payload = new byte[declaredLength];
+        if (payload.Length > 0)
+        {
+            payload[0] = 0x01;
+        }
+        var bytes = Concat(
+            [0x08, 0x00],
+            Le((uint)0),
+            Le((ushort)1),
+            Tag(0x00FB, 1),
+            Le((ushort)declaredLength),
+            payload);
+
+        var warnings = new List<string>();
+        var (node, _) = ParseOne(bytes, MapiDirection.Response, warnings: warnings);
+
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.Contains(
+            Flatten(node),
+            candidate => candidate.Kind == MapiNodeKind.Raw &&
+                         candidate.Name.Contains("Malformed", StringComparison.Ordinal));
+        Assert.Contains(warnings, warning => warning.Contains("retained raw", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MalformedBoundedServerIdDoesNotConsumeTheFollowingProperty()
+    {
+        var malformed = new byte[20];
+        malformed[0] = 0x01;
+        var bytes = Concat(
+            [0x08, 0x00],
+            Le((uint)0),
+            Le((ushort)2),
+            Tag(0x00FB, 1),
+            Le((ushort)malformed.Length),
+            malformed,
+            TaggedInt32(2, 99));
+        var warnings = new List<string>();
+
+        var (node, _) = ParseOne(bytes, MapiDirection.Response, warnings: warnings);
+
+        Assert.Equal(bytes.Length, LastPosition);
+        Assert.Contains(warnings, warning => warning.Contains("retained raw", StringComparison.Ordinal));
+        Assert.Contains(Flatten(node), candidate => candidate.Value == "99");
+    }
+
+    [Fact]
+    public void PropertyValueRejectsServerIdLengthBeyondAvailableBytes()
+    {
+        var bytes = Concat(
+            [0x08, 0x00],
+            Le((uint)0),
+            Le((ushort)1),
+            Tag(0x00FB, 1),
+            Le((ushort)21),
+            [0x01, 0x02]);
+
+        AssertThrowsParse(bytes, MapiDirection.Response);
     }
 
     [Fact]
@@ -1462,13 +1611,27 @@ public sealed class RopPropertyStoreDecodersTests
     private static int LastPosition { get; set; }
 
     private static (MapiNode Node, List<RopHandleReference> Handles) ParseOne(
-        byte[] bytes, MapiDirection direction, int operationIndex = 0, MapiCaptureContext? context = null, string? captureScope = null)
+        byte[] bytes,
+        MapiDirection direction,
+        int operationIndex = 0,
+        MapiCaptureContext? context = null,
+        string? captureScope = null,
+        List<string>? warnings = null)
     {
         Assert.True(RopPropertyStoreDecoders.Supports(direction, bytes[0]), $"Expected 0x{bytes[0]:X2} to be supported for {direction}.");
         var reader = new MapiReader(bytes, CancellationToken.None);
         var handles = new List<RopHandleReference>();
         var budget = new MapiNodeBudget();
-        var node = RopPropertyStoreDecoders.Parse(ref reader, operationIndex, direction, handles, budget, CancellationToken.None, context, captureScope);
+        var node = RopPropertyStoreDecoders.Parse(
+            ref reader,
+            operationIndex,
+            direction,
+            handles,
+            budget,
+            CancellationToken.None,
+            context,
+            captureScope,
+            warnings);
         LastPosition = reader.Position;
         return (node, handles);
     }
@@ -1555,6 +1718,18 @@ public sealed class RopPropertyStoreDecodersTests
             foreach (var match in FindAll(node.Children, name))
             {
                 yield return match;
+            }
+        }
+    }
+
+    private static IEnumerable<MapiNode> Flatten(MapiNode node)
+    {
+        yield return node;
+        foreach (var child in node.Children)
+        {
+            foreach (var descendant in Flatten(child))
+            {
+                yield return descendant;
             }
         }
     }

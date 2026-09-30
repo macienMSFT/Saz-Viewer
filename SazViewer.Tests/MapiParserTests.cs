@@ -1341,6 +1341,55 @@ public sealed class MapiParserTests
     }
 
     [Fact]
+    public void ParsesServerDefinedPtypServerIdSemanticFields()
+    {
+        using var data = new MemoryStream();
+        WriteUInt16(data, 21);
+        data.WriteByte(0x01);
+        WriteUInt16(data, 0x1234);
+        data.Write([1, 2, 3, 4, 5, 6]);
+        WriteUInt16(data, 0x5678);
+        data.Write([7, 8, 9, 10, 11, 12]);
+        WriteUInt32(data, 42);
+        var reader = new MapiReader(data.ToArray());
+
+        var value = NspiPropertyParser.ParseValue(
+            ref reader,
+            0x00FB,
+            "Value",
+            new MapiNodeBudget(),
+            0,
+            includePresence: false);
+
+        Assert.True(reader.End);
+        Assert.Equal("0x01 (server-defined)", Find(value, "Ours").Value);
+        Assert.Equal("0x1234", Find(value, "ReplicaId").Value);
+        Assert.Equal("0x010203040506", Find(value, "GlobalCounter").Value);
+        Assert.Equal("42", Find(value, "Instance").Value);
+    }
+
+    [Fact]
+    public void RetainsClientDefinedPtypServerIdAndWarnsForReservedDiscriminator()
+    {
+        var reader = new MapiReader([4, 0, 0x7F, 0xAA, 0xBB, 0xCC]);
+        var warnings = new List<string>();
+
+        var value = NspiPropertyParser.ParseValue(
+            ref reader,
+            0x00FB,
+            "Value",
+            new MapiNodeBudget(),
+            0,
+            includePresence: false,
+            warnings: warnings);
+
+        Assert.True(reader.End);
+        Assert.Equal("0x7F (client-defined)", Find(value, "Ours").Value);
+        Assert.Contains("AABBCC", Find(value, "ClientData").Value, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(warnings, warning => warning.Contains("reserved value 0x7F", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ParsesAllRuleActionTypesWithBoundedPartialEntryIds()
     {
         using var data = new MemoryStream();

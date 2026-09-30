@@ -288,24 +288,9 @@ internal static class NspiPropertyParser
                 value = reader.ReadGuid(name).ToString();
                 break;
             case 0x00FB:
-                var serverIdLengthOffset = reader.Position;
-                var serverIdLength = reader.ReadUInt16($"{name}.Length");
-                if (serverIdLength > reader.Remaining)
-                {
-                    throw new MapiParseException(
-                        serverIdLengthOffset,
-                        $"{name}.Length {serverIdLength:N0} exceeds the remaining extent.");
-                }
-                var serverIdOffset = reader.Position;
-                var serverId = reader.ReadBytes(serverIdLength, name);
-                budget.Claim(depth);
-                children.Add(MapiNode.Leaf(
-                    "Bytes",
-                    MapiNodeKind.Field,
-                    serverIdOffset,
-                    serverId.Length,
-                    BoundedHex(serverId)));
-                value = $"{serverIdLength:N0} bytes";
+                var serverId = MapiServerIdParser.ParseCounted16(ref reader, "ServerId", budget, warnings, depth + 1);
+                children.Add(serverId);
+                value = serverId.Value ?? "PtypServerId";
                 break;
             case 0x00FD:
                 children.Add(NspiRestrictionParser.Parse(ref reader, budget, depth + 1, codePage, warnings, context));
