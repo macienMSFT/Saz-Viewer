@@ -109,6 +109,11 @@ public sealed class MapiParserTests
                 ("Content-Type", "application/mapi-http"),
                 ("X-RequestType", "Execute"),
                 ("X-ClientInfo", "client-a"))),
+            ("raw/20_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                ExecuteResponse(PrivateLogonResponse(), 0x10203040),
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"))),
             ("raw/21_c.txt", Http(
                 "POST /mapi/emsmdb/?MailboxId=mailbox-a HTTP/1.1",
                 ExecuteRequest(setReadFlag),
@@ -123,6 +128,39 @@ public sealed class MapiParserTests
         Assert.True(secondRequest.Complete);
         Assert.Equal("0x01", Find(secondRequest.Root, "ReadFlags").Value);
         Assert.DoesNotContain(secondRequest.Warnings, warning => warning.Contains("LogonFlags.Private", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DoesNotCommitLogonPrivacyWithoutASuccessfulResponse()
+    {
+        byte[] logon =
+        [
+            0xFE, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        byte[] setReadFlag = [0x11, 0x00, 0x00, 0x00, 0x01];
+
+        using var saz = Fixture(
+            ("raw/24_c.txt", Http(
+                "POST /mapi/emsmdb/?MailboxId=mailbox-a HTTP/1.1",
+                ExecuteRequest(logon),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Execute"),
+                ("X-ClientInfo", "client-a"))),
+            ("raw/25_c.txt", Http(
+                "POST /mapi/emsmdb/?MailboxId=mailbox-a HTTP/1.1",
+                ExecuteRequest(setReadFlag),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Execute"),
+                ("X-ClientInfo", "client-a"))));
+
+        var report = new SazParser().Parse(saz);
+        var secondRequest = report.Sessions[1].Mapi!.Request!;
+        Assert.False(secondRequest.Complete);
+        Assert.Contains(secondRequest.Warnings, warning =>
+            warning.Contains("LogonFlags.Private", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -160,6 +198,210 @@ public sealed class MapiParserTests
             secondRequest.Warnings,
             warning => warning.Contains("LogonFlags.Private", StringComparison.Ordinal)
                 && warning.Contains("could not be parsed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CorrelatesSessionContextsAcrossCookieSequenceRolloverWithoutCrossSessionLeakage()
+    {
+        var context = new MapiCaptureContext();
+        Assert.Null(context.ResolveAndRegisterLogonCorrelationScope(
+            "connect-a",
+            "Connect",
+            "same-fallback",
+            []));
+        Assert.Null(context.CompleteLogonCorrelationEstablishment("connect-a", success: true));
+        context.RegisterResponseCookieAliases(
+            "connect-a",
+            ["sid=session-a; Path=/mapi", "sequence=one; Path=/mapi", "affinity=shared"]);
+        context.RecordLogonPrivacy("connect-a", 1, isPrivate: true);
+
+        Assert.Null(context.ResolveAndRegisterLogonCorrelationScope(
+            "execute-a-without-cookie",
+            "Execute",
+            "same-fallback",
+            []));
+        Assert.True(context.TryGetLogonPrivacy("execute-a-without-cookie", 1, out var privateA));
+        Assert.True(privateA);
+
+        Assert.Null(context.ResolveAndRegisterLogonCorrelationScope(
+            "execute-a1",
+            "Execute",
+            "same-fallback",
+            ["sid=session-a; sequence=one; affinity=shared"]));
+        Assert.True(context.TryGetLogonPrivacy("execute-a1", 1, out privateA));
+        Assert.True(privateA);
+        context.RegisterResponseCookieAliases("execute-a1", ["sequence=two; Path=/mapi"]);
+
+        Assert.Null(context.ResolveAndRegisterLogonCorrelationScope(
+            "execute-a2",
+            "Execute",
+            "same-fallback",
+            ["sid=session-a; sequence=two; affinity=shared"]));
+        Assert.True(context.TryGetLogonPrivacy("execute-a2", 1, out privateA));
+        Assert.True(privateA);
+
+        Assert.Null(context.ResolveAndRegisterLogonCorrelationScope(
+            "connect-b",
+            "Connect",
+            "same-fallback",
+            []));
+        Assert.Null(context.CompleteLogonCorrelationEstablishment("connect-b", success: true));
+        context.RegisterResponseCookieAliases(
+            "connect-b",
+            ["sid=session-b; Path=/mapi", "sequence=other; Path=/mapi", "affinity=shared"]);
+        context.RecordLogonPrivacy("connect-b", 1, isPrivate: false);
+
+        Assert.Null(context.ResolveAndRegisterLogonCorrelationScope(
+            "execute-b",
+            "Execute",
+            "same-fallback",
+            ["sid=session-b; sequence=other; affinity=shared"]));
+        Assert.True(context.TryGetLogonPrivacy("execute-b", 1, out var privateB));
+        Assert.False(privateB);
+
+        var noCookieAmbiguity = context.ResolveAndRegisterLogonCorrelationScope(
+            "execute-no-cookie-ambiguous",
+            "Execute",
+            "same-fallback",
+            []);
+        Assert.Contains("multiple active session contexts", noCookieAmbiguity);
+        Assert.False(context.TryGetLogonPrivacy("execute-no-cookie-ambiguous", 1, out _));
+
+        var ambiguous = context.ResolveAndRegisterLogonCorrelationScope(
+            "execute-ambiguous",
+            "Execute",
+            "same-fallback",
+            ["affinity=shared"]);
+        Assert.Contains("multiple prior session contexts", ambiguous);
+        Assert.DoesNotContain("shared", ambiguous);
+        Assert.DoesNotContain("session-a", ambiguous);
+        Assert.DoesNotContain("session-b", ambiguous);
+        Assert.False(context.TryGetLogonPrivacy("execute-ambiguous", 1, out _));
+    }
+
+    [Fact]
+    public void SuccessfulDisconnectRemovesCookieAliasesAndLogicalSessionState()
+    {
+        var context = new MapiCaptureContext();
+        context.ResolveAndRegisterLogonCorrelationScope("connect", "Connect", "fallback", []);
+        context.CompleteLogonCorrelationEstablishment("connect", success: true);
+        context.RegisterResponseCookieAliases("connect", ["sid=session-a", "sequence=one"]);
+        context.RecordLogonPrivacy("connect", 1, isPrivate: true);
+        context.ResolveAndRegisterLogonCorrelationScope(
+            "disconnect",
+            "Disconnect",
+            "fallback",
+            ["sid=session-a; sequence=one"]);
+        Assert.True(context.TryGetLogonPrivacy("disconnect", 1, out _));
+
+        context.EndLogonCorrelationScope("disconnect");
+        context.ResolveAndRegisterLogonCorrelationScope(
+            "after-disconnect",
+            "Execute",
+            "fallback",
+            ["sid=session-a; sequence=one"]);
+
+        Assert.False(context.TryGetLogonPrivacy("after-disconnect", 1, out _));
+    }
+
+    [Fact]
+    public void FailedContextEstablishmentDoesNotBecomeAnActiveFallbackGeneration()
+    {
+        var context = new MapiCaptureContext();
+        context.ResolveAndRegisterLogonCorrelationScope("failed-connect", "Connect", "fallback", []);
+        context.RecordLogonPrivacy("failed-connect", 1, isPrivate: true);
+        context.CompleteLogonCorrelationEstablishment("failed-connect", success: false);
+        context.CompleteHttpSession("failed-connect");
+
+        Assert.Null(context.ResolveAndRegisterLogonCorrelationScope(
+            "later-execute",
+            "Execute",
+            "fallback",
+            []));
+        Assert.False(context.TryGetLogonPrivacy("later-execute", 1, out _));
+    }
+
+    [Fact]
+    public void SharedCookieCannotOverrideAConflictingFallbackAndUnknownSessionCookie()
+    {
+        var context = new MapiCaptureContext();
+        context.ResolveAndRegisterLogonCorrelationScope("connect-a", "Connect", "fallback-a", []);
+        context.CompleteLogonCorrelationEstablishment("connect-a", success: true);
+        context.RegisterResponseCookieAliases("connect-a", ["sid=session-a", "affinity=shared"]);
+        context.RecordLogonPrivacy("connect-a", 1, isPrivate: true);
+
+        var warning = context.ResolveAndRegisterLogonCorrelationScope(
+            "partial-session-b",
+            "Execute",
+            "fallback-b",
+            ["sid=session-b; affinity=shared"]);
+
+        Assert.Contains("conflicted", warning);
+        Assert.DoesNotContain("session-a", warning);
+        Assert.DoesNotContain("session-b", warning);
+        Assert.False(context.TryGetLogonPrivacy("partial-session-b", 1, out _));
+    }
+
+    [Fact]
+    public void ProtocolSuccessfulDisconnectTearsDownStateEvenWhenAuxiliaryDataIsTruncated()
+    {
+        byte[] logon =
+        [
+            0xFE, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        byte[] setReadFlag = [0x11, 0x00, 0x00, 0x00, 0x01];
+        var truncatedDisconnectResponse = BuildBody(
+            stream =>
+            {
+                stream.Write(Encoding.ASCII.GetBytes("\r\n"));
+                WriteUInt32(stream, 0);
+                WriteUInt32(stream, 0);
+                WriteUInt32(stream, 8);
+                stream.Write([0x01, 0x02]);
+            });
+
+        using var saz = Fixture(
+            ("raw/30_c.txt", Http(
+                "POST /mapi/emsmdb HTTP/1.1",
+                ExecuteRequest(logon),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Execute"),
+                ("X-ClientInfo", "client-a"))),
+            ("raw/30_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                ExecuteResponse(PrivateLogonResponse(), 0x10203040),
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"),
+                ("Set-Cookie", "sid=session-a"))),
+            ("raw/31_c.txt", Http(
+                "POST /mapi/emsmdb HTTP/1.1",
+                [],
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Disconnect"),
+                ("X-ClientInfo", "client-a"),
+                ("Cookie", "sid=session-a"))),
+            ("raw/31_s.txt", Http(
+                "HTTP/1.1 200 OK",
+                truncatedDisconnectResponse,
+                ("Content-Type", "application/mapi-http"),
+                ("X-ResponseCode", "0"))),
+            ("raw/32_c.txt", Http(
+                "POST /mapi/emsmdb HTTP/1.1",
+                ExecuteRequest(setReadFlag),
+                ("Content-Type", "application/mapi-http"),
+                ("X-RequestType", "Execute"),
+                ("X-ClientInfo", "client-a"),
+                ("Cookie", "sid=session-a"))));
+
+        var report = new SazParser().Parse(saz);
+        Assert.False(report.Sessions[1].Mapi!.Response!.Complete);
+        var request = report.Sessions[2].Mapi!.Request!;
+        Assert.False(request.Complete);
+        Assert.Contains(request.Warnings, warning =>
+            warning.Contains("LogonFlags.Private", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1376,6 +1618,23 @@ public sealed class MapiParserTests
                 stream.Write(extended);
             });
     }
+
+    private static byte[] PrivateLogonResponse() =>
+        BuildBody(
+            stream =>
+            {
+                stream.Write([0xFE, 0x00]);
+                WriteUInt32(stream, 0);
+                stream.WriteByte(0x01);
+                stream.Write(new byte[13 * 8]);
+                stream.WriteByte(0);
+                stream.Write(new byte[16]);
+                WriteUInt16(stream, 1);
+                stream.Write(new byte[16]);
+                stream.Write(new byte[8]);
+                stream.Write(new byte[8]);
+                WriteUInt32(stream, 0);
+            });
 
     private static byte[] Gzip(byte[] bytes)
     {

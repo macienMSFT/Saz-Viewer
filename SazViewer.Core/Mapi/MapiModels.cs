@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace SazViewer.Core;
 
@@ -97,7 +99,20 @@ internal sealed class MapiCaptureContext
     // A null value records conflicting observations for one logical connection and deliberately makes
     // future shape-dependent operations fall back to raw rather than guessing.
     private readonly Dictionary<string, string> logonCorrelationScopes = [];
+    private readonly Dictionary<string, HashSet<string>> cookieCorrelationScopes = [];
+    private readonly Dictionary<string, HashSet<string>> correlationScopeCookies = [];
+    private readonly Dictionary<string, HashSet<string>> correlationScopeCookieNames = [];
+    private readonly Dictionary<string, HashSet<string>> fallbackCorrelationScopes = [];
+    private readonly Dictionary<string, string> correlationScopeFallbacks = [];
+    private readonly Dictionary<string, string> pendingFallbackCorrelationScopes = [];
+    private readonly HashSet<string> saturatedCookieAliases = [];
+    private readonly HashSet<string> saturatedFallbackScopes = [];
+    private int cookieCorrelationRelationshipCount;
+    private int fallbackCorrelationRelationshipCount;
+    private bool cookieCorrelationGloballySaturated;
+    private bool fallbackCorrelationGloballySaturated;
     private readonly Dictionary<(string Scope, byte LogonId), bool?> logonPrivacy = [];
+    private readonly Dictionary<string, Queue<(byte LogonId, bool IsPrivate)>> pendingLogonPrivacy = [];
 
     // The handle table is carried after each ROP list, but operation decoders need its values while
     // walking that list. RopBufferParser validates and pre-registers it before semantic dispatch.
@@ -405,6 +420,7 @@ internal sealed class MapiCaptureContext
 
         propertySpecificTags.Remove(captureScope);
         requestRopLists.Remove(captureScope);
+        pendingLogonPrivacy.Remove(captureScope);
         pendingFastTransferUploads.Remove(captureScope);
         configuredFastTransferOutputSlots.Remove(captureScope);
         pendingOutputObjectTypes.Remove(captureScope);
@@ -426,6 +442,7 @@ internal sealed class MapiCaptureContext
         FastTransferAssembler.ForgetProvisional(captureScope);
         sessionHandles.Remove(captureScope);
         logonCorrelationScopes.Remove(captureScope);
+        pendingFallbackCorrelationScopes.Remove(captureScope);
     }
 
     public bool TryGetTableColumnsByHandleValue(
@@ -1167,6 +1184,248 @@ internal sealed class MapiCaptureContext
         }
     }
 
+    public string? ResolveAndRegisterLogonCorrelationScope(
+        string captureScope,
+        string requestType,
+        string fallbackScope,
+        IEnumerable<string> cookieHeaders)
+    {
+        string? warning = null;
+        string scope;
+        var establishesContext = requestType.Equals("Connect", StringComparison.OrdinalIgnoreCase)
+            || requestType.Equals("Bind", StringComparison.OrdinalIgnoreCase);
+        if (establishesContext)
+        {
+            scope = $"context:{HashCorrelationValue($"{fallbackScope}\u001F{captureScope}")}";
+            if (pendingFallbackCorrelationScopes.Count < MapiParseLimits.MaxStateEntries
+                || pendingFallbackCorrelationScopes.ContainsKey(captureScope))
+            {
+                pendingFallbackCorrelationScopes[captureScope] = fallbackScope;
+            }
+            else
+            {
+                MarkFallbackCorrelationSaturated(fallbackScope);
+                warning = "MAPI/HTTP fallback correlation reached its capture-local safety limit; " +
+                    "the new session context will remain isolated from fallback-only requests.";
+            }
+        }
+        else
+        {
+            var scores = new Dictionary<string, int>(StringComparer.Ordinal);
+            var requestCookies = ParseRequestCookies(cookieHeaders)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var unmatchedCookieNames = new HashSet<string>(StringComparer.Ordinal);
+            var saturated = cookieCorrelationGloballySaturated;
+            foreach (var cookie in requestCookies)
+            {
+                var alias = HashCorrelationValue(cookie);
+                if (saturatedCookieAliases.Contains(alias))
+                {
+                    saturated = true;
+                }
+                if (!cookieCorrelationScopes.TryGetValue(alias, out var scopes))
+                {
+                    unmatchedCookieNames.Add(HashCookieName(cookie));
+                    continue;
+                }
+                foreach (var candidate in scopes)
+                {
+                    scores[candidate] = scores.GetValueOrDefault(candidate) + 1;
+                }
+            }
+
+            var bestScore = scores.Count == 0 ? 0 : scores.Values.Max();
+            var bestScopes = scores
+                .Where(pair => pair.Value == bestScore)
+                .Select(pair => pair.Key)
+                .ToArray();
+            if (saturated)
+            {
+                scope = $"ambiguous:{HashCorrelationValue(captureScope)}";
+                warning = "MAPI/HTTP cookie correlation reached its capture-local safety limit; " +
+                    "state was isolated for this HTTP session rather than matched against incomplete aliases.";
+            }
+            else if (bestScopes.Length == 1
+                && IsCookieCandidateCompatible(bestScopes[0], fallbackScope, unmatchedCookieNames))
+            {
+                scope = bestScopes[0];
+            }
+            else if (bestScopes.Length == 1)
+            {
+                scope = $"ambiguous:{HashCorrelationValue(captureScope)}";
+                warning = "MAPI/HTTP request cookies conflicted with the matched session context; " +
+                    "capture-local state was isolated for this HTTP session rather than guessed.";
+            }
+            else if (bestScopes.Length > 1)
+            {
+                scope = $"ambiguous:{HashCorrelationValue(captureScope)}";
+                warning = "MAPI/HTTP request cookies matched multiple prior session contexts equally; " +
+                    "capture-local state was isolated for this HTTP session rather than guessed.";
+            }
+            else
+            {
+                scope = ResolveFallbackCorrelationScope(captureScope, fallbackScope, out warning);
+            }
+        }
+
+        if (!establishesContext
+            && warning is null
+            && !correlationScopeFallbacks.ContainsKey(scope)
+            && !RegisterFallbackCorrelationScope(fallbackScope, scope))
+        {
+            scope = $"ambiguous:{HashCorrelationValue(captureScope)}";
+            warning = "MAPI/HTTP fallback correlation reached its capture-local safety limit; " +
+                "capture-local state was isolated for this HTTP session rather than matched against incomplete aliases.";
+        }
+        RegisterLogonCorrelationScope(captureScope, scope);
+        return warning;
+    }
+
+    public string? CompleteLogonCorrelationEstablishment(string captureScope, bool success)
+    {
+        if (!pendingFallbackCorrelationScopes.Remove(captureScope, out var fallbackScope))
+        {
+            return null;
+        }
+        if (!success)
+        {
+            EndLogonCorrelationScope(captureScope);
+            return null;
+        }
+        if (!TryResolveConnectionScope(captureScope, out var scope))
+        {
+            return null;
+        }
+
+        return RegisterFallbackCorrelationScope(fallbackScope, scope)
+            ? null
+            : "MAPI/HTTP fallback correlation reached its capture-local safety limit; " +
+                "the new session context will remain isolated from fallback-only requests.";
+    }
+
+    public string? RegisterResponseCookieAliases(
+        string captureScope,
+        IEnumerable<string> setCookieHeaders)
+    {
+        if (!TryResolveConnectionScope(captureScope, out var scope))
+        {
+            return null;
+        }
+
+        string? warning = null;
+        foreach (var cookie in ParseResponseCookies(setCookieHeaders).Distinct(StringComparer.Ordinal))
+        {
+            var alias = HashCorrelationValue(cookie);
+            cookieCorrelationScopes.TryGetValue(alias, out var scopes);
+            correlationScopeCookies.TryGetValue(scope, out var aliases);
+            correlationScopeCookieNames.TryGetValue(scope, out var cookieNames);
+            if (scopes?.Contains(scope) == true)
+            {
+                continue;
+            }
+            if (cookieCorrelationRelationshipCount >= MapiParseLimits.MaxStateEntries
+                || (scopes is null && cookieCorrelationScopes.Count >= MapiParseLimits.MaxStateEntries)
+                || (aliases is null && correlationScopeCookies.Count >= MapiParseLimits.MaxStateEntries)
+                || (cookieNames is null && correlationScopeCookieNames.Count >= MapiParseLimits.MaxStateEntries)
+                || scopes?.Count >= MapiParseLimits.MaxStateEntries
+                || aliases?.Count >= MapiParseLimits.MaxStateEntries
+                || cookieNames?.Count >= MapiParseLimits.MaxStateEntries)
+            {
+                if (saturatedCookieAliases.Count < MapiParseLimits.MaxStateEntries)
+                {
+                    saturatedCookieAliases.Add(alias);
+                }
+                else
+                {
+                    cookieCorrelationGloballySaturated = true;
+                }
+                warning = "MAPI/HTTP cookie correlation reached its capture-local safety limit; " +
+                    "affected future requests will be isolated rather than matched against incomplete aliases.";
+                continue;
+            }
+
+            if (scopes is null)
+            {
+                scopes = new HashSet<string>(StringComparer.Ordinal);
+                cookieCorrelationScopes[alias] = scopes;
+            }
+            if (aliases is null)
+            {
+                aliases = new HashSet<string>(StringComparer.Ordinal);
+                correlationScopeCookies[scope] = aliases;
+            }
+            if (cookieNames is null)
+            {
+                cookieNames = new HashSet<string>(StringComparer.Ordinal);
+                correlationScopeCookieNames[scope] = cookieNames;
+            }
+            scopes.Add(scope);
+            aliases.Add(alias);
+            cookieNames.Add(HashCookieName(cookie));
+            cookieCorrelationRelationshipCount++;
+        }
+        return warning;
+    }
+
+    public void EndLogonCorrelationScope(string captureScope)
+    {
+        if (!TryResolveConnectionScope(captureScope, out var scope))
+        {
+            return;
+        }
+
+        if (correlationScopeCookies.Remove(scope, out var aliases))
+        {
+            foreach (var alias in aliases)
+            {
+                if (!cookieCorrelationScopes.TryGetValue(alias, out var scopes))
+                {
+                    continue;
+                }
+                if (scopes.Remove(scope))
+                {
+                    cookieCorrelationRelationshipCount--;
+                }
+                if (scopes.Count == 0)
+                {
+                    cookieCorrelationScopes.Remove(alias);
+                }
+            }
+            correlationScopeCookieNames.Remove(scope);
+        }
+        if (correlationScopeFallbacks.Remove(scope, out var fallback)
+            && fallbackCorrelationScopes.TryGetValue(fallback, out var fallbackScopes))
+        {
+            if (fallbackScopes.Remove(scope))
+            {
+                fallbackCorrelationRelationshipCount--;
+            }
+            if (fallbackScopes.Count == 0)
+            {
+                fallbackCorrelationScopes.Remove(fallback);
+            }
+        }
+
+        foreach (var key in logonPrivacy.Keys.Where(key => key.Scope == scope).ToArray())
+        {
+            logonPrivacy.Remove(key);
+        }
+        foreach (var key in tableColumns.Keys.Where(key => key.Scope == scope).ToArray())
+        {
+            tableColumns.Remove(key);
+        }
+        foreach (var key in serverObjectTypes.Keys.Where(key => key.Scope == scope).ToArray())
+        {
+            serverObjectTypes.Remove(key);
+        }
+        foreach (var key in activeIcsStateUploads.Keys.Where(key => key.Scope == scope).ToArray())
+        {
+            activeIcsStateUploads.Remove(key);
+        }
+        FastTransferAssembler.ForgetConnectionScope(scope);
+    }
+
     /// <summary>Records a RopLogon-established LogonId's Private-vs-public-folders flag.</summary>
     public void RecordLogonPrivacy(string? captureScope, byte logonId, bool isPrivate)
     {
@@ -1187,6 +1446,50 @@ internal sealed class MapiCaptureContext
         if (logonPrivacy.Count < MapiParseLimits.MaxStateEntries)
         {
             logonPrivacy[key] = isPrivate;
+        }
+    }
+
+    public void StageLogonPrivacy(string? captureScope, byte logonId, bool isPrivate)
+    {
+        if (captureScope is null)
+        {
+            return;
+        }
+        if (!pendingLogonPrivacy.TryGetValue(captureScope, out var queue))
+        {
+            if (pendingLogonPrivacy.Count >= MapiParseLimits.MaxStateEntries)
+            {
+                return;
+            }
+            queue = [];
+            pendingLogonPrivacy[captureScope] = queue;
+        }
+        if (queue.Count < MapiParseLimits.MaxStateEntries)
+        {
+            queue.Enqueue((logonId, isPrivate));
+        }
+    }
+
+    public void CompleteLogonPrivacy(string? captureScope, bool success, bool? responseIsPrivate)
+    {
+        if (captureScope is null
+            || !pendingLogonPrivacy.TryGetValue(captureScope, out var queue)
+            || queue.Count == 0)
+        {
+            return;
+        }
+
+        var pending = queue.Dequeue();
+        if (queue.Count == 0)
+        {
+            pendingLogonPrivacy.Remove(captureScope);
+        }
+        if (success)
+        {
+            RecordLogonPrivacy(
+                captureScope,
+                pending.LogonId,
+                responseIsPrivate ?? pending.IsPrivate);
         }
     }
 
@@ -1216,6 +1519,124 @@ internal sealed class MapiCaptureContext
             ? correlationScope
             : captureScope;
         return true;
+    }
+
+    private bool RegisterFallbackCorrelationScope(string fallbackScope, string scope)
+    {
+        fallbackCorrelationScopes.TryGetValue(fallbackScope, out var scopes);
+        if (scopes?.Contains(scope) == true)
+        {
+            return true;
+        }
+        if (fallbackCorrelationRelationshipCount >= MapiParseLimits.MaxStateEntries
+            || (scopes is null && fallbackCorrelationScopes.Count >= MapiParseLimits.MaxStateEntries)
+            || (!correlationScopeFallbacks.ContainsKey(scope)
+                && correlationScopeFallbacks.Count >= MapiParseLimits.MaxStateEntries)
+            || scopes?.Count >= MapiParseLimits.MaxStateEntries)
+        {
+            MarkFallbackCorrelationSaturated(fallbackScope);
+            return false;
+        }
+        if (scopes is null)
+        {
+            scopes = new HashSet<string>(StringComparer.Ordinal);
+            fallbackCorrelationScopes[fallbackScope] = scopes;
+        }
+        scopes.Add(scope);
+        correlationScopeFallbacks[scope] = fallbackScope;
+        fallbackCorrelationRelationshipCount++;
+        return true;
+    }
+
+    private string ResolveFallbackCorrelationScope(
+        string captureScope,
+        string fallbackScope,
+        out string? warning)
+    {
+        warning = null;
+        if (fallbackCorrelationGloballySaturated
+            || saturatedFallbackScopes.Contains(HashCorrelationValue(fallbackScope)))
+        {
+            warning = "MAPI/HTTP fallback correlation reached its capture-local safety limit; " +
+                "capture-local state was isolated for this HTTP session rather than matched against incomplete aliases.";
+            return $"ambiguous:{HashCorrelationValue(captureScope)}";
+        }
+        if (!fallbackCorrelationScopes.TryGetValue(fallbackScope, out var scopes)
+            || scopes.Count == 0)
+        {
+            return fallbackScope;
+        }
+        if (scopes.Count == 1)
+        {
+            return scopes.Single();
+        }
+
+        warning = "MAPI/HTTP fallback identity matched multiple active session contexts; " +
+            "capture-local state was isolated for this HTTP session rather than guessed.";
+        return $"ambiguous:{HashCorrelationValue(captureScope)}";
+    }
+
+    private void MarkFallbackCorrelationSaturated(string fallbackScope)
+    {
+        if (saturatedFallbackScopes.Count < MapiParseLimits.MaxStateEntries)
+        {
+            saturatedFallbackScopes.Add(HashCorrelationValue(fallbackScope));
+        }
+        else
+        {
+            fallbackCorrelationGloballySaturated = true;
+        }
+    }
+
+    private bool IsCookieCandidateCompatible(
+        string candidateScope,
+        string fallbackScope,
+        HashSet<string> unmatchedCookieNames)
+    {
+        if (correlationScopeFallbacks.TryGetValue(candidateScope, out var candidateFallback)
+            && !candidateFallback.Equals(fallbackScope, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        return !correlationScopeCookieNames.TryGetValue(candidateScope, out var knownNames)
+            || !knownNames.Overlaps(unmatchedCookieNames);
+    }
+
+    private static IEnumerable<string> ParseRequestCookies(IEnumerable<string> headers)
+    {
+        foreach (var header in headers)
+        {
+            foreach (var segment in header.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var separator = segment.IndexOf('=');
+                if (separator > 0)
+                {
+                    yield return $"{segment[..separator].Trim().ToLowerInvariant()}={segment[(separator + 1)..].Trim()}";
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> ParseResponseCookies(IEnumerable<string> headers)
+    {
+        foreach (var header in headers)
+        {
+            var cookie = header.Split(';', 2, StringSplitOptions.TrimEntries)[0];
+            var separator = cookie.IndexOf('=');
+            if (separator > 0)
+            {
+                yield return $"{cookie[..separator].Trim().ToLowerInvariant()}={cookie[(separator + 1)..].Trim()}";
+            }
+        }
+    }
+
+    private static string HashCorrelationValue(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+    private static string HashCookieName(string cookie)
+    {
+        var separator = cookie.IndexOf('=');
+        return HashCorrelationValue(separator < 0 ? cookie : cookie[..separator]);
     }
 
     /// <summary>Enqueues a RopGetPropertiesSpecific request's PropertyTags for its matching same-session response.</summary>

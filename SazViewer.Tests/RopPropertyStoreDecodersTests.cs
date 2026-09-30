@@ -1065,6 +1065,151 @@ public sealed class RopPropertyStoreDecodersTests
     }
 
     [Fact]
+    public void LogonPrivacyCommitsOnlyAfterACompleteSuccessfulResponse()
+    {
+        const string scope = "logon-transaction";
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope(scope, "logical-connection");
+        var request = Concat(
+            [0xFE, 0x05, 0x00, 0x01],
+            Le(0u),
+            Le(0u),
+            Le((ushort)0));
+        ParseOne(request, MapiDirection.Request, context: context, captureScope: scope);
+        Assert.False(context.TryGetLogonPrivacy(scope, 5, out _));
+
+        var response = Concat(
+            [0xFE, 0x01],
+            Le(0u),
+            [0x00],
+            ThirteenFolderIds(),
+            Le((ushort)7),
+            Guid.NewGuid().ToByteArray(),
+            Guid.NewGuid().ToByteArray());
+        ParseOne(response, MapiDirection.Response, context: context, captureScope: scope);
+
+        Assert.True(context.TryGetLogonPrivacy(scope, 5, out var isPrivate));
+        Assert.False(isPrivate);
+    }
+
+    [Fact]
+    public void FailedOrMissingLogonResponseDoesNotCommitPrivacy()
+    {
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope("failed-logon", "logical-connection");
+        var request = Concat(
+            [0xFE, 0x05, 0x00, 0x01],
+            Le(0u),
+            Le(0u),
+            Le((ushort)0));
+        ParseOne(request, MapiDirection.Request, context: context, captureScope: "failed-logon");
+        ParseOne(
+            Concat([0xFE, 0x01], Le(0x80000001u)),
+            MapiDirection.Response,
+            context: context,
+            captureScope: "failed-logon");
+        Assert.False(context.TryGetLogonPrivacy("failed-logon", 5, out _));
+
+        context.RegisterLogonCorrelationScope("missing-logon", "logical-connection");
+        ParseOne(request, MapiDirection.Request, context: context, captureScope: "missing-logon");
+        context.CompleteHttpSession("missing-logon");
+        Assert.False(context.TryGetLogonPrivacy("missing-logon", 5, out _));
+
+        context.RegisterLogonCorrelationScope("truncated-logon", "logical-connection");
+        ParseOne(request, MapiDirection.Request, context: context, captureScope: "truncated-logon");
+        AssertThrowsParse(
+            Concat([0xFE, 0x01], Le(0u), [0x01]),
+            MapiDirection.Response,
+            context,
+            "truncated-logon");
+        context.CompleteHttpSession("truncated-logon");
+        Assert.False(context.TryGetLogonPrivacy("truncated-logon", 5, out _));
+
+    }
+
+    [Fact]
+    public void MultipleLogonResponsesRemainFifoAlignedAndResponseFlagsAreAuthoritative()
+    {
+        const string scope = "multiple-logons";
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope(scope, "logical-connection");
+        ParseOne(
+            Concat([0xFE, 0x05, 0x00, 0x01], Le(0u), Le(0u), Le((ushort)0)),
+            MapiDirection.Request,
+            context: context,
+            captureScope: scope);
+        ParseOne(
+            Concat([0xFE, 0x06, 0x00, 0x00], Le(0u), Le(0u), Le((ushort)0)),
+            MapiDirection.Request,
+            context: context,
+            captureScope: scope);
+
+        ParseOne(
+            Concat(
+                [0xFE, 0x01],
+                Le(0u),
+                [0x00],
+                ThirteenFolderIds(),
+                Le((ushort)7),
+                Guid.NewGuid().ToByteArray(),
+                Guid.NewGuid().ToByteArray()),
+            MapiDirection.Response,
+            context: context,
+            captureScope: scope);
+        ParseOne(
+            Concat(
+                [0xFE, 0x02],
+                Le(0u),
+                [0x01],
+                ThirteenFolderIds(),
+                [0x00],
+                Guid.NewGuid().ToByteArray(),
+                Le((ushort)1),
+                Guid.NewGuid().ToByteArray(),
+                new byte[8],
+                new byte[8],
+                Le(0u)),
+            MapiDirection.Response,
+            context: context,
+            captureScope: scope);
+
+        Assert.True(context.TryGetLogonPrivacy(scope, 5, out var firstPrivate));
+        Assert.False(firstPrivate);
+        Assert.True(context.TryGetLogonPrivacy(scope, 6, out var secondPrivate));
+        Assert.True(secondPrivate);
+    }
+
+    [Fact]
+    public void LogonResponseRemainsAlignedWhenEarlierReleaseHasNoResponse()
+    {
+        const string scope = "release-before-logon";
+        var context = new MapiCaptureContext();
+        context.RegisterLogonCorrelationScope(scope, "logical-connection");
+        ParseOne(
+            Concat([0xFE, 0x05, 0x00, 0x01], Le(0u), Le(0u), Le((ushort)0)),
+            MapiDirection.Request,
+            operationIndex: 1,
+            context: context,
+            captureScope: scope);
+        ParseOne(
+            Concat(
+                [0xFE, 0x01],
+                Le(0u),
+                [0x00],
+                ThirteenFolderIds(),
+                Le((ushort)7),
+                Guid.NewGuid().ToByteArray(),
+                Guid.NewGuid().ToByteArray()),
+            MapiDirection.Response,
+            operationIndex: 0,
+            context: context,
+            captureScope: scope);
+
+        Assert.True(context.TryGetLogonPrivacy(scope, 5, out var isPrivate));
+        Assert.False(isPrivate);
+    }
+
+    [Fact]
     public void ResponseLogonParsesWrongServerRedirectionWithServerName()
     {
         var bytes = Concat([0xFE, 0x00], Le((uint)0x00000478), [0x00], [(byte)5], Ascii("host1"));

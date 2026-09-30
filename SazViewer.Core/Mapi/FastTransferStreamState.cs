@@ -320,4 +320,11 @@ internal sealed class FastTransferStreamAssembler
         states = states.RemoveRange(states.Keys.Where(
             key => key.Provisional && StringComparer.Ordinal.Equals(key.ConnectionScope, captureScope)));
     }
+
+    public void ForgetConnectionScope(string connectionScope)
+    {
+        states = states.RemoveRange(states.Keys.Where(
+            key => !key.Provisional
+                && StringComparer.Ordinal.Equals(key.ConnectionScope, connectionScope)));
+    }
 }

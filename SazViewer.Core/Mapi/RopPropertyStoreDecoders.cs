@@ -448,10 +448,10 @@ internal static class RopPropertyStoreDecoders
                     AddAsciiField(ref reader, children, "Essdn", budget);
                 }
 
-                // Transactional: only recorded once the whole request has parsed without throwing, so
-                // a malformed RopLogon request never poisons later RopWritePerUserInformation/
-                // RopSetMessageReadFlag correlation for this LogonId.
-                context?.RecordLogonPrivacy(captureScope, logonId, (logonFlags & LogonFlagsPrivate) != 0);
+                context?.StageLogonPrivacy(
+                    captureScope,
+                    logonId,
+                    (logonFlags & LogonFlagsPrivate) != 0);
                 return;
             }
             default:
@@ -790,9 +790,11 @@ internal static class RopPropertyStoreDecoders
                 // and RopSetMessageReadFlag gaps that genuinely cannot self-determine their own shape).
                 AddHandleIndex(ref reader, children, "OutputHandleIndex", operationIndex, handleReferences, budget);
                 var success = AddReturnValue(ref reader, children, budget, out var raw);
+                bool? responseIsPrivate = null;
                 if (success)
                 {
                     var logonFlags = AddByteField(ref reader, children, "LogonFlags", budget);
+                    responseIsPrivate = (logonFlags & LogonFlagsPrivate) != 0;
                     AddFixedFolderIdArray(ref reader, children, "FolderIds", 13, budget);
                     if ((logonFlags & LogonFlagsPrivate) != 0)
                     {
@@ -820,7 +822,7 @@ internal static class RopPropertyStoreDecoders
                         AddAsciiField(ref reader, children, "ServerName", budget);
                     }
                 }
-
+                context?.CompleteLogonPrivacy(captureScope, success, responseIsPrivate);
                 return;
             }
             case 0xFF: // RopBufferTooSmall

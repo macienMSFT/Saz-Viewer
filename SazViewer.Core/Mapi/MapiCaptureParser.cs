@@ -53,7 +53,15 @@ internal static class MapiCaptureParser
                         ? MapiEndpoint.Mailbox
                         : MapiEndpoint.Unknown;
             var protocolError = responseCode is not null && responseCode != "0";
-            context.RegisterLogonCorrelationScope(session.Id, BuildLogonCorrelationScope(session));
+            var correlationWarning = context.ResolveAndRegisterLogonCorrelationScope(
+                session.Id,
+                requestType,
+                BuildLogonCorrelationFallback(session),
+                session.Request?.HeaderValues("Cookie") ?? []);
+            if (correlationWarning is not null)
+            {
+                warnings.Add(correlationWarning);
+            }
 
             var request = ParseMessage(
                 session.Request,
@@ -73,6 +81,33 @@ internal static class MapiCaptureParser
                 warnings,
                 session.Id,
                 cancellationToken);
+            if (requestType.Equals("Connect", StringComparison.OrdinalIgnoreCase)
+                || requestType.Equals("Bind", StringComparison.OrdinalIgnoreCase))
+            {
+                var establishmentWarning = context.CompleteLogonCorrelationEstablishment(
+                    session.Id,
+                    responseCode == "0");
+                if (establishmentWarning is not null)
+                {
+                    warnings.Add(establishmentWarning);
+                }
+            }
+            if (responseCode == "0")
+            {
+                var aliasWarning = context.RegisterResponseCookieAliases(
+                    session.Id,
+                    session.Response?.HeaderValues("Set-Cookie") ?? []);
+                if (aliasWarning is not null)
+                {
+                    warnings.Add(aliasWarning);
+                }
+                if (session.Response is not null
+                    && (requestType.Equals("Disconnect", StringComparison.OrdinalIgnoreCase)
+                        || requestType.Equals("Unbind", StringComparison.OrdinalIgnoreCase)))
+                {
+                    context.EndLogonCorrelationScope(session.Id);
+                }
+            }
             context.CompleteHttpSession(session.Id);
             var result = new MapiSession(
                 session.Id,
@@ -125,7 +160,7 @@ internal static class MapiCaptureParser
             coverage);
     }
 
-    private static string BuildLogonCorrelationScope(HttpSession session)
+    private static string BuildLogonCorrelationFallback(HttpSession session)
     {
         var request = session.Request;
         var requestPath = session.Url ?? request?.StartLine ?? session.Id;
