@@ -64,10 +64,10 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .inspector-nav{display:flex;align-items:center;gap:6px}
 .inspector-position{color:var(--muted);font-size:12px;white-space:nowrap;min-width:70px;text-align:center}
 .inspector-close{font-size:16px;line-height:1;padding:6px 10px}
-.session-details{flex-basis:100%;margin:2px 0 0}.session-details summary{font-size:12px}
+.session-details{flex:0 0 auto;max-height:30vh;overflow:auto;margin:2px 14px 0}.session-details summary{font-size:12px}
 .inspector-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .primary-tab-strip{padding:0 14px;background:var(--panel2);flex:0 0 auto}
-.primary-panels{flex:1;min-height:0}
+.tab-panels.primary-panels{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;border:none;padding:0;background:transparent}
 .primary-panel{flex:1;min-height:0;display:flex;flex-direction:column;padding:10px 14px;overflow:hidden}
 .message-panel{display:flex;flex-direction:column;flex:1;min-height:0}
 .headers{white-space:pre-wrap}

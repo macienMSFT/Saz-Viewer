@@ -38,6 +38,9 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("<h2 id=\"inspectorTitle\" class=\"inspector-heading\"></h2>", html, StringComparison.Ordinal);
         Assert.Contains("<div id=\"inspectorBody\" class=\"inspector-body\"></div>", html, StringComparison.Ordinal);
         Assert.Contains("dialog#httpInspector{position:fixed;inset:0;width:100vw;height:100vh", html, StringComparison.Ordinal);
+        Assert.Contains(".session-details{flex:0 0 auto;max-height:30vh;overflow:auto", html, StringComparison.Ordinal);
+        Assert.Contains(".tab-panels.primary-panels{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(".session-details{flex-basis:100%", html, StringComparison.Ordinal);
         Assert.Contains("<template id=\"http-detail-0\">", html, StringComparison.Ordinal);
         Assert.Contains("tabindex=\"0\" aria-selected=\"false\"", html, StringComparison.Ordinal);
         Assert.Contains("template.content.cloneNode(true)", html, StringComparison.Ordinal);
