@@ -56,6 +56,7 @@
                         <Trigger Property="ToggleButton.IsChecked" Value="True">
                             <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource Saz.Accent}" />
                             <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.Selected}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Saz.SelectedText}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.5" />
@@ -159,6 +160,7 @@
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
                             <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.Selected}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Saz.SelectedText}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -269,7 +271,8 @@
                 <ControlTemplate TargetType="TabControl">
                     <DockPanel KeyboardNavigation.TabNavigation="Local">
                         <Border DockPanel.Dock="Top" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="0,0,0,1">
-                            <TabPanel x:Name="HeaderPanel" IsItemsHost="True" KeyboardNavigation.TabIndex="1" Panel.ZIndex="1" />
+                            <!-- A WrapPanel rather than TabPanel: when narrow panes wrap the tabs, the fixed tab order is kept (TabPanel moves the selected row last). -->
+                            <WrapPanel x:Name="HeaderPanel" IsItemsHost="True" KeyboardNavigation.TabIndex="1" KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Cycle" Panel.ZIndex="1" />
                         </Border>
                         <Border x:Name="ContentBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="1,0,1,1" Padding="{TemplateBinding Padding}" KeyboardNavigation.TabIndex="2">
@@ -287,7 +290,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="TabControl">
                     <Border BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,0,0,1">
-                        <TabPanel IsItemsHost="True" KeyboardNavigation.TabNavigation="Once" />
+                        <WrapPanel IsItemsHost="True" KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Cycle" />
                     </Border>
                 </ControlTemplate>
             </Setter.Value>

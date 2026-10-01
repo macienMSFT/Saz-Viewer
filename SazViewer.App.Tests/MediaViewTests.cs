@@ -73,10 +73,10 @@ internal static class MediaCaptures
         ("raw/4_c.txt", Ascii($"GET https://a.test/me HTTP/1.1\r\nHost: a.test\r\nAuthorization: {BearerValue}\r\n\r\n")),
         ("raw/4_s.txt", Response("WWW-Authenticate: Basic realm=\"x\"\r\nContent-Type: text/plain\r\n", Ascii("ok"))));
 
-    public static CaptureViewModel Open(out FakeClipboard clipboard)
+    public static CaptureViewModel Open(out FakeClipboard clipboard, UiPreferences? preferences = null)
     {
         clipboard = new FakeClipboard();
-        return new CaptureViewModel(Media(), clipboard);
+        return new CaptureViewModel(Media(), clipboard, preferences ?? new UiPreferences(null));
     }
 }
 
@@ -162,9 +162,11 @@ public sealed class HexViewModelTests
 
 public sealed class AuthViewModelTests
 {
-    private static (CaptureViewModel Model, FakeClipboard Clipboard, MessageTabViewModel Tab) OpenAuth()
+    private static (CaptureViewModel Model, FakeClipboard Clipboard, MessageTabViewModel Tab) OpenAuth(InspectorLayout layout = InspectorLayout.Split)
     {
-        var model = MediaCaptures.Open(out var clipboard);
+        var preferences = new UiPreferences(null);
+        preferences.SetLayout(LayoutWidthClass.Wide, layout);
+        var model = MediaCaptures.Open(out var clipboard, preferences);
         model.Inspector.Load(model.Sessions.VisibleRows[3]);
         model.Inspector.SelectedSide = InspectorViewModel.RequestSide;
         var request = model.Inspector.Request!;
@@ -210,7 +212,8 @@ public sealed class AuthViewModelTests
     [Fact]
     public void RevealResetsOnSideSwitch()
     {
-        var (model, _, tab) = OpenAuth();
+        // Single view: switching sides hides (and resets) the other side.
+        var (model, _, tab) = OpenAuth(InspectorLayout.Single);
         var auth = (AuthViewModel)tab.Content!;
         auth.IsRevealed = true;
 

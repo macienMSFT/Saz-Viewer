@@ -3,8 +3,6 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
-using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.Wpf;
 
 namespace SazViewer.App;
 
@@ -25,21 +23,20 @@ internal interface ICaptureTabHost
 }
 
 /// <summary>
-/// One open capture: its in-memory report, strip header, content view, lazily created WebView2 with its
-/// <see cref="SecureReportSession"/>, inspector popups, and file watcher. Disposing releases all of them.
+/// One open capture: its in-memory report, strip header, native <see cref="Views.CaptureView"/>, pop-out
+/// inspector windows, and file watcher. Disposing releases all of them.
 /// </summary>
 internal sealed class CaptureTab : ICaptureTab
 {
     private const string AppTitle = "SAZ Viewer";
     private readonly ICaptureTabHost host;
-    private readonly List<ReportPopupWindow> popups = [];
+    private readonly List<InspectorWindow> popOuts = [];
     private readonly CaptureFileWatcher watcher;
     private readonly FileChangeTracker tracker;
+    private readonly TextBlock headerTitle;
     private ReportDocument? document;
     private Views.CaptureView? nativeView;
-    private WebView2? webView;
-    private SecureReportSession? session;
-    private Task<bool>? webViewInitialization;
+    private ViewModels.CaptureViewModel? viewModel;
     private FileChangeNotice notice;
     private string? reloadError;
     private bool reloading;
@@ -54,21 +51,14 @@ internal sealed class CaptureTab : ICaptureTab
         View = new CaptureTabView { Visibility = Visibility.Collapsed };
         View.ReloadRequested += async (_, _) => await host.ReloadAsync(this);
         View.DismissRequested += (_, _) => Dismiss();
+        headerTitle = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MaxWidth = 260, TextTrimming = TextTrimming.CharacterEllipsis };
         TabItem = CreateTabItem();
-        if (!UseLegacyReport)
-        {
-            nativeView = new Views.CaptureView { DataContext = new ViewModels.CaptureViewModel(document.Report) };
-            View.Host.Children.Add(nativeView);
-        }
-        watcher =  new CaptureFileWatcher(SourcePath, CaptureFileWatcher.DefaultQuietPeriod, TimeProvider.System);
+        nativeView = new Views.CaptureView();
+        View.Host.Children.Add(nativeView);
+        Attach(document);
+        watcher = new CaptureFileWatcher(SourcePath, CaptureFileWatcher.DefaultQuietPeriod, TimeProvider.System);
         watcher.Settled += OnFileSettled;
     }
-
-    /// <summary>
-    /// Opt-in to the previous WebView2-hosted HTML report (set <c>SAZVIEWER_LEGACY_HTML_REPORT=1</c>); used by the
-    /// report smoke tests while the native views are completed.
-    /// </summary>
-    public static bool UseLegacyReport { get; } = Environment.GetEnvironmentVariable("SAZVIEWER_LEGACY_HTML_REPORT") == "1";
 
     public string SourcePath { get; }
 
@@ -76,20 +66,22 @@ internal sealed class CaptureTab : ICaptureTab
 
     public ReportDocument? Document => disposed ? null : document;
 
+    /// <summary>True when the capture is shown with credentials redacted (File › View scrubbed).</summary>
+    public bool IsScrubbed => document?.IsScrubbed == true;
+
     public TabItem TabItem { get; }
 
     public CaptureTabView View { get; }
 
     public bool IsDisposed => disposed;
 
-    public bool IsWebViewCreated => webView is not null;
-
-    /// <summary>The native capture view, or null in legacy report mode.</summary>
+    /// <summary>The native capture view.</summary>
     public Views.CaptureView? NativeView => nativeView;
 
-    public ViewModels.CaptureViewModel? ViewModel => nativeView?.DataContext as ViewModels.CaptureViewModel;
+    public ViewModels.CaptureViewModel? ViewModel => viewModel;
 
-    public int PopupCount => popups.Count;
+    /// <summary>Open "Open in new window" inspector windows.</summary>
+    public IReadOnlyList<InspectorWindow> PopOuts => popOuts;
 
     public string Status { get; private set; } = "";
 
@@ -103,39 +95,30 @@ internal sealed class CaptureTab : ICaptureTab
         }
     }
 
-    /// <summary>Shows this tab's content, creating its WebView2 on first activation.</summary>
-    public async Task ActivateAsync()
+    /// <summary>Shows this tab's content.</summary>
+    public Task ActivateAsync()
     {
         View.Visibility = Visibility.Visible;
         UpdateStatus();
-        if (disposed || nativeView is not null)
-        {
-            return;
-        }
-        webViewInitialization ??= InitializeWebViewAsync();
-        await webViewInitialization;
+        return Task.CompletedTask;
     }
 
     public void Deactivate() => View.Visibility = Visibility.Collapsed;
 
-    /// <summary>Swaps in a freshly parsed report, closing popups that show the previous one.</summary>
+    /// <summary>Swaps in a freshly parsed report, closing pop-out inspectors that show the previous one.</summary>
     public void ReplaceDocument(ReportDocument replacement, FileFingerprint? fingerprint)
     {
         if (disposed)
         {
             return;
         }
-        CloseAllPopups();
+        CloseAllPopOuts();
         document = replacement;
         reloadError = null;
         tracker.Reset(fingerprint);
         notice = tracker.Evaluate(FileFingerprint.TryRead(SourcePath));
         RenderNotice();
-        if (nativeView is not null)
-        {
-            nativeView.DataContext = new ViewModels.CaptureViewModel(replacement.Report);
-        }
-        session?.NavigateToReport();
+        Attach(replacement);
         UpdateStatus();
     }
 
@@ -154,31 +137,72 @@ internal sealed class CaptureTab : ICaptureTab
         disposed = true;
         watcher.Settled -= OnFileSettled;
         watcher.Dispose();
-        CloseAllPopups();
+        CloseAllPopOuts();
+        Detach();
         if (nativeView is not null)
         {
             nativeView.DataContext = null;
             View.Host.Children.Remove(nativeView);
             nativeView = null;
         }
-        if (webView is not null)
-        {
-            if (webView.CoreWebView2 is { } core)
-            {
-                core.ProcessFailed -= OnProcessFailed;
-            }
-            View.Host.Children.Remove(webView);
-            webView.Dispose();
-            webView = null;
-        }
-        session = null;
         document = null;
         (View.Parent as Panel)?.Children.Remove(View);
     }
 
+    private void Attach(ReportDocument source)
+    {
+        Detach();
+        viewModel = new ViewModels.CaptureViewModel(source.Report);
+        viewModel.Inspector.PopOutRequested += OnPopOutRequested;
+        nativeView!.DataContext = viewModel;
+        UpdateHeader();
+    }
+
+    private void Detach()
+    {
+        if (viewModel is not null)
+        {
+            viewModel.Inspector.PopOutRequested -= OnPopOutRequested;
+            viewModel.Inspector.Close();
+            viewModel = null;
+        }
+    }
+
+    private void OnPopOutRequested(object? sender, Model.SessionRow row)
+    {
+        if (viewModel is null || disposed)
+        {
+            return;
+        }
+        var window = new InspectorWindow(FileName + (IsScrubbed ? " (scrubbed)" : ""), viewModel.CreatePopOutInspector(row))
+        {
+            Owner = host.Owner
+        };
+        popOuts.Add(window);
+        window.Closed += (_, _) => popOuts.Remove(window);
+        // The report's "Open in new tab" moves the inspector: close it in the main window.
+        viewModel.Inspector.Close();
+        window.Show();
+    }
+
+    private void CloseAllPopOuts()
+    {
+        foreach (var window in popOuts.ToArray())
+        {
+            window.Close();
+        }
+    }
+
+    private void UpdateHeader()
+    {
+        var name = IsScrubbed ? $"{FileName} (scrubbed)" : FileName;
+        headerTitle.Text = name;
+        AutomationProperties.SetName(TabItem, name);
+    }
+
     private TabItem CreateTabItem()
     {
-        var title = new TextBlock { Text = FileName, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 260, TextTrimming = TextTrimming.CharacterEllipsis };
+        headerTitle.Text = FileName;
         var close = new Button
         {
             Content = "\u2715",
@@ -194,7 +218,7 @@ internal sealed class CaptureTab : ICaptureTab
         AutomationProperties.SetName(close, $"Close {FileName}");
         close.Click += (_, _) => host.RequestClose(this);
         var header = new StackPanel { Orientation = Orientation.Horizontal };
-        header.Children.Add(title);
+        header.Children.Add(headerTitle);
         header.Children.Add(close);
         var item = new TabItem { Header = header, ToolTip = SourcePath, Tag = this };
         AutomationProperties.SetName(item, FileName);
@@ -208,82 +232,6 @@ internal sealed class CaptureTab : ICaptureTab
         };
         return item;
     }
-
-    private async Task<bool> InitializeWebViewAsync()
-    {
-        var view = new WebView2();
-        webView = view;
-        View.Host.Children.Add(view);
-        try
-        {
-            await view.EnsureCoreWebView2Async(await WebViewEnvironment.GetAsync());
-        }
-        catch (WebView2RuntimeNotFoundException)
-        {
-            MessageBox.Show(host.Owner,
-                "The Microsoft Edge WebView2 Runtime is required to display reports. Install it from https://go.microsoft.com/fwlink/p/?LinkId=2124703 and try again. File › Export HTML still works without it.",
-                AppTitle, MessageBoxButton.OK, MessageBoxImage.Error);
-            webViewInitialization = null;
-            View.Host.Children.Remove(view);
-            view.Dispose();
-            webView = null;
-            return false;
-        }
-        if (disposed)
-        {
-            return false;
-        }
-        session = CreateSession(view.CoreWebView2, () => Document);
-        view.CoreWebView2.ProcessFailed += OnProcessFailed;
-        session.NavigateToReport();
-        return true;
-    }
-
-    private SecureReportSession CreateSession(CoreWebView2 core, Func<ReportDocument?> provider)
-    {
-        var created = new SecureReportSession(core, provider);
-        created.CaptureDropped += async (_, path) => await host.OpenCapturesAsync([path]);
-        created.CreatePopupAsync = () => CreatePopupAsync(provider());
-        return created;
-    }
-
-    private async Task<CoreWebView2?> CreatePopupAsync(ReportDocument? source)
-    {
-        if (source is null || !ReferenceEquals(source, Document))
-        {
-            return null;
-        }
-        var popup = new ReportPopupWindow($"{source.FileName} - Inspector - {AppTitle}");
-        popups.Add(popup);
-        popup.Closed += (_, _) => popups.Remove(popup);
-        popup.Show();
-        await popup.ReportView.EnsureCoreWebView2Async(await WebViewEnvironment.GetAsync());
-        var core = popup.ReportView.CoreWebView2;
-        CreateSession(core, () => ReferenceEquals(source, Document) ? source : null);
-        core.WindowCloseRequested += (_, _) => popup.Close();
-        return core;
-    }
-
-    private void CloseAllPopups()
-    {
-        foreach (var popup in popups.ToArray())
-        {
-            popup.Close();
-        }
-    }
-
-    private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
-    {
-        if (e.ProcessFailedKind is CoreWebView2ProcessFailedKind.RenderProcessExited
-            or CoreWebView2ProcessFailedKind.RenderProcessUnresponsive
-            && Document is not null)
-        {
-            Status = "The report view stopped responding and was reloaded.";
-            host.OnTabStateChanged(this);
-            session?.NavigateToReport();
-        }
-    }
-
     private void OnFileSettled(object? sender, FileFingerprint? current) =>
         View.Dispatcher.BeginInvoke(() =>
         {

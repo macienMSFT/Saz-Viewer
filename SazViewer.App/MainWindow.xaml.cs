@@ -147,8 +147,10 @@ public partial class MainWindow : Window, ICaptureTabHost
         UpdateChrome();
     }
 
-    private async Task ReloadAsync(CaptureTab tab)
+    /// <summary>Re-parses the tab's capture; <paramref name="scrub"/> switches credential scrubbing (default: keep it).</summary>
+    private async Task ReloadAsync(CaptureTab tab, bool? scrub = null)
     {
+        var scrubAuth = scrub ?? tab.IsScrubbed;
         if (tab.IsReloading || tab.IsDisposed)
         {
             return;
@@ -169,8 +171,8 @@ public partial class MainWindow : Window, ICaptureTabHost
             var fingerprint = FileFingerprint.TryRead(tab.SourcePath);
             string? failure = null;
             var reloaded = await RunBusyAsync(
-                $"Reloading {tab.FileName}…",
-                () => ReportBuilder.Build(tab.SourcePath, scrubAuth: false, new DialogPasswordProvider(this, tab.FileName, "to reload it")),
+                scrubAuth == tab.IsScrubbed ? $"Reloading {tab.FileName}…" : scrubAuth ? $"Scrubbing {tab.FileName}…" : $"Reopening {tab.FileName} unscrubbed…",
+                () => ReportBuilder.Build(tab.SourcePath, scrubAuth, new DialogPasswordProvider(this, tab.FileName, scrubAuth == tab.IsScrubbed ? "to reload it" : "to reopen it")),
                 error => failure = error);
             if (tab.IsDisposed)
             {
@@ -245,6 +247,8 @@ public partial class MainWindow : Window, ICaptureTabHost
         CloseTabMenuItem.IsEnabled = active is not null;
         ExportMenuItem.IsEnabled = !Busy && active?.Document is not null;
         ExportScrubbedMenuItem.IsEnabled = !Busy && active?.Document is not null;
+        ViewScrubbedMenuItem.IsEnabled = !Busy && active?.Document is not null && !active.IsReloading;
+        ViewScrubbedMenuItem.IsChecked = active?.IsScrubbed == true;
         StatusText.Text = busyMessage ?? (string.IsNullOrEmpty(active?.Status) ? "Ready" : active.Status);
     }
 
@@ -276,18 +280,18 @@ public partial class MainWindow : Window, ICaptureTabHost
         await operationGate.WaitAsync();
         try
         {
-            // The displayed report is unscrubbed; scrubbing mutates the parsed model, so a scrubbed export
-            // re-parses the capture (prompting again for an encrypted capture rather than retaining its password).
+            // Scrubbing mutates the parsed model, so an export whose scrubbing differs from the displayed capture
+            // re-parses it (prompting again for an encrypted capture rather than retaining its password).
             var exported = await RunBusyAsync(
                 $"Exporting {Path.GetFileName(outputPath)}…",
                 () =>
                 {
-                    var source = scrubbed
-                        ? ReportBuilder.Build(
+                    var source = scrubbed == current.IsScrubbed
+                        ? current
+                        : ReportBuilder.Build(
                             current.SourcePath,
-                            scrubAuth: true,
-                            new DialogPasswordProvider(this, current.FileName, "to export a scrubbed copy"))
-                        : current;
+                            scrubAuth: scrubbed,
+                            new DialogPasswordProvider(this, current.FileName, scrubbed ? "to export a scrubbed copy" : "to export it"));
                     ReportBuilder.WriteHtml(source, outputPath);
                     return source;
                 });
@@ -438,7 +442,7 @@ public partial class MainWindow : Window, ICaptureTabHost
         }
     }
 
-    // Keys typed into WebView2 arrive as forwarded accelerator events, but the browser HWND owns
+    // Keys typed into the WebView tab's WebView2 arrive as forwarded accelerator events, but the browser HWND owns
     // the input, so WPF's per-thread key state may not see Ctrl/Shift. Read the async state too.
     private static ModifierKeys CurrentModifiers()
     {
@@ -464,6 +468,15 @@ public partial class MainWindow : Window, ICaptureTabHost
     private async void OnExport(object sender, RoutedEventArgs e) => await Export(scrubbed: false);
 
     private async void OnExportScrubbed(object sender, RoutedEventArgs e) => await Export(scrubbed: true);
+
+    private async void OnViewScrubbed(object sender, RoutedEventArgs e)
+    {
+        if (tabs.Active is { } tab)
+        {
+            await ReloadAsync(tab, scrub: !tab.IsScrubbed);
+        }
+        UpdateChrome();
+    }
 
     private void OnExit(object sender, RoutedEventArgs e) => Close();
 

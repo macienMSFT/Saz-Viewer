@@ -30,7 +30,8 @@ internal sealed record SessionDetailsViewModel(string? Endpoints, string? Timers
 
 /// <summary>
 /// The session inspector: the selected session, Previous/Next over the visible grid rows, the Request and
-/// Response panes and the single-view active search. Per-session content is built only when a row loads.
+/// Response panes, the single/split layout and the active-view searches. Per-session content is built only when
+/// a row loads.
 /// </summary>
 internal sealed class InspectorViewModel : ObservableObject
 {
@@ -39,6 +40,8 @@ internal sealed class InspectorViewModel : ObservableObject
 
     private readonly SessionListViewModel list;
     private readonly IClipboardService clipboard;
+    private readonly bool followsGrid;
+    private readonly UiPreferences preferences;
     private readonly BodyFormatter formatter = new();
     private SessionRow? row;
     private MessagePaneViewModel? request;
@@ -48,18 +51,37 @@ internal sealed class InspectorViewModel : ObservableObject
     private string selectedSide = RequestSide;
     private string position = "";
     private bool isOpen;
+    private LayoutWidthClass widthClass = LayoutWidthClass.Wide;
+    private InspectorLayout layout;
 
-    public InspectorViewModel(SessionListViewModel list, IClipboardService clipboard)
+    /// <param name="followsGrid">
+    /// True for the inspector docked under the grid (loading a row selects it in the grid); false for a pop-out
+    /// window, which navigates the same visible rows without moving the grid selection.
+    /// </param>
+    public InspectorViewModel(SessionListViewModel list, IClipboardService clipboard, bool followsGrid = true, UiPreferences? preferences = null)
     {
         this.list = list;
         this.clipboard = clipboard;
+        this.followsGrid = followsGrid;
+        this.preferences = preferences ?? UiPreferences.Current;
+        layout = this.preferences.GetLayout(widthClass);
         PreviousCommand = new RelayCommand(() => Navigate(-1), () => list.Neighbor(row, -1) is not null);
         NextCommand = new RelayCommand(() => Navigate(1), () => list.Neighbor(row, 1) is not null);
         CloseCommand = new RelayCommand(Close);
+        ToggleLayoutCommand = new RelayCommand(ToggleLayout);
+        PopOutCommand = new RelayCommand(PopOut, () => followsGrid && row is not null);
         Search = new ActiveSearchViewModel(
             () => ActivePane?.SelectedTab?.Content?.SearchTarget,
             "Search active Request/Response view...",
             "Search active Request or Response view");
+        RequestSearch = new ActiveSearchViewModel(
+            () => request?.SelectedTab?.Content?.SearchTarget,
+            "Search active Request view...",
+            "Search active Request view");
+        ResponseSearch = new ActiveSearchViewModel(
+            () => response?.SelectedTab?.Content?.SearchTarget,
+            "Search active Response view...",
+            "Search active Response view");
         list.VisibleRowsChanged += (_, _) => UpdateNavigation();
     }
 
@@ -69,8 +91,52 @@ internal sealed class InspectorViewModel : ObservableObject
 
     public RelayCommand CloseCommand { get; }
 
+    /// <summary>Switches between single and split view (remembered per width class).</summary>
+    public RelayCommand ToggleLayoutCommand { get; }
+
+    /// <summary>Opens the current session in its own inspector window (docked inspector only).</summary>
+    public RelayCommand PopOutCommand { get; }
+
+    /// <summary>Raised with the current row when the user pops the inspector out into a window.</summary>
+    public event EventHandler<SessionRow>? PopOutRequested;
+
+    public bool CanPopOut => followsGrid;
+
     /// <summary>Active-view search in single view (follows the selected Request/Response side).</summary>
     public ActiveSearchViewModel Search { get; }
+
+    /// <summary>Split view: the Request pane's own active-view search.</summary>
+    public ActiveSearchViewModel RequestSearch { get; }
+
+    /// <summary>Split view: the Response pane's own active-view search.</summary>
+    public ActiveSearchViewModel ResponseSearch { get; }
+
+    /// <summary>The inspector's width class; each class remembers its own layout (split by default when wide).</summary>
+    public LayoutWidthClass WidthClass
+    {
+        get => widthClass;
+        set
+        {
+            if (SetProperty(ref widthClass, value))
+            {
+                OnPropertyChanged(nameof(IsNarrow));
+                ApplyLayout(preferences.GetLayout(value));
+            }
+        }
+    }
+
+    public bool IsNarrow => widthClass == LayoutWidthClass.Narrow;
+
+    public InspectorLayout Layout => layout;
+
+    /// <summary>True when an HTTP session shows Request and Response together (stacked when narrow).</summary>
+    public bool IsSplit => layout == InspectorLayout.Split && IsHttp;
+
+    /// <summary>True when an HTTP session shows one side, chosen by the Request/Response tabs.</summary>
+    public bool IsSingle => layout == InspectorLayout.Single && IsHttp;
+
+    /// <summary>The layout toggle's label: the layout it switches to.</summary>
+    public string LayoutToggleLabel => layout == InspectorLayout.Split ? "Single view" : "Split view";
 
     public SessionRow? Row => row;
 
@@ -101,7 +167,7 @@ internal sealed class InspectorViewModel : ObservableObject
 
     public MessagePaneViewModel? Response => response;
 
-    /// <summary>"request" or "response" (the primary tab in single view).</summary>
+    /// <summary>"request" or "response" (the side shown in single view; kept while split).</summary>
     public string SelectedSide
     {
         get => selectedSide;
@@ -112,7 +178,10 @@ internal sealed class InspectorViewModel : ObservableObject
             if (SetProperty(ref selectedSide, side))
             {
                 // Leaving a side resets its view state (e.g. revealed auth values, live WebView previews).
-                previous?.Deactivate();
+                if (!IsSplit)
+                {
+                    previous?.Deactivate();
+                }
                 Search.Reset();
                 OnPropertyChanged(nameof(SelectedSideIndex));
                 OnPropertyChanged(nameof(ActivePane));
@@ -141,7 +210,7 @@ internal sealed class InspectorViewModel : ObservableObject
             return;
         }
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        Search.Reset();
+        ResetSearches();
         DetachPanes();
         row = target;
         var session = target.Session;
@@ -159,7 +228,7 @@ internal sealed class InspectorViewModel : ObservableObject
         }
         selectedSide = RequestSide;
         IsOpen = true;
-        if (!ReferenceEquals(list.SelectedRow, target))
+        if (followsGrid && !ReferenceEquals(list.SelectedRow, target))
         {
             list.SelectedRow = target;
         }
@@ -179,13 +248,54 @@ internal sealed class InspectorViewModel : ObservableObject
 
     public void Close()
     {
-        Search.Reset();
+        ResetSearches();
         DetachPanes();
         row = null;
         details = null;
         IsOpen = false;
         OnPropertyChanged(string.Empty);
         UpdateNavigation();
+    }
+
+    private void ToggleLayout()
+    {
+        var next = layout == InspectorLayout.Split ? InspectorLayout.Single : InspectorLayout.Split;
+        preferences.SetLayout(widthClass, next);
+        ApplyLayout(next);
+    }
+
+    private void ApplyLayout(InspectorLayout next)
+    {
+        if (layout == next)
+        {
+            return;
+        }
+        ResetSearches();
+        layout = next;
+        if (next == InspectorLayout.Single)
+        {
+            // Single view restores the side selected before splitting; the now-hidden side is reset.
+            (selectedSide == ResponseSide ? request : response)?.Deactivate();
+        }
+        OnPropertyChanged(nameof(Layout));
+        OnPropertyChanged(nameof(IsSplit));
+        OnPropertyChanged(nameof(IsSingle));
+        OnPropertyChanged(nameof(LayoutToggleLabel));
+    }
+
+    private void PopOut()
+    {
+        if (row is { } current)
+        {
+            PopOutRequested?.Invoke(this, current);
+        }
+    }
+
+    private void ResetSearches()
+    {
+        Search.Reset();
+        RequestSearch.Reset();
+        ResponseSearch.Reset();
     }
 
     private void DetachPanes()
@@ -204,7 +314,11 @@ internal sealed class InspectorViewModel : ObservableObject
         webSocket = null;
     }
 
-    private void OnPaneViewChanged(object? sender, EventArgs e) => Search.Reset();
+    private void OnPaneViewChanged(object? sender, EventArgs e)
+    {
+        Search.Reset();
+        (ReferenceEquals(sender, request) ? RequestSearch : ResponseSearch).Reset();
+    }
 
     private void UpdateNavigation()
     {
@@ -212,5 +326,6 @@ internal sealed class InspectorViewModel : ObservableObject
         Position = index < 0 ? "" : $"{index + 1} of {list.VisibleRows.Count}";
         PreviousCommand.RaiseCanExecuteChanged();
         NextCommand.RaiseCanExecuteChanged();
+        PopOutCommand.RaiseCanExecuteChanged();
     }
 }

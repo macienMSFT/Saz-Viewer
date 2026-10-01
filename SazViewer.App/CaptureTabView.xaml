@@ -3,14 +3,14 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <DockPanel>
         <Border x:Name="NoticeBar" DockPanel.Dock="Top" Visibility="Collapsed"
-                Background="#FFFFF4CE" BorderBrush="#FFE0C060" BorderThickness="0,0,0,1" Padding="10,6"
+                Background="{DynamicResource Saz.WarningBg}" BorderBrush="{DynamicResource Saz.Warn}" BorderThickness="0,0,0,1" Padding="10,6"
                 AutomationProperties.LiveSetting="Polite">
             <DockPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button x:Name="ReloadButton" Content="_Reload" MinWidth="72" Margin="8,0,0,0" Click="OnReload" />
                     <Button x:Name="DismissButton" Content="_Dismiss" MinWidth="72" Margin="8,0,0,0" Click="OnDismiss" />
                 </StackPanel>
-                <TextBlock x:Name="NoticeText" VerticalAlignment="Center" TextWrapping="Wrap" Foreground="Black" />
+                <TextBlock x:Name="NoticeText" VerticalAlignment="Center" TextWrapping="Wrap" Foreground="{DynamicResource Saz.Text}" />
             </DockPanel>
         </Border>
         <Grid x:Name="WebViewHost" />

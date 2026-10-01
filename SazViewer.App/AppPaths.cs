@@ -16,6 +16,8 @@ internal static class AppPaths
 
     public static string RecentFilesPath => Path.Combine(DataDirectory, "recent.json");
 
+    public static string PreferencesPath => Path.Combine(DataDirectory, "preferences.json");
+
     /// <summary>The app's own <c>SazViewer.App.exe</c> (apphost), or null when it cannot be found.</summary>
     public static string? ExecutablePath { get; } = ResolveExecutablePath(AppContext.BaseDirectory);
 

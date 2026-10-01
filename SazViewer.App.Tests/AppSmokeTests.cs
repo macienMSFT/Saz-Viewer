@@ -2,107 +2,78 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Windows.Automation;
 using Microsoft.Playwright;
 
 namespace SazViewer.App.Tests;
 
 /// <summary>
-/// Launches the real SazViewer.App.exe with a synthetic capture and drives the hosted
-/// WebView2 over the Chrome DevTools Protocol. The debugging port is enabled only for
-/// this child process through the standard WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
-/// variable, and the app data root is redirected to a private temp directory.
+/// Launches the real SazViewer.App.exe with synthetic captures and drives the native UI through UI Automation.
+/// The sandboxed WebView tab is inspected over the Chrome DevTools Protocol: the debugging port is enabled only
+/// for this child process through the standard WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS variable, and the app data
+/// root is redirected to a private temp directory.
 /// </summary>
 public sealed class AppSmokeTests
 {
-    private const string ReportUrl = "https://saz-viewer.invalid/report.html";
+    private const string PreviewUrl = "https://webview-preview.sazviewer.invalid/document.html";
 
     [Fact]
-    public async Task App_LoadsReport_BlocksNetworkAndNavigation_AndHostsPopup()
+    public async Task App_ShowsNativeGrid_AndSandboxedWebViewTab_IsLazyBlockedAndDisposed()
     {
         using var temp = new TempDirectory();
-        var capturePath = Path.Combine(temp.Path, "smoke.saz");
-        TestCaptures.WritePlain(capturePath);
+        var capturePath = TestCaptures.WritePlain(temp.File("smoke.saz"));
         var port = GetFreePort();
 
-        var appPath = Path.Combine(AppContext.BaseDirectory, "SazViewer.App.exe");
-        var startInfo = new ProcessStartInfo(appPath) { UseShellExecute = false };
-        startInfo.ArgumentList.Add(capturePath);
-        startInfo.Environment["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = $"--remote-debugging-port={port}";
-        startInfo.Environment[AppPaths.DataDirectoryOverrideVariable] = Path.Combine(temp.Path, "data");
-        // These smoke tests drive the report through CDP, so they use the opt-in WebView2 report view.
-        startInfo.Environment["SAZVIEWER_LEGACY_HTML_REPORT"] = "1";
-
-        using var process = Process.Start(startInfo)!;
+        using var process = Process.Start(CreateStartInfo(capturePath, Path.Combine(temp.Path, "data"), port))!;
         try
         {
+            var window = await WaitForAsync(() => MainWindow(process), "main window");
+            var grid = await WaitForAsync(() => Find(window, "HTTP sessions", ControlType.DataGrid), "session grid");
+            var rows = await WaitForAsync(() => DataRows(grid) is { Count: 2 } found ? found : null, "two session rows");
+
+            // The WebView tab's WebView2 is created only when the tab is shown.
+            Assert.False(await DebuggerRespondsAsync(port));
+
+            ((SelectionItemPattern)rows[1].GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+            var responseViews = await WaitForAsync(() => Find(window, "Response detail views", ControlType.Tab), "Response views");
+            var webViewTab = await WaitForAsync(() => Find(responseViews, "WebView", ControlType.TabItem), "WebView tab");
+            ((SelectionItemPattern)webViewTab.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+
             await WaitForDebuggerAsync(port, process);
             using var playwright = await Playwright.CreateAsync();
-            await using var browser = await playwright.Chromium.ConnectOverCDPAsync($"http://127.0.0.1:{port}");
-            var context = browser.Contexts.Single();
-            var page = await WaitForPageAsync(context, ReportUrl);
-
-            await page.Locator("#httpTable tbody tr").First.WaitForAsync();
-            Assert.Equal(2, await page.Locator("#httpTable tbody tr").CountAsync());
-
-            // Every request outside the in-memory report is refused, including same-origin paths.
-            var fetchResults = await page.EvaluateAsync<string[]>(
-                """
-                async () => {
-                  const probe = async url => {
-                    try { const r = await fetch(url, {cache: 'no-store'}); return url + ':' + r.status; }
-                    catch { return url + ':blocked'; }
-                  };
-                  return [
-                    await probe('https://example.com/'),
-                    await probe('http://127.0.0.1:1/'),
-                    await probe('https://saz-viewer.invalid/other')
-                  ];
-                }
-                """);
-            Assert.All(fetchResults, result => Assert.True(
-                result.EndsWith(":blocked", StringComparison.Ordinal) || result.EndsWith(":403", StringComparison.Ordinal),
-                result));
-
-            // Top-level navigation away from the report is cancelled.
-            await page.EvaluateAsync("() => { window.location.href = 'https://example.com/'; }");
-            await Task.Delay(1000);
-            Assert.StartsWith(ReportUrl, page.Url, StringComparison.Ordinal);
-            Assert.Equal(2, await page.Locator("#httpTable tbody tr").CountAsync());
-
-            // localStorage persists on the stable synthetic origin.
-            await page.EvaluateAsync("() => localStorage.setItem('saz-smoke', 'ok')");
-            Assert.Equal("ok", await page.EvaluateAsync<string>("() => localStorage.getItem('saz-smoke')"));
-
-            // Arbitrary pop-ups are refused.
-            Assert.True(await page.EvaluateAsync<bool>("() => window.open('https://example.com/', '_blank') === null"));
-
-            // "Open in new tab" lands in an app-controlled window that shows the same report.
-            await page.Locator("#httpTable tbody tr").First.ClickAsync();
-            await page.Locator("#inspectorOpenTab").WaitForAsync(new() { State = WaitForSelectorState.Visible });
-            await page.Locator("#inspectorOpenTab").ClickAsync();
-            Assert.Equal(string.Empty, await page.EvaluateAsync<string>("() => inspectorOpenStatus.textContent"));
-
-            // The app hands WebView2 a new controller for the popup, which Playwright does not attach to
-            // an existing CDP session; a fresh connection enumerates it.
-            var popupBrowser = await ConnectWhenPageExistsAsync(playwright, port, ReportUrl + "#saz-inspector?");
-            await using (popupBrowser)
+            await using (var browser = await playwright.Chromium.ConnectOverCDPAsync($"http://127.0.0.1:{port}"))
             {
-                var popup = popupBrowser.Contexts.SelectMany(c => c.Pages)
-                    .Single(p => p.Url.StartsWith(ReportUrl + "#saz-inspector?", StringComparison.Ordinal));
-                await popup.WaitForFunctionAsync("() => document.body.classList.contains('inspector-only')");
-                Assert.Equal("ok", await popup.EvaluateAsync<string>("() => localStorage.getItem('saz-smoke')"));
-                await popup.EvaluateAsync("() => { window.location.href = 'https://example.com/'; }");
-                await Task.Delay(1000);
-                Assert.StartsWith(ReportUrl + "#", popup.Url, StringComparison.Ordinal);
+                var page = await WaitForPageAsync(browser.Contexts.Single(), PreviewUrl);
+                Assert.Equal(PreviewUrl, page.Url);
+                // DevTools evaluation still works with page scripts disabled; requests and navigation stay blocked.
+                var fetchResults = await page.EvaluateAsync<string[]>(
+                    """
+                    async () => {
+                      const probe = async url => {
+                        try { const r = await fetch(url, {cache: 'no-store'}); return url + ':' + r.status; }
+                        catch { return url + ':blocked'; }
+                      };
+                      return [await probe('https://example.com/'), await probe('https://webview-preview.sazviewer.invalid/other')];
+                    }
+                    """);
+                Assert.All(fetchResults, result => Assert.True(
+                    result.EndsWith(":blocked", StringComparison.Ordinal) || result.EndsWith(":403", StringComparison.Ordinal), result));
+                Assert.True(await page.EvaluateAsync<bool>("() => window.open('https://example.com/', '_blank') === null"));
             }
+
+            // Leaving the tab disposes the WebView2 (and with it the browser process and its debugging endpoint).
+            var headers = await WaitForAsync(() => Find(responseViews, "Headers", ControlType.TabItem), "Headers tab");
+            ((SelectionItemPattern)headers.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (await PreviewPageExistsAsync(port) && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(250);
+            }
+            Assert.False(await PreviewPageExistsAsync(port));
         }
         finally
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync();
-            }
+            await StopAsync(process);
         }
     }
 
@@ -112,20 +83,16 @@ public sealed class AppSmokeTests
         using var temp = new TempDirectory();
         var first = TestCaptures.WritePlain(temp.File("first.saz"));
         var second = TestCaptures.WriteSimple(temp.File("second.saz"), 3);
-        var port = GetFreePort();
         var dataDirectory = Path.Combine(temp.Path, "data");
 
-        using var process = Process.Start(CreateStartInfo(first, dataDirectory, port))!;
+        using var process = Process.Start(CreateStartInfo(first, dataDirectory, port: null))!;
         try
         {
-            await WaitForDebuggerAsync(port, process);
-            using var playwright = await Playwright.CreateAsync();
-            await using (var browser = await playwright.Chromium.ConnectOverCDPAsync($"http://127.0.0.1:{port}"))
-            {
-                var page = await WaitForPageAsync(browser.Contexts.Single(), ReportUrl);
-                await page.Locator("#httpTable tbody tr").First.WaitForAsync();
-                Assert.Equal(2, await page.Locator("#httpTable tbody tr").CountAsync());
-            }
+            var window = await WaitForAsync(() => MainWindow(process), "main window");
+            var strip = await WaitForAsync(() => Find(window, "Open captures", ControlType.Tab), "capture tabs");
+            await WaitForAsync(() => TabItems(strip) == 1 ? strip : null, "first tab");
+            var grid = await WaitForAsync(() => Find(window, "HTTP sessions", ControlType.DataGrid), "session grid");
+            await WaitForAsync(() => DataRows(grid) is { Count: 2 } found ? found : null, "first capture rows");
 
             // The second launch shares the data root (and thus the instance name) and must hand off, not start a UI.
             using (var forwarder = Process.Start(CreateStartInfo(second, dataDirectory, port: null))!)
@@ -135,30 +102,12 @@ public sealed class AppSmokeTests
                 Assert.Equal(0, forwarder.ExitCode);
             }
             Assert.False(process.HasExited);
-
-            // The forwarded tab becomes active, so its lazily created WebView2 loads its own report.
-            var deadline = DateTime.UtcNow.AddSeconds(30);
-            var counts = new List<int>();
-            while (DateTime.UtcNow < deadline)
-            {
-                await using var browser = await playwright.Chromium.ConnectOverCDPAsync($"http://127.0.0.1:{port}");
-                var reports = browser.Contexts.SelectMany(c => c.Pages)
-                    .Where(p => p.Url.StartsWith(ReportUrl, StringComparison.Ordinal) && !p.Url.Contains('#', StringComparison.Ordinal))
-                    .ToList();
-                if (reports.Count == 2)
-                {
-                    counts.Clear();
-                    foreach (var report in reports)
-                    {
-                        await report.Locator("#httpTable tbody tr").First.WaitForAsync();
-                        counts.Add(await report.Locator("#httpTable tbody tr").CountAsync());
-                    }
-                    break;
-                }
-                await Task.Delay(500);
-            }
-            counts.Sort();
-            Assert.Equal([2, 3], counts);
+            await WaitForAsync(() => TabItems(strip) == 2 ? strip : null, "forwarded tab");
+            // The forwarded tab becomes active and shows its own sessions.
+            await WaitForAsync(
+                () => window.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.NameProperty, "HTTP sessions"))
+                    .Cast<AutomationElement>().Any(candidate => !candidate.Current.IsOffscreen && DataRows(candidate).Count == 3) ? strip : null,
+                "second capture rows");
 
             // Forwarding the same file again focuses the existing tab instead of opening a third one.
             using (var again = Process.Start(CreateStartInfo(second, dataDirectory, port: null))!)
@@ -167,21 +116,13 @@ public sealed class AppSmokeTests
                 Assert.Equal(0, again.ExitCode);
             }
             await Task.Delay(1500);
-            await using (var browser = await playwright.Chromium.ConnectOverCDPAsync($"http://127.0.0.1:{port}"))
-            {
-                Assert.Equal(2, browser.Contexts.SelectMany(c => c.Pages).Count(p => p.Url == ReportUrl));
-            }
+            Assert.Equal(2, TabItems(strip));
         }
         finally
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync();
-            }
+            await StopAsync(process);
         }
     }
-
     private static ProcessStartInfo CreateStartInfo(string capturePath, string dataDirectory, int? port)
     {
         var startInfo = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "SazViewer.App.exe")) { UseShellExecute = false };
@@ -191,10 +132,89 @@ public sealed class AppSmokeTests
             startInfo.Environment["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = $"--remote-debugging-port={port}";
         }
         startInfo.Environment[AppPaths.DataDirectoryOverrideVariable] = dataDirectory;
-        startInfo.Environment["SAZVIEWER_LEGACY_HTML_REPORT"] = "1";
         return startInfo;
     }
 
+    private static async Task StopAsync(Process process)
+    {
+        if (!process.HasExited)
+        {
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+        }
+    }
+
+    private static AutomationElement? MainWindow(Process process) =>
+        AutomationElement.RootElement.FindFirst(TreeScope.Children, new AndCondition(
+            new PropertyCondition(AutomationElement.ProcessIdProperty, process.Id),
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window)));
+
+    private static AutomationElement? Find(AutomationElement scope, string name, ControlType type) =>
+        scope.FindFirst(TreeScope.Descendants, new AndCondition(
+            new PropertyCondition(AutomationElement.NameProperty, name),
+            new PropertyCondition(AutomationElement.ControlTypeProperty, type)));
+
+    private static List<AutomationElement> DataRows(AutomationElement grid) =>
+        grid.FindAll(TreeScope.Children, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.DataItem))
+            .Cast<AutomationElement>().ToList();
+
+    private static int TabItems(AutomationElement strip) =>
+        strip.FindAll(TreeScope.Children, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem)).Count;
+
+    private static async Task<T> WaitForAsync<T>(Func<T?> probe, string what) where T : class
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(60);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                if (probe() is { } found)
+                {
+                    return found;
+                }
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+            await Task.Delay(200);
+        }
+        throw new TimeoutException($"Timed out waiting for {what}.");
+    }
+
+    private static async Task<bool> DebuggerRespondsAsync(int port)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+        try
+        {
+            using var response = await client.GetAsync($"http://127.0.0.1:{port}/json/version");
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+        catch (TaskCanceledException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task<bool> PreviewPageExistsAsync(int port)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+        try
+        {
+            return (await client.GetStringAsync($"http://127.0.0.1:{port}/json/list")).Contains(PreviewUrl, StringComparison.Ordinal);
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+        catch (TaskCanceledException)
+        {
+            return false;
+        }
+    }
     private static int GetFreePort()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -228,24 +248,6 @@ public sealed class AppSmokeTests
         }
 
         throw new TimeoutException("WebView2 remote debugging endpoint did not start.");
-    }
-
-    private static async Task<IBrowser> ConnectWhenPageExistsAsync(IPlaywright playwright, int port, string urlPrefix)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (DateTime.UtcNow < deadline)
-        {
-            var browser = await playwright.Chromium.ConnectOverCDPAsync($"http://127.0.0.1:{port}");
-            if (browser.Contexts.SelectMany(c => c.Pages).Any(p => p.Url.StartsWith(urlPrefix, StringComparison.Ordinal)))
-            {
-                return browser;
-            }
-
-            await browser.DisposeAsync();
-            await Task.Delay(500);
-        }
-
-        throw new TimeoutException("The popup report window did not open.");
     }
 
     private static async Task<IPage> WaitForPageAsync(IBrowserContext context, string urlPrefix)

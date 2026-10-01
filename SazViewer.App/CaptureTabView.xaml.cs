@@ -3,7 +3,7 @@ using System.Windows.Controls;
 
 namespace SazViewer.App;
 
-/// <summary>Content of one capture tab: the file-change notice bar above a lazily created WebView2.</summary>
+/// <summary>Content of one capture tab: the file-change notice bar above the native capture view.</summary>
 internal partial class CaptureTabView : UserControl
 {
     public CaptureTabView()

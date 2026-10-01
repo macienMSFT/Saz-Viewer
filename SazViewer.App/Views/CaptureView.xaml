@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:SazViewer.App.ViewModels"
              xmlns:views="clr-namespace:SazViewer.App.Views"
+             xmlns:controls="clr-namespace:SazViewer.App.Controls"
              Background="{DynamicResource Saz.Bg}"
              Foreground="{DynamicResource Saz.Text}"
              FontFamily="Segoe UI"
@@ -25,9 +26,11 @@
             <RowDefinition x:Name="InspectorRowDefinition" Height="0" />
         </Grid.RowDefinitions>
 
-        <!-- Toolbar: search, filter, Hide CONNECT, count. -->
-        <Border Grid.Row="0" Background="{DynamicResource Saz.Panel}" BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,0,0,1" Padding="10,8">
+        <StackPanel Grid.Row="0">
+        <!-- Toolbar: search, filter, Hide CONNECT, count, theme. -->
+        <Border Background="{DynamicResource Saz.Panel}" BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,0,0,1" Padding="10,8">
             <DockPanel DataContext="{Binding Sessions}">
+                <controls:ThemeToggleButton x:Name="ThemeButton" DockPanel.Dock="Right" Margin="12,0,0,0" />
                 <TextBlock DockPanel.Dock="Right" Text="{Binding CountText}" Foreground="{DynamicResource Saz.Muted}" VerticalAlignment="Center"
                            Margin="12,0,0,0" AutomationProperties.LiveSetting="Polite" />
                 <CheckBox DockPanel.Dock="Right" Content="Hide CONNECT" IsChecked="{Binding HideConnect}" Margin="12,0,0,0"
@@ -42,6 +45,33 @@
                          AutomationProperties.Name="Search HTTP sessions" />
             </DockPanel>
         </Border>
+        <!-- Credential scrub banner (captures opened with "View scrubbed"); details collapsed by default. -->
+        <Border x:Name="ScrubBanner" DataContext="{Binding ScrubBanner}" Style="{StaticResource Saz.Warning}" Margin="10,4,10,2"
+                Visibility="{Binding Converter={StaticResource NotNullToVisibility}}"
+                AutomationProperties.Name="{Binding Summary}">
+            <DockPanel>
+                <Button x:Name="ScrubDetailsButton" DockPanel.Dock="Right" Content="Details" Command="{Binding ToggleCommand}" Padding="7,1"
+                        VerticalAlignment="Top" AutomationProperties.Name="{Binding ToggleLabel}" ToolTip="{Binding ToggleLabel}" />
+                <StackPanel>
+                    <TextBlock Text="{Binding Summary}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                               AutomationProperties.LiveSetting="Polite" />
+                    <StackPanel x:Name="ScrubDetails" Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVisibility}}" Margin="0,2,0,0">
+                        <TextBlock Text="{Binding Details}" TextWrapping="Wrap" />
+                        <ItemsControl ItemsSource="{Binding Counts}" Focusable="False" Margin="24,2,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                            <Ellipse Width="4" Height="4" Fill="{DynamicResource Saz.Text}" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding}" />
+                                        </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+        </StackPanel>
 
         <DataGrid x:Name="SessionGrid" Grid.Row="1"
                   ItemsSource="{Binding Sessions.VisibleRows}"

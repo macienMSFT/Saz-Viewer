@@ -5,7 +5,7 @@ namespace SazViewer.App;
 
 /// <summary>
 /// A parsed capture held in memory. Native views read <see cref="Report"/> directly; the HTML report is
-/// generated only when first needed (Export HTML or the legacy WebView2 report view).
+/// generated only when first needed (Export HTML).
 /// </summary>
 internal sealed class ReportDocument
 {

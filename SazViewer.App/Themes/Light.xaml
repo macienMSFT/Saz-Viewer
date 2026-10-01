@@ -19,6 +19,7 @@
     <SolidColorBrush x:Key="Saz.ProtocolBinary" Color="#805000" />
     <SolidColorBrush x:Key="Saz.ProtocolKind" Color="#6639BA" />
     <SolidColorBrush x:Key="Saz.Selected" Color="#DDF4FF" />
+    <SolidColorBrush x:Key="Saz.SelectedText" Color="#1F2328" />
     <SolidColorBrush x:Key="Saz.SynBlue" Color="#0550AE" />
     <SolidColorBrush x:Key="Saz.SynGreen" Color="#116329" />
     <SolidColorBrush x:Key="Saz.SynNumber" Color="#953800" />

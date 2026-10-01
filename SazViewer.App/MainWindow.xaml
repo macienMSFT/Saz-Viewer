@@ -7,16 +7,40 @@
         AllowDrop="True"
         DragOver="OnDragOver"
         Drop="OnDrop"
-        PreviewKeyDown="OnPreviewKeyDown">
+        PreviewKeyDown="OnPreviewKeyDown"
+        Background="{DynamicResource Saz.Bg}"
+        Foreground="{DynamicResource Saz.Text}">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/SazViewer.App;component/Themes/Controls.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
     <Window.CommandBindings>
         <CommandBinding Command="ApplicationCommands.Open" Executed="OnOpen" CanExecute="CanOpen" />
     </Window.CommandBindings>
     <DockPanel>
-        <Menu DockPanel.Dock="Top">
+        <Menu DockPanel.Dock="Top" Background="{DynamicResource Saz.Panel}">
+            <Menu.ItemContainerStyle>
+                <!-- Themed top-level headers; drop-down items keep the system menu colors their popup uses. -->
+                <Style TargetType="MenuItem">
+                    <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
+                    <Setter Property="ItemContainerStyle">
+                        <Setter.Value>
+                            <Style TargetType="MenuItem">
+                                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.MenuTextBrushKey}}" />
+                            </Style>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </Menu.ItemContainerStyle>
             <MenuItem Header="_File" SubmenuOpened="OnFileMenuOpened">
                 <MenuItem Header="_Open…" Command="ApplicationCommands.Open" InputGestureText="Ctrl+O" />
                 <MenuItem x:Name="RecentMenu" Header="Open _Recent" />
                 <MenuItem x:Name="CloseTabMenuItem" Header="_Close tab" InputGestureText="Ctrl+W" Click="OnCloseTab" IsEnabled="False" />
+                <MenuItem x:Name="ViewScrubbedMenuItem" Header="_View scrubbed (redact credentials)" IsCheckable="True" Click="OnViewScrubbed" IsEnabled="False"
+                          AutomationProperties.HelpText="Reopen the active capture with Authorization and other credential values replaced by [REDACTED] markers" />
                 <Separator />
                 <MenuItem x:Name="ExportMenuItem" Header="_Export HTML…" Click="OnExport" IsEnabled="False" />
                 <MenuItem x:Name="ExportScrubbedMenuItem" Header="Export _scrubbed HTML (remove credentials)…" Click="OnExportScrubbed" IsEnabled="False" />
@@ -28,7 +52,7 @@
                 <MenuItem x:Name="UnregisterMenuItem" Header="_Unregister .saz handler" Click="OnUnregister" />
             </MenuItem>
         </Menu>
-        <StatusBar DockPanel.Dock="Bottom">
+        <StatusBar DockPanel.Dock="Bottom" Background="{DynamicResource Saz.Panel}" Foreground="{DynamicResource Saz.Text}">
             <StatusBarItem>
                 <ProgressBar x:Name="BusyIndicator" Width="120" Height="12" IsIndeterminate="True" Visibility="Collapsed" />
             </StatusBarItem>
@@ -36,17 +60,17 @@
                 <TextBlock x:Name="StatusText" Text="Ready" />
             </StatusBarItem>
         </StatusBar>
-        <TabControl x:Name="TabStrip" DockPanel.Dock="Top" Visibility="Collapsed"
+        <TabControl x:Name="TabStrip" DockPanel.Dock="Top" Visibility="Collapsed" Style="{StaticResource Saz.TabStripOnly}"
                     Padding="0" BorderThickness="0,1,0,0" Margin="0,2,0,0"
                     AutomationProperties.Name="Open captures"
                     SelectionChanged="OnTabStripSelectionChanged" />
         <Grid x:Name="ContentHost">
-            <Border x:Name="WelcomePanel" Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}">
+            <Border x:Name="WelcomePanel" Background="{DynamicResource Saz.Bg}">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="520">
                     <TextBlock Text="SAZ Viewer" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" />
                     <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center" FontSize="14"
                                Text="Open Fiddler .saz captures with File › Open (Ctrl+O), a recent file, or by dragging them onto this window. Each capture opens in its own tab." />
-                    <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center" Foreground="Gray"
+                    <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center" Foreground="{DynamicResource Saz.Muted}"
                                Text="Captures are parsed locally. The viewer makes no network requests." />
                 </StackPanel>
             </Border>

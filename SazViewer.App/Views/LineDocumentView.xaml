@@ -82,6 +82,7 @@
                                 </DataTrigger>
                                 <Trigger Property="IsSelected" Value="True">
                                     <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.Selected}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource Saz.SelectedText}" />
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
