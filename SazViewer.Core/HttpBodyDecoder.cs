@@ -182,8 +182,20 @@ internal static class HttpBodyDecoder
         BodyPreview preview,
         ReadOnlySpan<byte> availableBody,
         long capturedLength,
-        bool retainNormalizedBody) =>
-        new()
+        bool retainNormalizedBody)
+    {
+        var retained = availableBody[..Math.Min(availableBody.Length, DecodedPresentationBytesLimit)].ToArray();
+        var normalized = ReadOnlyMemory<byte>.Empty;
+        if (retainNormalizedBody
+            && capturedLength == availableBody.Length
+            && availableBody.Length <= MapiParseLimits.MaxPayloadBytes)
+        {
+            normalized = availableBody.Length == retained.Length
+                ? retained
+                : availableBody.ToArray();
+        }
+
+        return new BodyPreview
         {
             Length = preview.Length,
             CapturedLength = preview.CapturedLength,
@@ -195,16 +207,13 @@ internal static class HttpBodyDecoder
             CapturedBytesPreviewTruncated = preview.CapturedBytesPreviewTruncated,
             RemovedEncodings = preview.RemovedEncodings,
             DecodingStatus = preview.DecodingStatus,
-            CapturedBytes = availableBody[..Math.Min(
-                availableBody.Length,
-                Math.Max(HexViewBytesLimit, CapturedBytesPreviewLimit))].ToArray(),
-            DecodedBytes = availableBody[..Math.Min(availableBody.Length, DecodedPresentationBytesLimit)].ToArray(),
-            NormalizedBytes = retainNormalizedBody
-                && capturedLength == availableBody.Length
-                && availableBody.Length <= MapiParseLimits.MaxPayloadBytes
-                    ? availableBody.ToArray()
-                    : ReadOnlyMemory<byte>.Empty
+            CapturedBytes = retained.AsMemory(0, Math.Min(
+                retained.Length,
+                Math.Max(HexViewBytesLimit, CapturedBytesPreviewLimit))),
+            DecodedBytes = retained,
+            NormalizedBytes = normalized
         };
+    }
 
     private static BodyPreview Failure(
         ReadOnlySpan<byte> availableBody,

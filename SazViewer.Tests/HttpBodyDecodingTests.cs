@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Text;
 using SazViewer.Core;
 
@@ -49,6 +50,24 @@ public sealed class HttpBodyDecodingTests
         Assert.Equal(decoded.AsSpan(0, 64 * 1024).ToArray(), body.DecodedBytes.ToArray());
         Assert.True(body.NormalizedBytes.IsEmpty);
         Assert.True(body.IsTruncated);
+    }
+
+    [Fact]
+    public void UnencodedBodiesShareOneRetainedByteBuffer()
+    {
+        var bytes = Enumerable.Range(0, 32 * 1024).Select(index => (byte)(index % 251)).ToArray();
+        using var saz = ResponseFixture(bytes, ("Content-Type", "application/mapi-http"));
+
+        var body = Assert.Single(new SazParser().Parse(saz).Sessions).Response!.Body;
+
+        Assert.True(MemoryMarshal.TryGetArray(body.CapturedBytes, out var captured));
+        Assert.True(MemoryMarshal.TryGetArray(body.DecodedBytes, out var decoded));
+        Assert.True(MemoryMarshal.TryGetArray(body.NormalizedBytes, out var normalized));
+        Assert.Same(captured.Array, decoded.Array);
+        Assert.Same(decoded.Array, normalized.Array);
+        Assert.Equal(16 * 1024, captured.Count);
+        Assert.Equal(bytes.Length, decoded.Count);
+        Assert.Equal(bytes.Length, normalized.Count);
     }
 
     [Fact]

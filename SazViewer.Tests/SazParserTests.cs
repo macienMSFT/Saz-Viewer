@@ -163,6 +163,28 @@ public sealed class SazParserTests
         Assert.Null(sessions["4"].ElapsedMilliseconds);
     }
 
+    [Theory]
+    [InlineData("0", "1970-01-01T00:00:00.0000000+00:00")]
+    [InlineData("621355968000000000", "1970-01-01T00:00:00.0000000+00:00")]
+    [InlineData("618199776000000000", "1960-01-01T00:00:00.0000000+00:00")]
+    [InlineData("-62135596800000", "0001-01-01T00:00:00.0000000+00:00")]
+    [InlineData("253402300799999", "9999-12-31T23:59:59.9990000+00:00")]
+    public void ParsesUnixMillisecondsAndDotNetTicksAcrossTheUnixEpoch(
+        string value,
+        string expected)
+    {
+        Assert.True(SazParser.TryParseTimestamp(value, out var timestamp));
+        Assert.Equal(DateTimeOffset.Parse(expected), timestamp);
+    }
+
+    [Theory]
+    [InlineData("9223372036854775807")]
+    [InlineData("-62135596800001")]
+    public void RejectsNumericTimestampsOutsideUnixAndDotNetRanges(string value)
+    {
+        Assert.False(SazParser.TryParseTimestamp(value, out _));
+    }
+
     [Fact]
     public void ParsesFiddlerWebSocketRecordsAndRfcFrames()
     {

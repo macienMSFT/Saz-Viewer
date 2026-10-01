@@ -130,41 +130,39 @@ public sealed partial class SazParser
 
     private static void ParseRequest(ISazArchiveEntry? entry, HttpSession session)
     {
-        if (entry is null)
-        {
-            session.Warnings.Add("request entry is missing.");
-            return;
-        }
-
-        session.RequestBytes = entry.Length;
-        try
-        {
-            using var stream = entry.Open();
-            session.Request = HttpMessageParser.Parse(stream, entry.Length, "request", session.Warnings);
-        }
-        catch (Exception exception) when (exception is InvalidDataException or IOException)
-        {
-            session.Warnings.Add($"request could not be read: {exception.Message}");
-        }
+        session.Request = ParseMessage(entry, "request", session.Warnings, out var length);
+        session.RequestBytes = length;
     }
 
     private static void ParseResponse(ISazArchiveEntry? entry, HttpSession session)
     {
+        session.Response = ParseMessage(entry, "response", session.Warnings, out var length);
+        session.ResponseBytes = length;
+    }
+
+    private static HttpMessage? ParseMessage(
+        ISazArchiveEntry? entry,
+        string label,
+        List<string> warnings,
+        out long length)
+    {
         if (entry is null)
         {
-            session.Warnings.Add("response entry is missing.");
-            return;
+            length = 0;
+            warnings.Add($"{label} entry is missing.");
+            return null;
         }
 
-        session.ResponseBytes = entry.Length;
+        length = entry.Length;
         try
         {
             using var stream = entry.Open();
-            session.Response = HttpMessageParser.Parse(stream, entry.Length, "response", session.Warnings);
+            return HttpMessageParser.Parse(stream, entry.Length, label, warnings);
         }
         catch (Exception exception) when (exception is InvalidDataException or IOException)
         {
-            session.Warnings.Add($"response could not be read: {exception.Message}");
+            warnings.Add($"{label} could not be read: {exception.Message}");
+            return null;
         }
     }
 
@@ -376,9 +374,11 @@ public sealed partial class SazParser
         {
             try
             {
-                timestamp = ticks > 62_135_596_800_000_0000L
-                    ? new DateTimeOffset(ticks, TimeSpan.Zero)
-                    : DateTimeOffset.FromUnixTimeMilliseconds(ticks);
+                const long minimumUnixMilliseconds = -62_135_596_800_000L;
+                const long maximumUnixMilliseconds = 253_402_300_799_999L;
+                timestamp = ticks is >= minimumUnixMilliseconds and <= maximumUnixMilliseconds
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(ticks)
+                    : new DateTimeOffset(ticks, TimeSpan.Zero);
                 return true;
             }
             catch (ArgumentOutOfRangeException)
