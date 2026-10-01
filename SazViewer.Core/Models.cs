@@ -25,6 +25,7 @@ public sealed class HttpSession
     public string? ServerEndpoint { get; set; }
     public long RequestBytes { get; set; }
     public long ResponseBytes { get; set; }
+    public long? ElapsedMilliseconds { get; set; }
     public Dictionary<string, string> Timers { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> Metadata { get; } = new(StringComparer.OrdinalIgnoreCase);
     public List<string> Warnings { get; } = [];

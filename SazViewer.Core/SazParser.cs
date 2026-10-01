@@ -288,6 +288,21 @@ public sealed partial class SazParser
             ?? Value(session.Metadata, "x-clientip");
         session.ServerEndpoint = ServerEndpoint(session.Metadata, session.Url);
         session.Timestamp = BestTimestamp(session.Timers, session.Metadata);
+        session.ElapsedMilliseconds = OverallElapsedMilliseconds(session.Timers);
+    }
+
+    private static long? OverallElapsedMilliseconds(IReadOnlyDictionary<string, string> timers)
+    {
+        if (!timers.TryGetValue("ClientBeginRequest", out var beginValue)
+            || !timers.TryGetValue("ClientDoneResponse", out var doneValue)
+            || !TryParseTimestamp(beginValue, out var begin)
+            || !TryParseTimestamp(doneValue, out var done)
+            || done < begin)
+        {
+            return null;
+        }
+
+        return (done - begin).Ticks / TimeSpan.TicksPerMillisecond;
     }
 
     private static string BuildUrl(

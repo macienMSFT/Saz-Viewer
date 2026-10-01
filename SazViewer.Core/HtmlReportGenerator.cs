@@ -98,10 +98,10 @@ main{width:100%;padding:4px}h2,h3,h4{margin:.25em 0}.muted,.format-status{color:
 input{min-width:280px;flex:1}button{cursor:pointer}
 .theme-toggle{flex:0 0 36px;display:inline-flex;align-items:center;justify-content:center;width:36px;min-width:36px;height:36px;padding:6px;color:var(--text)}.theme-toggle svg{display:block;width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.theme-toggle .theme-bulb-core{fill:transparent;stroke:none}.theme-toggle[aria-pressed=true]{color:var(--syn-number);border-color:var(--accent)}.theme-toggle[aria-pressed=true] .theme-bulb-core{fill:currentColor}.theme-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 table{width:100%;border-collapse:collapse;background:var(--panel);font-size:13px}th{position:sticky;top:0;z-index:2;background:var(--panel2);text-align:left}
-th,td{padding:8px;border:1px solid var(--line);vertical-align:top}tbody tr:hover{background:var(--hover)}#httpTable{min-width:1140px;table-layout:auto}#httpTable th,#httpTable td{padding:5px 7px;line-height:1.3}
-#httpTable .http-time{width:184px;min-width:184px;white-space:nowrap}#httpTable .http-id{width:60px}#httpTable .http-method{width:84px}#httpTable .http-protocol{width:96px}
-#httpTable .http-url{width:52%;min-width:420px;word-break:normal;overflow-wrap:anywhere}#httpTable .http-status{width:140px}#httpTable .http-bytes{width:72px}
-#httpTable tbody tr{cursor:pointer}
+th,td{padding:8px;border:1px solid var(--line);vertical-align:top}tbody tr:hover{background:var(--hover)}#httpTable{table-layout:auto}#httpTable th,#httpTable td{padding:5px 7px;line-height:1.3}
+#httpTable .http-time,#httpTable .http-id,#httpTable .http-result,#httpTable .http-method,#httpTable .http-elapsed,#httpTable .http-bytes{width:1%;white-space:nowrap}
+#httpTable .http-url{width:100%;min-width:180px;max-width:0}#httpTable .http-url-value{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#httpTable tbody tr{cursor:pointer}#httpTable tbody tr.hidden{display:table-row!important;visibility:collapse}
 #httpTable tbody tr:focus{outline:2px solid var(--accent);outline-offset:-2px}#httpTable tbody tr.selected{background:var(--selected);box-shadow:inset 4px 0 var(--accent)}
 .num{text-align:right;white-space:nowrap}.badge,.format-badge{padding:2px 7px;border:1px solid var(--line);border-radius:10px;white-space:nowrap}
 details{margin:4px 0}summary{cursor:pointer;color:var(--accent)}pre{white-space:pre-wrap;overflow:auto;background:var(--bg);border:1px solid var(--line);padding:10px;word-break:break-word;tab-size:2}
@@ -2187,11 +2187,11 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             .ToDictionary(group => group.Key, group => (IReadOnlyList<WebSocketMessage>)group.ToArray(), StringComparer.Ordinal);
         html.Append("""
 <section class="http-workspace" aria-label="HTTP sessions">
-<div class="controls"><input id="httpSearch" type="search" aria-label="Search HTTP sessions" placeholder="Search method, URL, status, content type, endpoints...">
+<div class="controls"><input id="httpSearch" type="search" aria-label="Search HTTP sessions" placeholder="Search method, URL, result, elapsed time, content type, endpoints...">
 <select id="httpFilter" aria-label="Filter HTTP status or protocol"><option value="">All sessions</option><option value="websocket">WebSocket only</option><option value="mapi">MAPI/NSPI only</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option></select>
 <button type="button" class="theme-toggle" aria-label="Switch theme" title="Switch theme" aria-pressed="false"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M8.5 15.5A6 6 0 1 1 15.5 15.5C14.6 16.2 14 17 14 18h-4c0-1-.6-1.8-1.5-2.5Z"/><circle class="theme-bulb-core" cx="12" cy="11" r="2.4"/></svg></button></div>
 <div id="reportStatus" class="warning hidden" role="status" aria-live="polite"></div>
-<div class="http-table-scroll"><table id="httpTable"><thead><tr><th class="http-time">Time</th><th class="http-id">ID</th><th class="http-method">Method</th><th class="http-protocol">Protocol</th><th class="http-url">URL</th><th class="http-status">Status</th><th class="http-bytes num">Req</th><th class="http-bytes num">Resp</th></tr></thead><tbody>
+<div class="http-table-scroll"><table id="httpTable"><thead><tr><th class="http-time">Time</th><th class="http-id">ID</th><th class="http-result num">Result</th><th class="http-method">Method</th><th class="http-url">URL</th><th class="http-elapsed num">Elapsed Time</th><th class="http-bytes num">Req</th><th class="http-bytes num">Resp</th></tr></thead><tbody>
 """);
         for (var index = 0; index < sessions.Count; index++)
         {
@@ -2213,13 +2213,16 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         int index,
         IReadOnlyList<WebSocketMessage> webSocketMessages)
     {
-        var filter = session.StatusCode is >= 200 and <= 599
-            ? (session.StatusCode.Value / 100).ToString(CultureInfo.InvariantCulture)
+        var resultCode = session.Response is null ? null : session.StatusCode;
+        var filter = resultCode is >= 200 and <= 599
+            ? (resultCode.Value / 100).ToString(CultureInfo.InvariantCulture)
             : "0";
         var search = string.Join(' ', new[]
         {
-            session.Id, session.Method, session.Url, session.StatusCode?.ToString(CultureInfo.InvariantCulture),
+            session.Id, session.Method, session.Url, resultCode?.ToString(CultureInfo.InvariantCulture),
             session.StatusText, session.ContentType, session.ClientEndpoint, session.ServerEndpoint,
+            session.ElapsedMilliseconds?.ToString(CultureInfo.InvariantCulture),
+            session.ElapsedMilliseconds is long elapsed ? $"{elapsed.ToString("N0", CultureInfo.InvariantCulture)} ms" : null,
             session.Mapi?.RequestType, session.Mapi?.Endpoint.ToString(),
             webSocketMessages.Count > 0 ? "websocket" : null,
             string.Join(' ', webSocketMessages.Take(100).Select(message =>
@@ -2239,28 +2242,31 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         AppendHttpTimestamp(html, session.Timestamp);
         html.Append("</td><td class=\"http-id\">");
         Text(html, session.Id);
-        html.Append("</td><td class=\"http-method\"><span class=\"badge\">");
-        Text(html, session.Method ?? "-");
-        html.Append("</span></td><td class=\"http-protocol\">");
-        if (session.Mapi is not null)
-        {
-            html.Append("<span class=\"badge\">");
-            Text(html, session.Mapi.Endpoint == MapiEndpoint.AddressBook ? "NSPI" : "MAPI");
-            html.Append("</span>");
-        }
-        else
-        {
-            html.Append("-");
-        }
-        html.Append("</td><td class=\"http-url\">");
-        Text(html, session.Url ?? "-");
-        html.Append("</td><td class=\"http-status\">");
-        Text(html, session.StatusCode?.ToString(CultureInfo.InvariantCulture) ?? "-");
+        html.Append("</td><td class=\"http-result num\"");
         if (!string.IsNullOrWhiteSpace(session.StatusText))
         {
-            html.Append(' ');
-            Text(html, session.StatusText);
+            html.Append(" title=\"");
+            Attribute(
+                html,
+                resultCode is int status
+                    ? $"HTTP {status.ToString(CultureInfo.InvariantCulture)} {session.StatusText}"
+                    : session.StatusText);
+            html.Append('"');
         }
+        html.Append('>');
+        Text(html, resultCode?.ToString(CultureInfo.InvariantCulture) ?? "\u2014");
+        html.Append("</td><td class=\"http-method\"><span class=\"badge\">");
+        Text(html, session.Method ?? "-");
+        html.Append("</span></td><td class=\"http-url\" title=\"");
+        Attribute(html, session.Url ?? "-");
+        html.Append("\"><span class=\"http-url-value\">");
+        Text(html, session.Url ?? "-");
+        html.Append("</span></td><td class=\"http-elapsed num\">");
+        Text(
+            html,
+            session.ElapsedMilliseconds is long elapsedMilliseconds
+                ? $"{elapsedMilliseconds.ToString("N0", CultureInfo.InvariantCulture)} ms"
+                : "\u2014");
         html.Append("</td><td class=\"http-bytes num\">").Append(FormatBytes(session.RequestBytes))
             .Append("</td><td class=\"http-bytes num\">").Append(FormatBytes(session.ResponseBytes))
             .Append("</td></tr>");

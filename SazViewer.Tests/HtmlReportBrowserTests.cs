@@ -41,6 +41,7 @@ public sealed class HtmlReportBrowserTests
                 Headless = true,
             });
 
+            await VerifyHttpSessionTableLayoutAsync(browser, tempDirectory);
             await VerifyInspectorAsync(browser, reportPath, 1440, exerciseAllControls: true);
             await VerifyInspectorAsync(browser, reportPath, 480, exerciseAllControls: false);
             await VerifyThemePersistenceAsync(browser, reportPath);
@@ -62,6 +63,91 @@ public sealed class HtmlReportBrowserTests
             {
                 Directory.Delete(tempDirectory, recursive: true);
             }
+        }
+    }
+
+    private static async Task VerifyHttpSessionTableLayoutAsync(IBrowser browser, string tempDirectory)
+        {
+            var reportPath = Path.Combine(tempDirectory, "http-table-layout.html");
+            await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(CreateHttpSessionTableReport()));
+            var errors = new List<string>();
+            var page = await browser.NewPageAsync(new()
+            {
+                ViewportSize = new ViewportSize { Width = 1280, Height = 800 },
+            });
+            CaptureErrors(page, errors);
+            try
+            {
+                await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+                Assert.Equal(
+                    ["Time", "ID", "Result", "Method", "URL", "Elapsed Time", "Req", "Resp"],
+                    await page.Locator("#httpTable thead th").AllInnerTextsAsync());
+                Assert.Equal("200", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-result").InnerTextAsync());
+                Assert.Equal("HTTP 200 OK", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-result").GetAttributeAsync("title"));
+                Assert.Equal("1,234 ms", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-elapsed").InnerTextAsync());
+                Assert.Equal("\u2014", await page.Locator("#httpTable tbody tr").Nth(2).Locator(".http-result").InnerTextAsync());
+                Assert.Equal("Aborted by client", await page.Locator("#httpTable tbody tr").Nth(2).Locator(".http-result").GetAttributeAsync("title"));
+                Assert.Equal("\u2014", await page.Locator("#httpTable tbody tr").Nth(2).Locator(".http-elapsed").InnerTextAsync());
+                Assert.Equal(0, await page.Locator("#httpTable .http-protocol").CountAsync());
+
+                var layoutError = await page.Locator("#httpTable").EvaluateAsync<string>(
+                    """
+                    table=>{
+                      const header=[...table.tHead.rows[0].cells],rows=[...table.tBodies[0].rows];
+                      if(header.length!==8||rows.length!==3)return'wrong table shape';
+                      const contentWidth=cell=>{
+                        const range=document.createRange();range.selectNodeContents(cell);
+                        const style=getComputedStyle(cell);
+                        return range.getBoundingClientRect().width
+                          +parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)
+                          +parseFloat(style.borderLeftWidth)+parseFloat(style.borderRightWidth);
+                      };
+                      for(const column of [0,1,2,3,5,6,7]){
+                        const cells=[header[column],...rows.map(row=>row.cells[column])];
+                        const widths=cells.map(cell=>cell.getBoundingClientRect().width);
+                        if(Math.max(...widths)-Math.min(...widths)>.75)return`column ${column} is not aligned`;
+                        const longest=Math.max(...cells.map(contentWidth));
+                        if(Math.abs(widths[0]-longest)>1.5)return`column ${column} is not content-fit`;
+                        if(cells.some(cell=>cell.scrollWidth>cell.clientWidth+1))return`column ${column} clips its header or value`;
+                      }
+                      const first=rows[0],url=first.cells[4],urlText=url.querySelector('.http-url-value');
+                      const otherWidth=[0,1,2,3,5,6,7].reduce((total,index)=>total+first.cells[index].getBoundingClientRect().width,0);
+                      if(Math.abs(url.getBoundingClientRect().width-(first.getBoundingClientRect().width-otherWidth))>1.5)return'URL does not receive remaining width';
+                      const style=getComputedStyle(urlText);
+                      if(style.overflow!=='hidden'||style.textOverflow!=='ellipsis'||style.whiteSpace!=='nowrap')return'URL ellipsis styling is missing';
+                      if(urlText.scrollWidth<=urlText.clientWidth)return'long URL did not overflow';
+                      for(const column of [2,5,6,7]){
+                        if(getComputedStyle(first.cells[column]).textAlign!=='right')return`numeric column ${column} is not right aligned`;
+                      }
+                      return'';
+                    }
+                    """);
+                Assert.Equal("", layoutError);
+
+                var widthsBeforeFilter = await page.Locator("#httpTable thead th").EvaluateAllAsync<float[]>(
+                    "cells=>cells.map(cell=>cell.getBoundingClientRect().width)");
+                var search = page.Locator("#httpSearch");
+                await search.FillAsync("1,234 ms");
+                Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+                await search.FillAsync("aborted by client");
+                Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+                var widthsAfterFilter = await page.Locator("#httpTable thead th").EvaluateAllAsync<float[]>(
+                    "cells=>cells.map(cell=>cell.getBoundingClientRect().width)");
+                Assert.Equal(widthsBeforeFilter.Length, widthsAfterFilter.Length);
+                for (var index = 0; index < widthsBeforeFilter.Length; index++)
+                {
+                    Assert.InRange(Math.Abs(widthsBeforeFilter[index] - widthsAfterFilter[index]), 0, .75);
+                }
+                await search.FillAsync("");
+                await page.Locator("#httpFilter").SelectOptionAsync("2");
+                Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+                await page.Locator("#httpFilter").SelectOptionAsync("0");
+                Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+                Assert.Empty(errors);
+            }
+            finally
+            {
+                await page.CloseAsync();
         }
     }
 
@@ -2479,6 +2565,50 @@ public sealed class HtmlReportBrowserTests
         return report;
     }
 
+    private static SazReport CreateHttpSessionTableReport()
+    {
+        var report = new SazReport { SourceName = "http-table-layout.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Timestamp = new DateTimeOffset(2026, 9, 30, 12, 0, 0, TimeSpan.Zero),
+            Method = "GET",
+            Url = $"https://example.test/{new string('x', 900)}",
+            StatusCode = 200,
+            StatusText = "OK",
+            ElapsedMilliseconds = 1_234,
+            RequestBytes = 1_024,
+            ResponseBytes = 2_048,
+            Response = Message("HTTP/1.1 200 OK", "text/plain", "ok")
+        });
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "long-session-id",
+            ArchiveOrder = 1,
+            Timestamp = new DateTimeOffset(2026, 9, 30, 12, 0, 1, TimeSpan.Zero),
+            Method = "OPTIONS",
+            Url = "https://example.test/short",
+            StatusCode = 418,
+            StatusText = "I'm a teapot",
+            ElapsedMilliseconds = 7,
+            RequestBytes = 9_876_543,
+            ResponseBytes = 42,
+            Response = Message("HTTP/1.1 418 I'm a teapot", "text/plain", "short")
+        });
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "3",
+            ArchiveOrder = 2,
+            Timestamp = new DateTimeOffset(2026, 9, 30, 12, 0, 2, TimeSpan.Zero),
+            Method = "PATCH",
+            Url = "https://example.test/aborted",
+            StatusText = "Aborted by client",
+            RequestBytes = 5
+        });
+        return report;
+    }
+
     private static SazReport CreateReport()
     {
         var report = new SazReport { SourceName = "browser-test.saz" };
@@ -2589,6 +2719,7 @@ public sealed class HtmlReportBrowserTests
             StatusCode = 200,
             ClientEndpoint = InjectionText,
             Request = Message("POST /mapi HTTP/1.1", "application/mapi-http", "binary"),
+            Response = Message("HTTP/1.1 200 OK", "application/mapi-http", "binary"),
         };
         mapiSession.Mapi = new MapiSession(
             "3",

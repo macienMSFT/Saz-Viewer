@@ -1728,7 +1728,7 @@ public sealed class HtmlReportGeneratorTests
     }
 
     [Fact]
-    public void UsesCompactWideHttpColumnsWithoutTypeAndKeepsFullTimestampMetadata()
+    public void UsesIntrinsicHttpColumnsWithResultElapsedAndFullTimestampMetadata()
     {
         var firstTimestamp = new DateTimeOffset(2026, 9, 29, 21, 7, 8, 123, TimeSpan.FromHours(-4));
         var secondTimestamp = firstTimestamp.AddMilliseconds(877);
@@ -1742,7 +1742,12 @@ public sealed class HtmlReportGeneratorTests
                 Method = "GET",
                 Url = "https://example.test/a/very/long/path?first=1&second=2",
                 StatusCode = 200,
-                ContentType = "application/json"
+                StatusText = "OK",
+                ContentType = "application/json",
+                ElapsedMilliseconds = 1_234,
+                RequestBytes = 123,
+                ResponseBytes = 4_567,
+                Response = Message("HTTP/1.1 200 OK", "application/json", "{}")
             });
         report.Sessions.Add(
             new HttpSession
@@ -1753,7 +1758,19 @@ public sealed class HtmlReportGeneratorTests
                 Method = "POST",
                 Url = "https://example.test/later",
                 StatusCode = 201,
-                ContentType = "text/plain"
+                StatusText = "Created",
+                ContentType = "text/plain",
+                ElapsedMilliseconds = 9,
+                Response = Message("HTTP/1.1 201 Created", "text/plain", "created")
+            });
+        report.Sessions.Add(
+            new HttpSession
+            {
+                Id = "missing",
+                ArchiveOrder = 2,
+                Method = "DELETE",
+                Url = "https://example.test/aborted",
+                StatusText = "Aborted by client"
             });
 
         var html = new HtmlReportGenerator().Generate(report);
@@ -1762,14 +1779,23 @@ public sealed class HtmlReportGeneratorTests
         var httpHeader = html[httpHeaderStart..httpHeaderEnd];
 
         Assert.Contains(
-            "<th class=\"http-time\">Time</th><th class=\"http-id\">ID</th><th class=\"http-method\">Method</th><th class=\"http-protocol\">Protocol</th><th class=\"http-url\">URL</th><th class=\"http-status\">Status</th><th class=\"http-bytes num\">Req</th><th class=\"http-bytes num\">Resp</th>",
+            "<th class=\"http-time\">Time</th><th class=\"http-id\">ID</th><th class=\"http-result num\">Result</th><th class=\"http-method\">Method</th><th class=\"http-url\">URL</th><th class=\"http-elapsed num\">Elapsed Time</th><th class=\"http-bytes num\">Req</th><th class=\"http-bytes num\">Resp</th>",
             httpHeader,
             StringComparison.Ordinal);
-        Assert.DoesNotContain(">Type</th>", httpHeader, StringComparison.Ordinal);
-        Assert.Contains("#httpTable{min-width:1140px;table-layout:auto}", html, StringComparison.Ordinal);
-        Assert.Contains("#httpTable .http-time{width:184px;min-width:184px;white-space:nowrap}", html, StringComparison.Ordinal);
-        Assert.Contains("#httpTable .http-url{width:52%;min-width:420px;word-break:normal;overflow-wrap:anywhere}", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(">Protocol</th>", httpHeader, StringComparison.Ordinal);
+        Assert.DoesNotContain(">Status</th>", httpHeader, StringComparison.Ordinal);
+        Assert.Contains("#httpTable{table-layout:auto}", html, StringComparison.Ordinal);
+        Assert.Contains("#httpTable .http-time,#httpTable .http-id,#httpTable .http-result,#httpTable .http-method,#httpTable .http-elapsed,#httpTable .http-bytes{width:1%;white-space:nowrap}", html, StringComparison.Ordinal);
+        Assert.Contains("#httpTable .http-url{width:100%;min-width:180px;max-width:0}", html, StringComparison.Ordinal);
+        Assert.Contains("#httpTable .http-url-value{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}", html, StringComparison.Ordinal);
+        Assert.Contains("#httpTable tbody tr.hidden{display:table-row!important;visibility:collapse}", html, StringComparison.Ordinal);
         Assert.Contains("#httpTable th,#httpTable td{padding:5px 7px;line-height:1.3}", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"http-result num\" title=\"HTTP 200 OK\">200</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"http-result num\" title=\"Aborted by client\">\u2014</td>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(">200 OK</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"http-elapsed num\">1,234 ms</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"http-elapsed num\">\u2014</td>", html, StringComparison.Ordinal);
+        Assert.Contains("1234 1,234 ms", html, StringComparison.Ordinal);
         Assert.Contains(
             "<time datetime=\"2026-09-29T21:07:08.1230000-04:00\" title=\"Captured timestamp: 2026-09-29 21:07:08.123 -04:00\" aria-label=\"Captured timestamp 2026-09-29 21:07:08.123 -04:00\">2026-09-29 21:07:08.123</time>",
             html,
@@ -1779,7 +1805,7 @@ public sealed class HtmlReportGeneratorTests
             html.IndexOf(">early</td>", StringComparison.Ordinal)
             < html.IndexOf(">later</td>", StringComparison.Ordinal),
             "Display-only timestamp formatting must not reorder sessions.");
-        Assert.Contains("https://example.test/a/very/long/path?first=1&amp;second=2", html, StringComparison.Ordinal);
+        Assert.Contains("<span class=\"http-url-value\">https://example.test/a/very/long/path?first=1&amp;second=2</span>", html, StringComparison.Ordinal);
         Assert.Contains("application/json", html, StringComparison.Ordinal);
     }
 
@@ -1828,7 +1854,7 @@ public sealed class HtmlReportGeneratorTests
 
         Assert.Contains("<option value=\"mapi\">MAPI/NSPI only</option>", html, StringComparison.Ordinal);
         Assert.Contains("data-mapi=\"true\"", html, StringComparison.Ordinal);
-        Assert.Contains("<th class=\"http-protocol\">Protocol</th>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<th class=\"http-protocol\">Protocol</th>", html, StringComparison.Ordinal);
         Assert.Contains("data-payload-type=\"mapi-protocol\"", html, StringComparison.Ordinal);
         Assert.Contains("renderProtocolTree(host,generation)", html, StringComparison.Ordinal);
         Assert.Contains("tree.className='protocol-tree tree-view'", html, StringComparison.Ordinal);

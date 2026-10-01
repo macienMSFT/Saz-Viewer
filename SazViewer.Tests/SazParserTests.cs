@@ -139,6 +139,31 @@ public sealed class SazParserTests
     }
 
     [Fact]
+    public void CalculatesOverallElapsedMillisecondsOnlyFromValidFiddlerTimers()
+    {
+        using var saz = Fixture(
+            ("raw/1_c.txt", Bytes("GET /valid HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/1_m.xml", Bytes(
+                """<Session><SessionTimers ClientBeginRequest="2024-05-01T12:00:00.0000000-04:00" ClientDoneResponse="2024-05-01T16:00:01.2509000Z"/></Session>""")),
+            ("raw/2_c.txt", Bytes("GET /missing HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/2_m.xml", Bytes(
+                """<Session><SessionTimers ClientBeginRequest="2024-05-01T12:00:00Z"/></Session>""")),
+            ("raw/3_c.txt", Bytes("GET /invalid HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/3_m.xml", Bytes(
+                """<Session><SessionTimers ClientBeginRequest="not-a-time" ClientDoneResponse="2024-05-01T12:00:01Z"/></Session>""")),
+            ("raw/4_c.txt", Bytes("GET /negative HTTP/1.1\r\nHost: test\r\n\r\n")),
+            ("raw/4_m.xml", Bytes(
+                """<Session><SessionTimers ClientBeginRequest="2024-05-01T12:00:02Z" ClientDoneResponse="2024-05-01T12:00:01Z"/></Session>""")));
+
+        var sessions = new SazParser().Parse(saz).Sessions.ToDictionary(session => session.Id);
+
+        Assert.Equal(1_250, sessions["1"].ElapsedMilliseconds);
+        Assert.Null(sessions["2"].ElapsedMilliseconds);
+        Assert.Null(sessions["3"].ElapsedMilliseconds);
+        Assert.Null(sessions["4"].ElapsedMilliseconds);
+    }
+
+    [Fact]
     public void ParsesFiddlerWebSocketRecordsAndRfcFrames()
     {
         var clientFrame = MaskedTextFrame("hello", [0x12, 0x34, 0x56, 0x78]);
