@@ -30,7 +30,9 @@ internal enum SpanStyle
     Value,
     Accent,
     Bold,
-    Warning
+    Warning,
+    /// <summary>Tree node name: accent colour, semibold.</summary>
+    Name
 }
 
 internal readonly record struct StyledSpan(int Start, int Length, SpanStyle Style)

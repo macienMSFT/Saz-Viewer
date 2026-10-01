@@ -71,14 +71,16 @@ internal sealed class RichLine : TextBlock
     {
         var brush = style switch
         {
-            SpanStyle.Muted or SpanStyle.Punctuation or SpanStyle.Comment => "Saz.Muted",
+            SpanStyle.Muted => "Saz.Muted",
+            SpanStyle.Punctuation or SpanStyle.Comment => "Saz.SynPunct",
             SpanStyle.Badge or SpanStyle.Bold => null,
-            SpanStyle.Key or SpanStyle.Tag => "Saz.SynBlue",
+            SpanStyle.Key => "Saz.SynBlue",
+            SpanStyle.Tag => "Saz.SynGreen",
             SpanStyle.String or SpanStyle.Value => "Saz.SynString",
             SpanStyle.Number => "Saz.SynNumber",
             SpanStyle.Literal => "Saz.SynRed",
             SpanStyle.Attribute => "Saz.SynPurple",
-            SpanStyle.Accent => "Saz.Accent",
+            SpanStyle.Accent or SpanStyle.Name => "Saz.Accent",
             SpanStyle.Warning => "Saz.Warn",
             _ => null
         };
@@ -86,7 +88,7 @@ internal sealed class RichLine : TextBlock
         {
             run.SetResourceReference(TextElement.ForegroundProperty, brush);
         }
-        if (style is SpanStyle.Badge or SpanStyle.Bold)
+        if (style is SpanStyle.Badge or SpanStyle.Bold or SpanStyle.Name)
         {
             run.FontWeight = FontWeights.SemiBold;
         }

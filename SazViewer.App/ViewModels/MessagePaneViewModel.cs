@@ -32,7 +32,7 @@ internal sealed class MessagePaneViewModel : ObservableObject
             UnavailableText(tab.Key, lower, content is not null),
             CopyAccessibleName(tab.Key, lower),
             CopyDescription(tab.Key, lower),
-            flags[tab.Key] ? () => CreateContent(tab.Key) : null,
+            flags[tab.Key] ? () => Observe(CreateContent(tab.Key)) : null,
             clipboard)).ToList();
         HasAnyTab = Tabs.Any(tab => tab.IsEnabled);
         EmptyText = $"No {lower} entry was captured.";
@@ -147,10 +147,27 @@ internal sealed class MessagePaneViewModel : ObservableObject
         var content = Content!;
         return key switch
         {
+            "json" or "xml" => Structured(key == "json" ? BodyFormat.Json : BodyFormat.Xml, content),
             "headers" => new TextDocumentViewModel(MessageDocuments.Headers(content), () => CopyResult.Of(content.FullHeadersText())),
             "raw" => new TextDocumentViewModel(MessageDocuments.Raw(content), () => RawCopy(content)),
             _ => new PlaceholderViewModel($"The native {TabOrder.First(tab => tab.Key == key).Label} view is not available yet.")
         };
+    }
+
+    private static StructuredBodyViewModel Structured(BodyFormat format, MessageContent content) =>
+        new(format, content.Label, content.Status, content.DecodeBodyText);
+
+    private TabContentViewModel Observe(TabContentViewModel created)
+    {
+        created.SearchTargetChanged += (sender, _) =>
+        {
+            if (ReferenceEquals(selectedTab?.Content, sender))
+            {
+                Search.Reset();
+                ViewChanged?.Invoke(this, EventArgs.Empty);
+            }
+        };
+        return created;
     }
 
     private static CopyResult RawCopy(MessageContent content)

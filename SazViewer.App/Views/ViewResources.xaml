@@ -15,6 +15,14 @@
         <views:LineDocumentView />
     </DataTemplate>
 
+    <DataTemplate DataType="{x:Type vm:StructuredBodyViewModel}">
+        <views:StructuredBodyView />
+    </DataTemplate>
+
+    <DataTemplate DataType="{x:Type vm:ValueTreeViewModel}">
+        <views:ValueTreeView />
+    </DataTemplate>
+
     <DataTemplate DataType="{x:Type vm:PlaceholderViewModel}">
         <TextBlock Text="{Binding Message}" Foreground="{DynamicResource Saz.Muted}" TextWrapping="Wrap" Margin="4" />
     </DataTemplate>

@@ -64,15 +64,23 @@
             <Style x:Key="GridCell" TargetType="DataGridCell">
                 <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                <!-- Overrides the theme's selected/inactive-selection system text brushes. -->
+                <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=DataGridRow}}" />
+                <Setter Property="Background" Value="Transparent" />
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="DataGridCell">
-                            <Border Background="Transparent" Padding="0,4">
+                            <Border Background="{TemplateBinding Background}" Padding="0,4">
                                 <ContentPresenter VerticalAlignment="Center" />
                             </Border>
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
+                <Style.Triggers>
+                    <Trigger Property="IsSelected" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource Saz.Selected}" />
+                    </Trigger>
+                </Style.Triggers>
             </Style>
 
             <Style x:Key="GridRow" TargetType="DataGridRow">

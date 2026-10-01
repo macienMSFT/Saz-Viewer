@@ -39,6 +39,20 @@
                                        AutomationProperties.LiveSetting="Polite" />
                             <Button DockPanel.Dock="Right" Content="{Binding CopyButtonText}" Command="{Binding CopyCommand}"
                                     AutomationProperties.Name="{Binding CopyAccessibleName}" MinWidth="64" />
+                            <ItemsControl DockPanel.Dock="Right" ItemsSource="{Binding Content.ToolbarActions}" Focusable="False">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:ToolbarAction}">
+                                        <Button Content="{Binding Label}" Command="{Binding Command}" Margin="0,0,6,0"
+                                                AutomationProperties.Name="{Binding AccessibleName}"
+                                                Visibility="{Binding IsVisible, Converter={StaticResource BoolToVisibility}}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </DockPanel>
                         <ContentControl Content="{Binding Content}" Focusable="False" />
                     </DockPanel>
