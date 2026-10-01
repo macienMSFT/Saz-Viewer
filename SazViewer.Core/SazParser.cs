@@ -24,7 +24,7 @@ public sealed partial class SazParser
         {
             using var file = File.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
             using var archive = SazArchiveFactory.Open(file, leaveOpen: false, passwordProvider);
-            ParseArchive(archive, report);
+            ParseArchive(archive, report, DeferBodyDecoding);
         }
         catch (InvalidDataException exception)
         {
@@ -43,11 +43,11 @@ public sealed partial class SazParser
     {
         var report = new SazReport { SourceName = sourceName };
         using var archive = SazArchiveFactory.Open(stream, leaveOpen: true, passwordProvider);
-        ParseArchive(archive, report);
+        ParseArchive(archive, report, DeferBodyDecoding);
         return report;
     }
 
-    private static void ParseArchive(ISazArchive archive, SazReport report)
+    private static void ParseArchive(ISazArchive archive, SazReport report, bool deferBodies)
     {
         var groups = Discover(archive, report.Warnings);
         var batch = new List<EntryGroup>();
@@ -62,21 +62,22 @@ public sealed partial class SazParser
                 || batch.Count >= MaxParallelBatchSessions
                 || batchBytes >= MaxParallelBatchBytes)
             {
-                ParseBatch(batch, report);
+                ParseBatch(batch, report, deferBodies);
                 batch.Clear();
                 batchBytes = 0;
             }
         }
-        ParseBatch(batch, report);
+        ParseBatch(batch, report, deferBodies);
 
         report.Sessions.Sort(CompareSessions);
         report.Mapi = MapiCaptureParser.Parse(report.Sessions);
-        foreach (var session in report.Sessions)
+        if (deferBodies)
         {
-            foreach (var warning in session.Warnings)
-            {
-                report.Warnings.Add($"Session {session.Id}: {warning}");
-            }
+            report.HasDeferredWork = true;
+        }
+        else
+        {
+            AggregateSessionWarnings(report);
         }
         report.WebSocketMessages.Sort(CompareWebSocketMessages);
         if (groups.Count == 0)
@@ -85,10 +86,53 @@ public sealed partial class SazParser
         }
     }
 
+    /// <summary>
+    /// Decodes each message body on first access instead of during the parse, so the session list is available
+    /// quickly. <see cref="SazReport.Warnings"/> then lacks the per-session warnings until
+    /// <see cref="CompleteDeferred"/> runs; the completed report is identical to an eager parse.
+    /// </summary>
+    public bool DeferBodyDecoding { get; init; }
+
+    /// <summary>
+    /// Decodes any remaining deferred bodies (in parallel) and aggregates the session warnings exactly as an eager
+    /// parse does. Safe to call more than once and from any thread. <paramref name="maxDegreeOfParallelism"/>
+    /// bounds the worker count (-1 for the default) so background completion can leave cores for the UI.
+    /// </summary>
+    public static void CompleteDeferred(SazReport report, int maxDegreeOfParallelism = -1)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        lock (report.DeferredGate)
+        {
+            if (!report.HasDeferredWork)
+            {
+                return;
+            }
+            var options = new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism };
+            Parallel.ForEach(report.Sessions, options, session =>
+            {
+                _ = session.Request?.Body;
+                _ = session.Response?.Body;
+            });
+            AggregateSessionWarnings(report);
+            report.HasDeferredWork = false;
+        }
+    }
+
+    private static void AggregateSessionWarnings(SazReport report)
+    {
+        foreach (var session in report.Sessions)
+        {
+            foreach (var warning in session.Warnings)
+            {
+                report.Warnings.Add($"Session {session.Id}: {warning}");
+            }
+        }
+    }
+
     private const int MaxParallelBatchSessions = 256;
     private const long MaxParallelBatchBytes = 64L * 1024 * 1024;
 
-    private static void ParseBatch(List<EntryGroup> batch, SazReport report)
+    private static void ParseBatch(List<EntryGroup> batch, SazReport report, bool deferBodies)
     {
         if (batch.Count == 0)
         {
@@ -103,8 +147,9 @@ public sealed partial class SazParser
                 var group = batch[index];
                 var session = new HttpSession { Id = group.Id, ArchiveOrder = group.ArchiveOrder };
                 ParseMetadata(group.Metadata, session);
-                ParseRequest(group.Request, session);
-                ParseResponse(group.Response, session);
+                var deferred = deferBodies ? new DeferredWarnings(session.Warnings) : null;
+                ParseRequest(group.Request, session, deferred);
+                ParseResponse(group.Response, session, deferred);
                 CompleteSession(session);
                 sessions[index] = session;
             });
@@ -244,15 +289,15 @@ public sealed partial class SazParser
         return groups.Values.ToList();
     }
 
-    private static void ParseRequest(ISazArchiveEntry? entry, HttpSession session)
+    private static void ParseRequest(ISazArchiveEntry? entry, HttpSession session, DeferredWarnings? deferred)
     {
-        session.Request = ParseMessage(entry, "request", session.Warnings, out var length);
+        session.Request = ParseMessage(entry, "request", session.Warnings, deferred, out var length);
         session.RequestBytes = length;
     }
 
-    private static void ParseResponse(ISazArchiveEntry? entry, HttpSession session)
+    private static void ParseResponse(ISazArchiveEntry? entry, HttpSession session, DeferredWarnings? deferred)
     {
-        session.Response = ParseMessage(entry, "response", session.Warnings, out var length);
+        session.Response = ParseMessage(entry, "response", session.Warnings, deferred, out var length);
         session.ResponseBytes = length;
     }
 
@@ -260,6 +305,7 @@ public sealed partial class SazParser
         ISazArchiveEntry? entry,
         string label,
         List<string> warnings,
+        DeferredWarnings? deferred,
         out long length)
     {
         if (entry is null)
@@ -273,7 +319,7 @@ public sealed partial class SazParser
         try
         {
             using var stream = entry.Open();
-            return HttpMessageParser.Parse(stream, entry.Length, label, warnings);
+            return HttpMessageParser.Parse(stream, entry.Length, label, warnings, deferred);
         }
         catch (Exception exception) when (exception is InvalidDataException or IOException)
         {

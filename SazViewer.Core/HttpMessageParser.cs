@@ -8,7 +8,12 @@ internal static class HttpMessageParser
     internal const int MaxEntryRead = MapiParseLimits.MaxPayloadBytes + (128 * 1024);
     internal const int MaxBodyPreview = 64 * 1024;
 
-    public static HttpMessage? Parse(Stream stream, long entryLength, string label, List<string> warnings)
+    public static HttpMessage? Parse(
+        Stream stream,
+        long entryLength,
+        string label,
+        List<string> warnings,
+        DeferredWarnings? deferred = null)
     {
         var bytes = ReadAtMost(stream, MaxEntryRead);
         var boundary = FindHeaderBoundary(bytes);
@@ -31,6 +36,26 @@ internal static class HttpMessageParser
 
         var headers = ParseHeaders(lines, label, warnings);
         var retainNormalizedBody = IsMapiCandidate(headers);
+        if (deferred is not null)
+        {
+            var slot = deferred.Reserve();
+            var deferredMessage = new HttpMessage(lines[0], () =>
+            {
+                var bodyWarnings = new List<string>();
+                var preview = HttpBodyDecoder.CreatePreview(
+                    bytes.AsSpan(bodyOffset, Math.Max(0, bytes.Length - bodyOffset)),
+                    bodyLength,
+                    headers,
+                    label,
+                    bodyWarnings,
+                    retainNormalizedBody);
+                deferred.Insert(slot, bodyWarnings);
+                return preview;
+            });
+            deferredMessage.Headers.AddRange(headers);
+            return deferredMessage;
+        }
+
         var message = new HttpMessage
         {
             StartLine = lines[0],

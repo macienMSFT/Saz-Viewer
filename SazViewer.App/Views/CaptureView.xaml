@@ -1,0 +1,204 @@
+<UserControl x:Class="SazViewer.App.Views.CaptureView" x:ClassModifier="internal"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:SazViewer.App.ViewModels"
+             xmlns:views="clr-namespace:SazViewer.App.Views"
+             Background="{DynamicResource Saz.Bg}"
+             Foreground="{DynamicResource Saz.Text}"
+             FontFamily="Segoe UI"
+             FontSize="13"
+             PreviewKeyDown="OnPreviewKeyDown">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <views:SharedResourceDictionary Source="pack://application:,,,/SazViewer.App;component/Views/ViewResources.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <Style x:Key="GridCellText" TargetType="TextBlock">
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="Margin" Value="8,0" />
+                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            </Style>
+            <Style x:Key="GridNumberText" TargetType="TextBlock" BasedOn="{StaticResource GridCellText}">
+                <Setter Property="HorizontalAlignment" Value="Right" />
+            </Style>
+
+            <Style x:Key="GridColumnHeader" TargetType="DataGridColumnHeader">
+                <Setter Property="Foreground" Value="{DynamicResource Saz.Muted}" />
+                <Setter Property="Background" Value="{DynamicResource Saz.Panel}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Saz.Line}" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Padding" Value="8,6" />
+                <Setter Property="FocusVisualStyle" Value="{StaticResource Saz.InsetFocusVisual}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="DataGridColumnHeader">
+                            <Grid>
+                                <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="0,0,1,1" Padding="{TemplateBinding Padding}">
+                                    <DockPanel>
+                                        <TextBlock x:Name="SortGlyph" DockPanel.Dock="Right" Margin="4,0,0,0" Foreground="{DynamicResource Saz.Accent}" />
+                                        <ContentPresenter VerticalAlignment="Center" />
+                                    </DockPanel>
+                                </Border>
+                                <Thumb x:Name="PART_RightHeaderGripper" HorizontalAlignment="Right" Width="6" Cursor="SizeWE" Opacity="0" />
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="SortDirection" Value="Ascending">
+                                    <Setter TargetName="SortGlyph" Property="Text" Value="▲" />
+                                    <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
+                                </Trigger>
+                                <Trigger Property="SortDirection" Value="Descending">
+                                    <Setter TargetName="SortGlyph" Property="Text" Value="▼" />
+                                    <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
+                                </Trigger>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.Hover}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="GridCell" TargetType="DataGridCell">
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="DataGridCell">
+                            <Border Background="Transparent" Padding="0,4">
+                                <ContentPresenter VerticalAlignment="Center" />
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="GridRow" TargetType="DataGridRow">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
+                <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                <Setter Property="FocusVisualStyle" Value="{StaticResource Saz.InsetFocusVisual}" />
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource Saz.Hover}" />
+                    </Trigger>
+                    <Trigger Property="IsSelected" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource Saz.Selected}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <Grid x:Name="Layout">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition x:Name="GridRowDefinition" Height="*" MinHeight="80" />
+            <RowDefinition x:Name="SplitterRowDefinition" Height="0" />
+            <RowDefinition x:Name="InspectorRowDefinition" Height="0" />
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar: search, filter, Hide CONNECT, count. -->
+        <Border Grid.Row="0" Background="{DynamicResource Saz.Panel}" BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,0,0,1" Padding="10,8">
+            <DockPanel DataContext="{Binding Sessions}">
+                <TextBlock DockPanel.Dock="Right" Text="{Binding CountText}" Foreground="{DynamicResource Saz.Muted}" VerticalAlignment="Center"
+                           Margin="12,0,0,0" AutomationProperties.LiveSetting="Polite" />
+                <CheckBox DockPanel.Dock="Right" Content="Hide CONNECT" IsChecked="{Binding HideConnect}" Margin="12,0,0,0"
+                          AutomationProperties.Name="Hide CONNECT sessions" />
+                <ComboBox x:Name="FilterBox" DockPanel.Dock="Right" Width="170" Margin="8,0,0,0"
+                          ItemsSource="{x:Static vm:SessionListViewModel.FilterOptions}"
+                          SelectedItem="{Binding Filter}"
+                          DisplayMemberPath="Label"
+                          AutomationProperties.Name="Filter HTTP status or protocol" />
+                <TextBox x:Name="GridSearchBox" Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=120}"
+                         Tag="Search method, URL, result, elapsed time, content type, endpoints..."
+                         AutomationProperties.Name="Search HTTP sessions" />
+            </DockPanel>
+        </Border>
+
+        <DataGrid x:Name="SessionGrid" Grid.Row="1"
+                  ItemsSource="{Binding Sessions.VisibleRows}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  CanUserReorderColumns="False"
+                  CanUserResizeRows="False"
+                  CanUserSortColumns="True"
+                  SelectionMode="Single"
+                  SelectionUnit="FullRow"
+                  HeadersVisibility="Column"
+                  GridLinesVisibility="Horizontal"
+                  HorizontalGridLinesBrush="{DynamicResource Saz.Line}"
+                  Background="{DynamicResource Saz.Bg}"
+                  RowBackground="Transparent"
+                  Foreground="{DynamicResource Saz.Text}"
+                  BorderThickness="0"
+                  EnableRowVirtualization="True"
+                  EnableColumnVirtualization="False"
+                  VirtualizingPanel.IsVirtualizing="True"
+                  VirtualizingPanel.VirtualizationMode="Recycling"
+                  ScrollViewer.CanContentScroll="True"
+                  ColumnHeaderStyle="{StaticResource GridColumnHeader}"
+                  CellStyle="{StaticResource GridCell}"
+                  RowStyle="{StaticResource GridRow}"
+                  AutomationProperties.Name="HTTP sessions"
+                  Sorting="OnSorting"
+                  SelectionChanged="OnGridSelectionChanged"
+                  PreviewKeyDown="OnGridPreviewKeyDown"
+                  MouseDoubleClick="OnGridDoubleClick">
+            <DataGrid.Columns>
+                <DataGridTextColumn x:Name="TimeColumn" Header="Time" Binding="{Binding Time, Mode=OneTime}" SortMemberPath="Time"
+                                    ElementStyle="{StaticResource GridCellText}">
+                    <DataGridTextColumn.CellStyle>
+                        <Style TargetType="DataGridCell" BasedOn="{StaticResource GridCell}">
+                            <Setter Property="ToolTip" Value="{Binding TimeToolTip, Mode=OneTime}" />
+                        </Style>
+                    </DataGridTextColumn.CellStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn x:Name="IdColumn" Header="ID" Binding="{Binding Id, Mode=OneTime}" SortMemberPath="Id"
+                                    ElementStyle="{StaticResource GridNumberText}" />
+                <DataGridTextColumn x:Name="ResultColumn" Header="Result" Binding="{Binding Result, Mode=OneTime}" SortMemberPath="Result"
+                                    ElementStyle="{StaticResource GridNumberText}">
+                    <DataGridTextColumn.CellStyle>
+                        <Style TargetType="DataGridCell" BasedOn="{StaticResource GridCell}">
+                            <Setter Property="ToolTip" Value="{Binding ResultToolTip, Mode=OneTime}" />
+                        </Style>
+                    </DataGridTextColumn.CellStyle>
+                </DataGridTextColumn>
+                <DataGridTemplateColumn x:Name="MethodColumn" Header="Method" SortMemberPath="Method">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource Saz.MethodBadge}" Margin="8,0">
+                                <TextBlock Text="{Binding Method, Mode=OneTime}" FontSize="12" />
+                            </Border>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn x:Name="UrlColumn" Header="URL" Binding="{Binding Url, Mode=OneTime}" SortMemberPath="Url" Width="*"
+                                    MinWidth="120">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource GridCellText}">
+                            <Setter Property="ToolTip" Value="{Binding Url, Mode=OneTime}" />
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn x:Name="ElapsedColumn" Header="Elapsed Time" Binding="{Binding Elapsed, Mode=OneTime}" SortMemberPath="Elapsed"
+                                    ElementStyle="{StaticResource GridNumberText}" />
+                <DataGridTextColumn x:Name="RequestColumn" Header="Req" Binding="{Binding RequestSize, Mode=OneTime}" SortMemberPath="RequestSize"
+                                    ElementStyle="{StaticResource GridNumberText}" />
+                <DataGridTextColumn x:Name="ResponseColumn" Header="Resp" Binding="{Binding ResponseSize, Mode=OneTime}" SortMemberPath="ResponseSize"
+                                    ElementStyle="{StaticResource GridNumberText}" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <GridSplitter x:Name="InspectorSplitter" Grid.Row="2" Height="5" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                      ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" Visibility="Collapsed"
+                      AutomationProperties.Name="Resize session grid and inspector" />
+
+        <Border Grid.Row="3" x:Name="InspectorHost" Visibility="Collapsed" BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,1,0,0">
+        </Border>
+    </Grid>
+</UserControl>

@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -35,6 +36,7 @@ internal sealed class CaptureTab : ICaptureTab
     private readonly CaptureFileWatcher watcher;
     private readonly FileChangeTracker tracker;
     private ReportDocument? document;
+    private Views.CaptureView? nativeView;
     private WebView2? webView;
     private SecureReportSession? session;
     private Task<bool>? webViewInitialization;
@@ -53,9 +55,20 @@ internal sealed class CaptureTab : ICaptureTab
         View.ReloadRequested += async (_, _) => await host.ReloadAsync(this);
         View.DismissRequested += (_, _) => Dismiss();
         TabItem = CreateTabItem();
-        watcher = new CaptureFileWatcher(SourcePath, CaptureFileWatcher.DefaultQuietPeriod, TimeProvider.System);
+        if (!UseLegacyReport)
+        {
+            nativeView = new Views.CaptureView { DataContext = new ViewModels.CaptureViewModel(document.Report) };
+            View.Host.Children.Add(nativeView);
+        }
+        watcher =  new CaptureFileWatcher(SourcePath, CaptureFileWatcher.DefaultQuietPeriod, TimeProvider.System);
         watcher.Settled += OnFileSettled;
     }
+
+    /// <summary>
+    /// Opt-in to the previous WebView2-hosted HTML report (set <c>SAZVIEWER_LEGACY_HTML_REPORT=1</c>); used by the
+    /// report smoke tests while the native views are completed.
+    /// </summary>
+    public static bool UseLegacyReport { get; } = Environment.GetEnvironmentVariable("SAZVIEWER_LEGACY_HTML_REPORT") == "1";
 
     public string SourcePath { get; }
 
@@ -70,6 +83,11 @@ internal sealed class CaptureTab : ICaptureTab
     public bool IsDisposed => disposed;
 
     public bool IsWebViewCreated => webView is not null;
+
+    /// <summary>The native capture view, or null in legacy report mode.</summary>
+    public Views.CaptureView? NativeView => nativeView;
+
+    public ViewModels.CaptureViewModel? ViewModel => nativeView?.DataContext as ViewModels.CaptureViewModel;
 
     public int PopupCount => popups.Count;
 
@@ -90,7 +108,7 @@ internal sealed class CaptureTab : ICaptureTab
     {
         View.Visibility = Visibility.Visible;
         UpdateStatus();
-        if (disposed)
+        if (disposed || nativeView is not null)
         {
             return;
         }
@@ -113,6 +131,10 @@ internal sealed class CaptureTab : ICaptureTab
         tracker.Reset(fingerprint);
         notice = tracker.Evaluate(FileFingerprint.TryRead(SourcePath));
         RenderNotice();
+        if (nativeView is not null)
+        {
+            nativeView.DataContext = new ViewModels.CaptureViewModel(replacement.Report);
+        }
         session?.NavigateToReport();
         UpdateStatus();
     }
@@ -133,6 +155,12 @@ internal sealed class CaptureTab : ICaptureTab
         watcher.Settled -= OnFileSettled;
         watcher.Dispose();
         CloseAllPopups();
+        if (nativeView is not null)
+        {
+            nativeView.DataContext = null;
+            View.Host.Children.Remove(nativeView);
+            nativeView = null;
+        }
         if (webView is not null)
         {
             if (webView.CoreWebView2 is { } core)
@@ -311,7 +339,29 @@ internal sealed class CaptureTab : ICaptureTab
     {
         if (Document is { } current)
         {
-            Status = $"{FileName}: {current.SessionCount:N0} HTTP sessions, {current.WebSocketMessageCount:N0} WebSocket messages, {current.WarningCount:N0} warnings";
+            var warnings = current.WarningCount is { } count ? $"{count:N0} warnings" : "counting warnings…";
+            Status = $"{FileName}: {current.SessionCount:N0} HTTP sessions, {current.WebSocketMessageCount:N0} WebSocket messages, {warnings}";
+            if (current.WarningCount is null)
+            {
+                // Finish decoding in the background once the capture has rendered, then refresh the warning count.
+                View.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
+                {
+                    if (disposed || !ReferenceEquals(Document, current))
+                    {
+                        return;
+                    }
+                    _ = current.StartDeferredWork().ContinueWith(
+                        task => View.Dispatcher.BeginInvoke(() =>
+                        {
+                            // A failed completion leaves the count pending; don't retry in a loop.
+                            if (task.IsCompletedSuccessfully && !disposed && ReferenceEquals(Document, current))
+                            {
+                                UpdateStatus();
+                            }
+                        }),
+                        TaskScheduler.Default);
+                });
+            }
         }
         host.OnTabStateChanged(this);
     }

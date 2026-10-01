@@ -1,0 +1,25 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vm="clr-namespace:SazViewer.App.ViewModels"
+                    xmlns:views="clr-namespace:SazViewer.App.Views">
+    <!-- Implicit templates mapping tab-content view-models to their native views. -->
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="/SazViewer.App;component/Themes/Controls.xaml" />
+    </ResourceDictionary.MergedDictionaries>
+
+    <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+    <views:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibility" />
+    <views:NotNullToVisibilityConverter x:Key="NotNullToVisibility" />
+
+    <DataTemplate DataType="{x:Type vm:TextDocumentViewModel}">
+        <views:LineDocumentView />
+    </DataTemplate>
+
+    <DataTemplate DataType="{x:Type vm:PlaceholderViewModel}">
+        <TextBlock Text="{Binding Message}" Foreground="{DynamicResource Saz.Muted}" TextWrapping="Wrap" Margin="4" />
+    </DataTemplate>
+
+    <DataTemplate DataType="{x:Type vm:MessagePaneViewModel}">
+        <views:MessagePaneView />
+    </DataTemplate>
+</ResourceDictionary>

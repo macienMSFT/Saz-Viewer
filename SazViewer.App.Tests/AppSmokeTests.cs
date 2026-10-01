@@ -29,6 +29,8 @@ public sealed class AppSmokeTests
         startInfo.ArgumentList.Add(capturePath);
         startInfo.Environment["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = $"--remote-debugging-port={port}";
         startInfo.Environment[AppPaths.DataDirectoryOverrideVariable] = Path.Combine(temp.Path, "data");
+        // These smoke tests drive the report through CDP, so they use the opt-in WebView2 report view.
+        startInfo.Environment["SAZVIEWER_LEGACY_HTML_REPORT"] = "1";
 
         using var process = Process.Start(startInfo)!;
         try
@@ -189,6 +191,7 @@ public sealed class AppSmokeTests
             startInfo.Environment["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = $"--remote-debugging-port={port}";
         }
         startInfo.Environment[AppPaths.DataDirectoryOverrideVariable] = dataDirectory;
+        startInfo.Environment["SAZVIEWER_LEGACY_HTML_REPORT"] = "1";
         return startInfo;
     }
 

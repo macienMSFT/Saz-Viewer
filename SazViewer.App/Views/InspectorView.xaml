@@ -1,0 +1,68 @@
+<UserControl x:Class="SazViewer.App.Views.InspectorView" x:ClassModifier="internal"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:SazViewer.App.Views"
+             Background="{DynamicResource Saz.Bg}"
+             Foreground="{DynamicResource Saz.Text}"
+             PreviewKeyDown="OnPreviewKeyDown">
+    <UserControl.Resources>
+        <views:SharedResourceDictionary Source="pack://application:,,,/SazViewer.App;component/Views/ViewResources.xaml" />
+    </UserControl.Resources>
+    <DockPanel Margin="10,6,10,8">
+        <!-- Header: title, Previous / Next, position, close. -->
+        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+            <Button x:Name="CloseButton" DockPanel.Dock="Right" Content="✕" Command="{Binding CloseCommand}" Margin="8,0,0,0"
+                    AutomationProperties.Name="Close inspector" ToolTip="Close inspector (Esc)" />
+            <TextBlock DockPanel.Dock="Right" Text="{Binding Position}" Foreground="{DynamicResource Saz.Muted}" VerticalAlignment="Center"
+                       Margin="8,0,0,0" AutomationProperties.LiveSetting="Polite"
+                       AutomationProperties.Name="{Binding Position, StringFormat='Session {0}'}" />
+            <Button x:Name="NextButton" DockPanel.Dock="Right" Content="Next ▶" Command="{Binding NextCommand}" Margin="4,0,0,0"
+                    AutomationProperties.Name="Next session" ToolTip="Next session (Alt+Right)" />
+            <Button x:Name="PreviousButton" DockPanel.Dock="Right" Content="◀ Previous" Command="{Binding PreviousCommand}" Margin="8,0,0,0"
+                    AutomationProperties.Name="Previous session" ToolTip="Previous session (Alt+Left)" />
+            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" AutomationProperties.HeadingLevel="Level2" />
+        </DockPanel>
+
+        <!-- Session details (endpoints, timers, warnings). -->
+        <Expander DockPanel.Dock="Top" Header="Session details" Margin="0,2,0,4" DataContext="{Binding Details}"
+                  Visibility="{Binding Converter={StaticResource NotNullToVisibility}}">
+            <StackPanel>
+                <TextBlock TextWrapping="Wrap" Visibility="{Binding HasEndpoints, Converter={StaticResource BoolToVisibility}}" Margin="0,2">
+                    <Run Text="Endpoints:" FontWeight="SemiBold" /> <Run Text="{Binding Endpoints, Mode=OneWay}" />
+                </TextBlock>
+                <Expander Header="Timers" Visibility="{Binding HasTimers, Converter={StaticResource BoolToVisibility}}" Margin="0,2">
+                    <TextBox Text="{Binding Timers, Mode=OneWay}" IsReadOnly="True" FontFamily="{StaticResource Saz.MonoFont}" FontSize="12"
+                             AutomationProperties.Name="Session timers" />
+                </Expander>
+                <ItemsControl ItemsSource="{Binding Warnings}" Focusable="False">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Style="{StaticResource Saz.Warning}">
+                                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Expander>
+
+        <Grid>
+            <!-- HTTP: Request / Response selector, active-view search and the selected side. -->
+            <DockPanel x:Name="HttpBody" Visibility="{Binding IsHttp, Converter={StaticResource BoolToVisibility}}">
+                <TabControl x:Name="SideTabs" DockPanel.Dock="Top" Style="{StaticResource Saz.TabStripOnly}"
+                            SelectedIndex="{Binding SelectedSideIndex, Mode=TwoWay}"
+                            AutomationProperties.Name="Session message">
+                    <TabItem Header="Request" AutomationProperties.Name="Request" />
+                    <TabItem Header="Response" AutomationProperties.Name="Response" />
+                </TabControl>
+                <views:ActiveSearchBar x:Name="SearchBar" DockPanel.Dock="Top" DataContext="{Binding Search}" />
+                <ContentControl x:Name="PaneHost" Content="{Binding ActivePane}" Focusable="False" />
+            </DockPanel>
+            <!-- WebSocket sessions get their own inspector (milestone 5). -->
+            <TextBlock Visibility="{Binding IsWebSocket, Converter={StaticResource BoolToVisibility}}" Margin="4"
+                       Foreground="{DynamicResource Saz.Muted}" TextWrapping="Wrap"
+                       Text="This session carries WebSocket messages. The native WebSocket inspector is not available yet." />
+        </Grid>
+    </DockPanel>
+</UserControl>

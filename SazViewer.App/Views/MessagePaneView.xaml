@@ -1,0 +1,51 @@
+<UserControl x:Class="SazViewer.App.Views.MessagePaneView" x:ClassModifier="internal"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:SazViewer.App.ViewModels"
+             xmlns:views="clr-namespace:SazViewer.App.Views">
+    <UserControl.Resources>
+        <views:SharedResourceDictionary Source="pack://application:,,,/SazViewer.App;component/Views/ViewResources.xaml" />
+    </UserControl.Resources>
+    <Grid>
+        <TabControl x:Name="Tabs"
+                    ItemsSource="{Binding Tabs}"
+                    SelectedItem="{Binding SelectedTab, Mode=TwoWay}"
+                    Visibility="{Binding HasAnyTab, Converter={StaticResource BoolToVisibility}}"
+                    AutomationProperties.Name="{Binding TabListName}">
+            <TabControl.ItemContainerStyle>
+                <Style TargetType="TabItem" BasedOn="{StaticResource Saz.TabItem}">
+                    <Setter Property="IsEnabled" Value="{Binding IsEnabled}" />
+                    <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
+                    <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsEnabled}" Value="False">
+                            <Setter Property="ToolTip" Value="{Binding UnavailableText}" />
+                            <Setter Property="AutomationProperties.HelpText" Value="{Binding UnavailableText}" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TabControl.ItemContainerStyle>
+            <TabControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type vm:MessageTabViewModel}">
+                    <TextBlock Text="{Binding Label}" />
+                </DataTemplate>
+            </TabControl.ItemTemplate>
+            <TabControl.ContentTemplate>
+                <DataTemplate DataType="{x:Type vm:MessageTabViewModel}">
+                    <DockPanel>
+                        <DockPanel x:Name="Toolbar" DockPanel.Dock="Top" Margin="0,0,0,6" LastChildFill="False">
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding CopyStatus}" Foreground="{DynamicResource Saz.Muted}"
+                                       VerticalAlignment="Center" Margin="8,0,0,0" TextWrapping="Wrap" MaxWidth="360"
+                                       AutomationProperties.LiveSetting="Polite" />
+                            <Button DockPanel.Dock="Right" Content="{Binding CopyButtonText}" Command="{Binding CopyCommand}"
+                                    AutomationProperties.Name="{Binding CopyAccessibleName}" MinWidth="64" />
+                        </DockPanel>
+                        <ContentControl Content="{Binding Content}" Focusable="False" />
+                    </DockPanel>
+                </DataTemplate>
+            </TabControl.ContentTemplate>
+        </TabControl>
+        <TextBlock Text="{Binding EmptyText}" Foreground="{DynamicResource Saz.Muted}" Margin="4"
+                   Visibility="{Binding HasAnyTab, Converter={StaticResource InverseBoolToVisibility}}" />
+    </Grid>
+</UserControl>

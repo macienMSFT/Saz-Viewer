@@ -11,6 +11,7 @@ public partial class App : Application
     {
         base.OnStartup(e);
         DispatcherUnhandledException += OnDispatcherUnhandledException;
+        Themes.ThemeManager.Apply(Themes.ThemeManager.SystemTheme());
 
         var arguments = AppArguments.Parse(e.Args);
         if (arguments.Error is not null)
