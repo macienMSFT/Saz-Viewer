@@ -104,6 +104,94 @@ public sealed class AppSmokeTests
         }
     }
 
+    [Fact]
+    public async Task SecondLaunch_ForwardsPathToRunningInstance_WhichOpensSecondTab()
+    {
+        using var temp = new TempDirectory();
+        var first = TestCaptures.WritePlain(temp.File("first.saz"));
+        var second = TestCaptures.WriteSimple(temp.File("second.saz"), 3);
+        var port = GetFreePort();
+        var dataDirectory = Path.Combine(temp.Path, "data");
+
+        using var process = Process.Start(CreateStartInfo(first, dataDirectory, port))!;
+        try
+        {
+            await WaitForDebuggerAsync(port, process);
+            using var playwright = await Playwright.CreateAsync();
+            await using (var browser = await playwright.Chromium.ConnectOverCDPAsync($"http://127.0.0.1:{port}"))
+            {
+                var page = await WaitForPageAsync(browser.Contexts.Single(), ReportUrl);
+                await page.Locator("#httpTable tbody tr").First.WaitForAsync();
+                Assert.Equal(2, await page.Locator("#httpTable tbody tr").CountAsync());
+            }
+
+            // The second launch shares the data root (and thus the instance name) and must hand off, not start a UI.
+            using (var forwarder = Process.Start(CreateStartInfo(second, dataDirectory, port: null))!)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await forwarder.WaitForExitAsync(timeout.Token);
+                Assert.Equal(0, forwarder.ExitCode);
+            }
+            Assert.False(process.HasExited);
+
+            // The forwarded tab becomes active, so its lazily created WebView2 loads its own report.
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            var counts = new List<int>();
+            while (DateTime.UtcNow < deadline)
+            {
+                await using var browser = await playwright.Chromium.ConnectOverCDPAsync($"http://127.0.0.1:{port}");
+                var reports = browser.Contexts.SelectMany(c => c.Pages)
+                    .Where(p => p.Url.StartsWith(ReportUrl, StringComparison.Ordinal) && !p.Url.Contains('#', StringComparison.Ordinal))
+                    .ToList();
+                if (reports.Count == 2)
+                {
+                    counts.Clear();
+                    foreach (var report in reports)
+                    {
+                        await report.Locator("#httpTable tbody tr").First.WaitForAsync();
+                        counts.Add(await report.Locator("#httpTable tbody tr").CountAsync());
+                    }
+                    break;
+                }
+                await Task.Delay(500);
+            }
+            counts.Sort();
+            Assert.Equal([2, 3], counts);
+
+            // Forwarding the same file again focuses the existing tab instead of opening a third one.
+            using (var again = Process.Start(CreateStartInfo(second, dataDirectory, port: null))!)
+            {
+                await again.WaitForExitAsync();
+                Assert.Equal(0, again.ExitCode);
+            }
+            await Task.Delay(1500);
+            await using (var browser = await playwright.Chromium.ConnectOverCDPAsync($"http://127.0.0.1:{port}"))
+            {
+                Assert.Equal(2, browser.Contexts.SelectMany(c => c.Pages).Count(p => p.Url == ReportUrl));
+            }
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    private static ProcessStartInfo CreateStartInfo(string capturePath, string dataDirectory, int? port)
+    {
+        var startInfo = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "SazViewer.App.exe")) { UseShellExecute = false };
+        startInfo.ArgumentList.Add(capturePath);
+        if (port is not null)
+        {
+            startInfo.Environment["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = $"--remote-debugging-port={port}";
+        }
+        startInfo.Environment[AppPaths.DataDirectoryOverrideVariable] = dataDirectory;
+        return startInfo;
+    }
+
     private static int GetFreePort()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
