@@ -23,6 +23,22 @@
         <views:ValueTreeView />
     </DataTemplate>
 
+    <DataTemplate DataType="{x:Type vm:HexViewModel}">
+        <views:HexView />
+    </DataTemplate>
+
+    <DataTemplate DataType="{x:Type vm:AuthViewModel}">
+        <views:AuthView />
+    </DataTemplate>
+
+    <DataTemplate DataType="{x:Type vm:ImageViewModel}">
+        <views:ImageView />
+    </DataTemplate>
+
+    <DataTemplate DataType="{x:Type vm:WebPreviewViewModel}">
+        <views:WebPreviewView />
+    </DataTemplate>
+
     <DataTemplate DataType="{x:Type vm:PlaceholderViewModel}">
         <TextBlock Text="{Binding Message}" Foreground="{DynamicResource Saz.Muted}" TextWrapping="Wrap" Margin="4" />
     </DataTemplate>

@@ -8,6 +8,8 @@ internal sealed class MessageTabViewModel : ObservableObject
 {
     private readonly Func<TabContentViewModel>? factory;
     private readonly IClipboardService clipboard;
+    private readonly string defaultAccessibleName;
+    private readonly string defaultDescription;
     private TabContentViewModel? content;
     private string copyButtonText = "Copy";
     private string copyStatus = "";
@@ -27,8 +29,8 @@ internal sealed class MessageTabViewModel : ObservableObject
         Label = label;
         IsEnabled = isEnabled;
         UnavailableText = unavailableText;
-        CopyAccessibleName = copyAccessibleName;
-        CopyDescription = copyDescription;
+        defaultAccessibleName = copyAccessibleName;
+        defaultDescription = copyDescription;
         this.factory = factory;
         this.clipboard = clipboard;
         CopyCommand = new RelayCommand(Copy, () => IsEnabled);
@@ -42,9 +44,9 @@ internal sealed class MessageTabViewModel : ObservableObject
 
     public string UnavailableText { get; }
 
-    public string CopyAccessibleName { get; }
+    public string CopyAccessibleName => content?.CopyDescription is { } description ? $"Copy {description}" : defaultAccessibleName;
 
-    public string CopyDescription { get; }
+    public string CopyDescription => content?.CopyDescription ?? defaultDescription;
 
     public RelayCommand CopyCommand { get; }
 
@@ -58,6 +60,14 @@ internal sealed class MessageTabViewModel : ObservableObject
             if (content is null && IsEnabled && factory is not null)
             {
                 content = factory();
+                content.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(TabContentViewModel.CopyDescription))
+                    {
+                        OnPropertyChanged(nameof(CopyDescription));
+                        OnPropertyChanged(nameof(CopyAccessibleName));
+                    }
+                };
             }
             return content;
         }

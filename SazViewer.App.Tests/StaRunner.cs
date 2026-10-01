@@ -37,6 +37,30 @@ internal static class StaRunner
         failure?.Throw();
     }
 
+    /// <summary>Like <see cref="Run"/>, but inside a running dispatcher loop (WebView2 requires one).</summary>
+    public static void RunInLoop(Action action) =>
+        Run(() =>
+        {
+            ExceptionDispatchInfo? inner = null;
+            Dispatcher.CurrentDispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception exception)
+                {
+                    inner = ExceptionDispatchInfo.Capture(exception);
+                }
+                finally
+                {
+                    Dispatcher.CurrentDispatcher.BeginInvokeShutdown(DispatcherPriority.Normal);
+                }
+            });
+            Dispatcher.Run();
+            inner?.Throw();
+        });
+
     /// <summary>Processes queued dispatcher work (layout, bindings, loaded events).</summary>
     public static void DoEvents()
     {

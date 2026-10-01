@@ -104,8 +104,11 @@ internal sealed class InspectorViewModel : ObservableObject
         set
         {
             var side = value == ResponseSide ? ResponseSide : RequestSide;
+            var previous = ActivePane;
             if (SetProperty(ref selectedSide, side))
             {
+                // Leaving a side resets its view state (e.g. revealed auth values, live WebView previews).
+                previous?.Deactivate();
                 Search.Reset();
                 OnPropertyChanged(nameof(SelectedSideIndex));
                 OnPropertyChanged(nameof(ActivePane));

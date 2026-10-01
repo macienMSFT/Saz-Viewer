@@ -150,6 +150,10 @@ internal sealed class MessagePaneViewModel : ObservableObject
             "json" or "xml" => Structured(key == "json" ? BodyFormat.Json : BodyFormat.Xml, content),
             "headers" => new TextDocumentViewModel(MessageDocuments.Headers(content), () => CopyResult.Of(content.FullHeadersText())),
             "raw" => new TextDocumentViewModel(MessageDocuments.Raw(content), () => RawCopy(content)),
+            "hex" => new HexViewModel(content),
+            "auth" => new AuthViewModel(HtmlReportGenerator.BuildAuthView(content.Message)!),
+            "image" => new ImageViewModel(content.Image!, content.BodyBytes, content.Body.Length),
+            "webview" => new WebPreviewViewModel(content.HtmlPreview!, content.DecodeBodyText),
             _ => new PlaceholderViewModel($"The native {TabOrder.First(tab => tab.Key == key).Label} view is not available yet.")
         };
     }

@@ -14,6 +14,9 @@ internal abstract class TabContentViewModel : ObservableObject
     /// <summary>Raised when the view switches what it shows (e.g. Tree to Formatted Text); active searches reset.</summary>
     public event EventHandler? SearchTargetChanged;
 
+    /// <summary>Overrides the tab's copy description when it depends on view state (e.g. revealed auth values).</summary>
+    public virtual string? CopyDescription => null;
+
     public abstract CopyResult GetCopyText();
 
     /// <summary>Called when the tab stops being shown (release resources, reset reveal state, ...).</summary>
