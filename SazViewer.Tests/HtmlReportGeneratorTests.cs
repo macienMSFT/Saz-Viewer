@@ -453,7 +453,7 @@ public sealed class HtmlReportGeneratorTests
 
         Assert.Contains("<html lang=\"en\" data-theme=\"system\">", html, StringComparison.Ordinal);
         Assert.Equal(2, html.Split("class=\"theme-toggle\"", StringSplitOptions.None).Length - 1);
-        Assert.Equal(2, html.Split("<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\">", StringSplitOptions.None).Length - 1);
+        Assert.Equal(2, html.Split("<path d=\"M9 18h6M10 21h4", StringSplitOptions.None).Length - 1);
         Assert.Equal(2, html.Split("class=\"theme-bulb-core\"", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("class=\"theme-select\"", html, StringComparison.Ordinal);
         Assert.DoesNotContain("aria-label=\"Color theme\"", html, StringComparison.Ordinal);
@@ -1048,7 +1048,11 @@ public sealed class HtmlReportGeneratorTests
         var html = new HtmlReportGenerator().Generate(report);
 
         Assert.Contains("const bar=httpElement('div','primary-view-bar')", html, StringComparison.Ordinal);
-        Assert.Contains("const layout=httpElement('button','http-layout-toggle','Split view')", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"inspectorLayoutToggle\" class=\"http-layout-toggle hidden\"", html, StringComparison.Ordinal);
+        Assert.Contains("aria-controls=\"inspectorBody\"", html, StringComparison.Ordinal);
+        Assert.Contains("<rect x=\"3.5\" y=\"4\" width=\"7\" height=\"16\" rx=\"1\"/>", html, StringComparison.Ordinal);
+        Assert.Contains("bar.append(tabs);", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("httpElement('button','http-layout-toggle'", html, StringComparison.Ordinal);
         Assert.Contains("const splitter=httpElement('div','http-splitter hidden')", html, StringComparison.Ordinal);
         Assert.Contains("splitter.setAttribute('role','separator')", html, StringComparison.Ordinal);
         Assert.Contains("const HTTP_LAYOUT_STORAGE_KEY='saz-viewer.http-layout.v1';", html, StringComparison.Ordinal);
@@ -1061,6 +1065,10 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("else if(event.key==='ArrowRight')next=current+", html, StringComparison.Ordinal);
         Assert.Contains("splitter.setAttribute('aria-valuenow',String(now));splitter.setAttribute('aria-valuetext'", html, StringComparison.Ordinal);
         Assert.Contains("function applyHttpLayout(root,mode,persist,hydrate)", html, StringComparison.Ordinal);
+        Assert.Contains("bar.classList.toggle('hidden',split);", html, StringComparison.Ordinal);
+        Assert.Contains("const label=split?'Switch to single-side view':'Switch to split view';", html, StringComparison.Ordinal);
+        Assert.Contains("request.setAttribute('aria-labelledby',split?'request-pane-heading':'primary-tab-request');", html, StringComparison.Ordinal);
+        Assert.Contains("inspectorLayoutToggle.addEventListener('click'", html, StringComparison.Ordinal);
         Assert.Contains("const targets=split?[...primaryPanels.querySelectorAll(':scope>.primary-panel')]:[null];", html, StringComparison.Ordinal);
         Assert.Contains("viewEventTarget:fixedPrimaryPanel||root", html, StringComparison.Ordinal);
         Assert.Contains("if(!setupHttpLayout(root))setupHttpViewSearch(root,generation);", html, StringComparison.Ordinal);

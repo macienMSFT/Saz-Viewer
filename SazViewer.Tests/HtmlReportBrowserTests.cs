@@ -1040,14 +1040,24 @@ public sealed class HtmlReportBrowserTests
 
             var toggle = page.Locator(".http-layout-toggle");
             Assert.Equal("false", await toggle.GetAttributeAsync("aria-pressed"));
-            Assert.Equal("Show Request and Response side by side", await toggle.GetAttributeAsync("aria-label"));
+            Assert.Equal("Switch to split view", await toggle.GetAttributeAsync("aria-label"));
+            Assert.Equal("inspector-nav", await toggle.Locator("xpath=..").GetAttributeAsync("class"));
+            var toggleBox = await toggle.BoundingBoxAsync();
+            Assert.NotNull(toggleBox);
+            Assert.InRange(toggleBox.Width, 35, 37);
+            Assert.InRange(toggleBox.Height, 35, 37);
+            Assert.True(await page.Locator(".primary-view-bar").IsVisibleAsync());
             Assert.Equal(1, await page.Locator(".http-view-search-input").CountAsync());
             Assert.True(await page.Locator("#primary-panel-response").EvaluateAsync<bool>("panel=>panel.classList.contains('hidden')"));
 
             await toggle.ClickAsync();
             Assert.True(await page.Locator("#inspectorBody").EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
             Assert.Equal("true", await toggle.GetAttributeAsync("aria-pressed"));
-            Assert.Equal("Show one Request or Response pane at a time", await toggle.GetAttributeAsync("title"));
+            Assert.Equal("Switch to single-side view", await toggle.GetAttributeAsync("title"));
+            Assert.False(await page.Locator(".primary-view-bar").IsVisibleAsync());
+            Assert.False(await page.Locator(".primary-tab-strip").IsVisibleAsync());
+            Assert.Equal("request-pane-heading", await page.Locator("#primary-panel-request").GetAttributeAsync("aria-labelledby"));
+            Assert.Equal("response-pane-heading", await page.Locator("#primary-panel-response").GetAttributeAsync("aria-labelledby"));
             Assert.False(await page.Locator("#primary-panel-request").EvaluateAsync<bool>("panel=>panel.classList.contains('hidden')"));
             Assert.False(await page.Locator("#primary-panel-response").EvaluateAsync<bool>("panel=>panel.classList.contains('hidden')"));
             Assert.Equal(2, await page.Locator(".http-view-search-input").CountAsync());
@@ -1097,7 +1107,11 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal(2, await page.Locator(".http-view-search-input").CountAsync());
             await page.Locator("#inspectorPrev").ClickAsync();
 
+            await toggle.ClickAsync();
+            Assert.True(await page.Locator(".primary-view-bar").IsVisibleAsync());
             await page.Locator("#primary-tab-response").ClickAsync();
+            await toggle.ClickAsync();
+            Assert.False(await page.Locator(".primary-view-bar").IsVisibleAsync());
             await toggle.ClickAsync();
             Assert.Equal(1, await page.Locator(".http-view-search-input").CountAsync());
             Assert.True(await page.Locator("#primary-panel-request").EvaluateAsync<bool>("panel=>panel.classList.contains('hidden')"));
@@ -1157,7 +1171,6 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal(1, await page.Locator("#request-panel-image img[src^='blob:']").CountAsync());
             Assert.Equal(1, await page.Locator("#response-panel-webview iframe").CountAsync());
 
-            await page.Locator("#primary-tab-request").ClickAsync();
             await page.Locator(".http-layout-toggle").ClickAsync();
             await Assertions.Expect(page.Locator("#response-panel-webview iframe")).ToHaveCountAsync(0);
             Assert.Equal(1, await page.Locator("#request-panel-image img[src^='blob:']").CountAsync());
@@ -1661,6 +1674,7 @@ public sealed class HtmlReportBrowserTests
                 "()=>Boolean(document.getElementById('http-detail-3').content.querySelector('[data-payload-type=\"websocket-session\"]'))"));
             await row.ClickAsync();
             await page.Locator(".ws-message-row").First.WaitForAsync();
+            Assert.False(await page.Locator("#inspectorLayoutToggle").IsVisibleAsync());
             Assert.Null(await page.Locator("#inspectorBody .websocket-inspector")
                 .GetAttributeAsync("data-compressed-payload"));
 

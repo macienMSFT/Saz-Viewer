@@ -149,7 +149,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .inspector-open-status{flex-basis:100%;min-height:0;color:var(--muted)}.inspector-open-status.warning{color:var(--text)}
 .session-details{flex:0 0 auto;max-height:30vh;overflow:auto;margin:2px 14px 0}.session-details summary{font-size:12px}
 .inspector-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-.primary-view-bar{display:flex;align-items:flex-end;gap:8px;padding:0 14px;background:var(--panel2);flex:0 0 auto}.primary-view-bar .primary-tab-strip{padding:0;flex:1}.http-layout-toggle{flex:none;margin:0 0 2px;padding:5px 9px}.http-layout-toggle[aria-pressed=true]{border-color:var(--accent);background:var(--selected)}
+.primary-view-bar{display:flex;align-items:flex-end;gap:8px;padding:0 14px;background:var(--panel2);flex:0 0 auto}.primary-view-bar .primary-tab-strip{padding:0;flex:1}.http-layout-toggle{flex:0 0 36px;display:inline-flex;align-items:center;justify-content:center;width:36px;min-width:36px;height:36px;padding:7px}.http-layout-toggle svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linejoin:round}.http-layout-toggle[aria-pressed=true]{border-color:var(--accent);background:var(--selected)}.http-layout-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .tab-panels.primary-panels{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;border:none;padding:0;background:transparent}
 .primary-panel{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;padding:10px 14px;overflow:hidden}.http-pane-heading{display:none;margin:0 0 3px;font-size:13px;color:var(--muted)}
 .inspector-body.http-split .primary-panels{flex-direction:row;gap:6px;padding:8px 10px}.inspector-body.http-split .primary-panel{padding:4px;min-width:320px;border:1px solid var(--line);background:var(--panel);flex:1 1 0}.inspector-body.http-split #primary-panel-request{flex:0 1 var(--http-left,50%)}.inspector-body.http-split .http-pane-heading{display:block}.http-splitter{flex:0 0 8px;align-self:stretch;border-radius:4px;background:var(--line);cursor:col-resize;touch-action:none;position:relative}.http-splitter::after{content:"";position:absolute;inset:0 2px;border-left:1px solid var(--muted);border-right:1px solid var(--muted)}.http-splitter:hover,.http-splitter:focus-visible{background:var(--accent);outline:2px solid var(--accent);outline-offset:1px}.http-resizing{cursor:col-resize!important;user-select:none!important}.inspector-body.http-split .http-view-search{margin:0 0 5px}
@@ -208,6 +208,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 <button type="button" id="inspectorPrev" aria-label="Previous session">&#9664; Previous</button>
 <span id="inspectorPosition" class="inspector-position" aria-live="polite"></span>
 <button type="button" id="inspectorNext" aria-label="Next session">Next &#9654;</button>
+<button type="button" id="inspectorLayoutToggle" class="http-layout-toggle hidden" aria-label="Switch to split view" title="Switch to split view" aria-pressed="false" aria-controls="inspectorBody"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3.5" y="4" width="7" height="16" rx="1"/><rect x="13.5" y="4" width="7" height="16" rx="1"/></svg></button>
 </div>
 <button type="button" class="theme-toggle" aria-label="Switch theme" title="Switch theme" aria-pressed="false"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M8.5 15.5A6 6 0 1 1 15.5 15.5C14.6 16.2 14 17 14 18h-4c0-1-.6-1.8-1.5-2.5Z"/><circle class="theme-bulb-core" cx="12" cy="11" r="2.4"/></svg></button>
 <button type="button" id="inspectorOpenTab" aria-label="Open in new tab: this session inspector" title="Open this session inspector in a new tab">Open in new tab</button>
@@ -224,6 +225,7 @@ const inspectorBody=document.getElementById('inspectorBody');
 const inspectorTitle=document.getElementById('inspectorTitle');
 const inspectorPrev=document.getElementById('inspectorPrev');
 const inspectorNext=document.getElementById('inspectorNext');
+const inspectorLayoutToggle=document.getElementById('inspectorLayoutToggle');
 const inspectorPosition=document.getElementById('inspectorPosition');
 const inspectorOpenTab=document.getElementById('inspectorOpenTab');
 const inspectorClose=document.getElementById('inspectorClose');
@@ -1248,7 +1250,7 @@ function applyHttpLayout(root,mode,persist,hydrate){
   const bar=root.querySelector('.primary-view-bar');
   const panels=root.querySelector('.primary-panels');
   if(!bar||!panels)return;
-  const tablist=bar.querySelector('.primary-tab-strip'),button=bar.querySelector('.http-layout-toggle');
+  const tablist=bar.querySelector('.primary-tab-strip'),button=inspectorLayoutToggle;
   const request=panels.querySelector('#primary-panel-request'),response=panels.querySelector('#primary-panel-response');
   const splitter=panels.querySelector('.http-splitter');
   if(!tablist||!button||!request||!response||!splitter)return;
@@ -1257,10 +1259,13 @@ function applyHttpLayout(root,mode,persist,hydrate){
   httpLayoutMode=next;
   const split=next==='split';
   root.classList.toggle('http-split',split);
+  if(split&&bar.contains(document.activeElement))button.focus();
+  bar.classList.toggle('hidden',split);
   button.setAttribute('aria-pressed',String(split));
-  button.textContent=split?'Single view':'Split view';
-  const label=split?'Show one Request or Response pane at a time':'Show Request and Response side by side';
+  const label=split?'Switch to single-side view':'Switch to split view';
   button.setAttribute('aria-label',label);button.title=label;
+  request.setAttribute('aria-labelledby',split?'request-pane-heading':'primary-tab-request');
+  response.setAttribute('aria-labelledby',split?'response-pane-heading':'primary-tab-response');
   splitter.classList.toggle('hidden',!split);
   if(split){
     request.classList.remove('hidden');response.classList.remove('hidden');
@@ -1281,11 +1286,11 @@ function setupHttpLayout(root){
   const bar=root.querySelector('.primary-view-bar');
   const panels=root.querySelector('.primary-panels');
   if(!bar||!panels)return false;
-  const button=bar.querySelector('.http-layout-toggle'),request=panels.querySelector('#primary-panel-request');
+  const button=inspectorLayoutToggle,request=panels.querySelector('#primary-panel-request');
   const response=panels.querySelector('#primary-panel-response'),splitter=panels.querySelector('.http-splitter');
   if(!button||!request||!response||!splitter)return false;
+  button.classList.remove('hidden');
   setupHttpSplitter(root,panels,request,response,splitter);
-  button.addEventListener('click',()=>applyHttpLayout(root,httpLayoutMode==='split'?'single':'split',true,true));
   applyHttpLayout(root,httpLayoutMode,false,false);
   return true;
 }
@@ -2698,17 +2703,18 @@ function buildHttpInspector(source,store){
   const bar=httpElement('div','primary-view-bar'),tabs=httpElement('div','primary-tab-strip tab-strip');
   tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Request or response');tabs.dataset.side='primary';tabs.dataset.priority='request,response';
   tabs.append(primaryTab('request','Request',true),primaryTab('response','Response',false));
-  const layout=httpElement('button','http-layout-toggle','Split view');layout.type='button';layout.setAttribute('aria-pressed','false');
-  layout.setAttribute('aria-label','Show Request and Response side by side');layout.title='Show Request and Response side by side';bar.append(tabs,layout);
+  bar.append(tabs);
   const panels=httpElement('div','primary-panels tab-panels');
   const requestPanel=httpElement('div','tab-panel primary-panel');requestPanel.id='primary-panel-request';requestPanel.dataset.side='Request';
   requestPanel.setAttribute('role','tabpanel');requestPanel.setAttribute('aria-labelledby','primary-tab-request');requestPanel.tabIndex=0;
-  requestPanel.append(httpElement('h3','http-pane-heading','Request'),createMessagePanel('request','Request',request,requestProtocol));
+  const requestHeading=httpElement('h3','http-pane-heading','Request');requestHeading.id='request-pane-heading';
+  requestPanel.append(requestHeading,createMessagePanel('request','Request',request,requestProtocol));
   const splitter=httpElement('div','http-splitter hidden');splitter.setAttribute('role','separator');splitter.setAttribute('aria-label','Resize Request and Response panes');
   splitter.setAttribute('aria-orientation','vertical');splitter.tabIndex=0;splitter.title='Drag or use Left and Right arrow keys to resize Request and Response panes';
   const responsePanel=httpElement('div','tab-panel primary-panel hidden');responsePanel.id='primary-panel-response';responsePanel.dataset.side='Response';
   responsePanel.setAttribute('role','tabpanel');responsePanel.setAttribute('aria-labelledby','primary-tab-response');responsePanel.tabIndex=0;
-  responsePanel.append(httpElement('h3','http-pane-heading','Response'),createMessagePanel('response','Response',response,responseProtocol));
+  const responseHeading=httpElement('h3','http-pane-heading','Response');responseHeading.id='response-pane-heading';
+  responsePanel.append(responseHeading,createMessagePanel('response','Response',response,responseProtocol));
   panels.append(requestPanel,splitter,responsePanel);source.replaceChildren(...details,bar,panels);
 }
 function setupInspectorContent(root,generation){
@@ -2748,6 +2754,7 @@ function loadRow(row){
   deactivateDynamicViews(inspectorBody);
   inspectorBody._clearHttpViewSearch=null;
   inspectorBody._disposeHttpViewSearch=null;
+  inspectorLayoutToggle.classList.add('hidden');
   const focusWasInBody=inspectorBody.contains(document.activeElement);
   if(currentRow){currentRow.classList.remove('selected');currentRow.setAttribute('aria-selected','false')}
   currentRow=row;row.classList.add('selected');row.setAttribute('aria-selected','true');
@@ -2841,6 +2848,7 @@ function navigate(delta){
 }
 inspectorPrev.addEventListener('click',()=>navigate(-1));
 inspectorNext.addEventListener('click',()=>navigate(1));
+inspectorLayoutToggle.addEventListener('click',()=>applyHttpLayout(inspectorBody,httpLayoutMode==='split'?'single':'split',true,true));
 inspector.addEventListener('keydown',event=>{
   if(!event.altKey)return;
   if(event.key==='ArrowLeft'){event.preventDefault();navigate(-1)}
