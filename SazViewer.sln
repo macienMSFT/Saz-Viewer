@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SazViewer.Cli", "SazViewer.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SazViewer.Tests", "SazViewer.Tests\SazViewer.Tests.csproj", "{0DF34BF0-F07E-4531-98F5-FE2689331F7B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SazViewer.App", "SazViewer.App\SazViewer.App.csproj", "{10F173BF-928E-404D-8F1C-AA4CF725959C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -55,6 +57,18 @@ Global
 		{0DF34BF0-F07E-4531-98F5-FE2689331F7B}.Release|x64.Build.0 = Release|Any CPU
 		{0DF34BF0-F07E-4531-98F5-FE2689331F7B}.Release|x86.ActiveCfg = Release|Any CPU
 		{0DF34BF0-F07E-4531-98F5-FE2689331F7B}.Release|x86.Build.0 = Release|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Debug|x64.Build.0 = Debug|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Debug|x86.Build.0 = Debug|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Release|x64.ActiveCfg = Release|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Release|x64.Build.0 = Release|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Release|x86.ActiveCfg = Release|Any CPU
+		{10F173BF-928E-404D-8F1C-AA4CF725959C}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

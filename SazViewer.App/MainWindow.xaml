@@ -1,0 +1,47 @@
+<Window x:Class="SazViewer.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="SAZ Viewer"
+        Width="1400" Height="900"
+        MinWidth="640" MinHeight="400"
+        AllowDrop="True"
+        DragOver="OnDragOver"
+        Drop="OnDrop">
+    <Window.CommandBindings>
+        <CommandBinding Command="ApplicationCommands.Open" Executed="OnOpen" CanExecute="CanOpen" />
+    </Window.CommandBindings>
+    <DockPanel>
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File" SubmenuOpened="OnFileMenuOpened">
+                <MenuItem Header="_Open…" Command="ApplicationCommands.Open" InputGestureText="Ctrl+O" />
+                <MenuItem x:Name="RecentMenu" Header="Open _Recent" />
+                <Separator />
+                <MenuItem x:Name="ExportMenuItem" Header="_Export HTML…" Click="OnExport" IsEnabled="False" />
+                <MenuItem x:Name="ExportScrubbedMenuItem" Header="Export _scrubbed HTML (remove credentials)…" Click="OnExportScrubbed" IsEnabled="False" />
+                <Separator />
+                <MenuItem Header="E_xit" Click="OnExit" />
+            </MenuItem>
+        </Menu>
+        <StatusBar DockPanel.Dock="Bottom">
+            <StatusBarItem>
+                <ProgressBar x:Name="BusyIndicator" Width="120" Height="12" IsIndeterminate="True" Visibility="Collapsed" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock x:Name="StatusText" Text="Ready" />
+            </StatusBarItem>
+        </StatusBar>
+        <Grid>
+            <Border x:Name="WelcomePanel" Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="520">
+                    <TextBlock Text="SAZ Viewer" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center" FontSize="14"
+                               Text="Open a Fiddler .saz capture with File › Open (Ctrl+O), a recent file, or by dragging it onto this window." />
+                    <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center" Foreground="Gray"
+                               Text="Captures are parsed locally. The viewer makes no network requests." />
+                </StackPanel>
+            </Border>
+            <wv2:WebView2 x:Name="ReportView" Visibility="Collapsed" />
+        </Grid>
+    </DockPanel>
+</Window>

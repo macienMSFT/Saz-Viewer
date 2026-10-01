@@ -1,0 +1,23 @@
+namespace SazViewer.App;
+
+/// <summary>
+/// Per-user locations under %LOCALAPPDATA%\SazViewer (inherits the user-only profile ACL).
+/// <c>SAZVIEWER_DATA_DIR</c> (a fully qualified path) overrides the root for isolated test runs.
+/// </summary>
+internal static class AppPaths
+{
+    public const string DataDirectoryOverrideVariable = "SAZVIEWER_DATA_DIR";
+
+    public static string DataDirectory { get; } = ResolveDataDirectory(
+        Environment.GetEnvironmentVariable(DataDirectoryOverrideVariable),
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create));
+
+    public static string WebViewUserDataDirectory => Path.Combine(DataDirectory, "WebView2");
+
+    public static string RecentFilesPath => Path.Combine(DataDirectory, "recent.json");
+
+    internal static string ResolveDataDirectory(string? overridePath, string localApplicationData) =>
+        !string.IsNullOrWhiteSpace(overridePath) && Path.IsPathFullyQualified(overridePath)
+            ? Path.GetFullPath(overridePath)
+            : Path.Combine(localApplicationData, "SazViewer");
+}

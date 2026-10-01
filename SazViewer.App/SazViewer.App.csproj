@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <AssemblyName>SazViewer.App</AssemblyName>
+    <RootNamespace>SazViewer.App</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SazViewer.Core\SazViewer.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SazViewer.App.Tests" />
+  </ItemGroup>
+
+</Project>
