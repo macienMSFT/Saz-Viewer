@@ -1120,6 +1120,14 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("item.setAttribute('role','treeitem');", html, StringComparison.Ordinal);
         Assert.Contains("group.setAttribute('role','group');", html, StringComparison.Ordinal);
         Assert.Contains(".tree-item[role=treeitem]:focus-visible>.tree-row", html, StringComparison.Ordinal);
+        Assert.Contains("tree.className=kind==='json'?'protocol-tree tree-view json-tree':'tree-view'", html, StringComparison.Ordinal);
+        Assert.Contains(".json-tree .tree-row{grid-template-columns:14px minmax(240px,1fr)}", html, StringComparison.Ordinal);
+        Assert.Contains("if(node.kind==='object'||node.kind==='array')return name;", html, StringComparison.Ordinal);
+        Assert.Contains("name.textContent=safeProtocolText(String(node.name??'Root'))", html, StringComparison.Ordinal);
+        Assert.Contains("caret.textContent=kind==='json'?(expanded?'+':'\\u2212')", html, StringComparison.Ordinal);
+        Assert.Contains("const childName=name===null||name===undefined?`[${index}]`:`${name}[${index}]`;", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("propert${node.count===1?'y':'ies'}", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("item${node.count===1?'':'s'}", html, StringComparison.Ordinal);
 
         // Initially expanded by default (desiredExpanded starts true; Expand/Collapse all can
         // change it live, and that state is what still-queued nodes consult as they stream in).
@@ -1310,8 +1318,9 @@ public sealed class HtmlReportGeneratorTests
         Assert.Equal(5, arrChildren.GetArrayLength());
         Assert.Equal("number", arrChildren[0].GetProperty("kind").GetString());
         Assert.True(arrChildren[0].GetProperty("isIndex").GetBoolean());
-        Assert.Equal("0", arrChildren[0].GetProperty("name").GetString());
+        Assert.Equal("arr[0]", arrChildren[0].GetProperty("name").GetString());
         Assert.Equal("string", arrChildren[1].GetProperty("kind").GetString());
+        Assert.Equal("arr[1]", arrChildren[1].GetProperty("name").GetString());
         Assert.Equal("two", arrChildren[1].GetProperty("value").GetString());
         Assert.Equal("null", arrChildren[2].GetProperty("kind").GetString());
         Assert.Equal("boolean", arrChildren[3].GetProperty("kind").GetString());

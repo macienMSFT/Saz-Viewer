@@ -12,7 +12,7 @@ namespace SazViewer.Tests;
 public sealed class HtmlReportBrowserTests
 {
     private const string InjectionText = "<img src=x onerror=globalThis.pwned=true>";
-    private const string RequestBody = """{"payload":{"enabled":true},"items":[1,2],"attack":"</script><svg onload=globalThis.pwned=true>"}""";
+    private const string RequestBody = """{"payload":{"enabled":true},"items":[1,2],"emptyObject":{},"emptyArray":[],"attack":"</script><svg onload=globalThis.pwned=true>"}""";
     private const string ResponseBody = "<root><value>safe</value></root>";
     private static readonly string WebSocketJson = JsonSerializer.Serialize(new
     {
@@ -808,12 +808,41 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal("Search active Request or Response view", await search.GetAttributeAsync("aria-label"));
             Assert.Equal("polite", await status.GetAttributeAsync("aria-live"));
 
+            var jsonTree = page.Locator("#request-panel-json .json-tree");
+            await jsonTree.Locator(".tree-item").First.WaitForAsync();
+            Assert.True(await jsonTree.EvaluateAsync<bool>("tree=>tree.classList.contains('protocol-tree')"));
+            Assert.Equal(
+                [
+                    "Root",
+                    "payload",
+                    "enabled: true",
+                    "items",
+                    "items[0]: 1",
+                    "items[1]: 2",
+                    "emptyObject",
+                    "emptyArray",
+                    "attack: </script><svg onload=globalThis.pwned=true>"
+                ],
+                await jsonTree.Locator(".tree-label").AllTextContentsAsync());
+            var emptyObject = jsonTree.Locator(".tree-item[aria-label='emptyObject']");
+            var emptyArray = jsonTree.Locator(".tree-item[aria-label='emptyArray']");
+            Assert.Null(await emptyObject.GetAttributeAsync("aria-expanded"));
+            Assert.Null(await emptyArray.GetAttributeAsync("aria-expanded"));
+            await Assertions.Expect(emptyObject.Locator(":scope>.tree-row>.tree-caret")).ToHaveClassAsync(new Regex(@"\btree-caret-leaf\b"));
+            await Assertions.Expect(emptyArray.Locator(":scope>.tree-row>.tree-caret")).ToHaveClassAsync(new Regex(@"\btree-caret-leaf\b"));
+            var jsonCaret = jsonTree.Locator(".tree-item[aria-expanded]>.tree-row>.tree-caret").First;
+            Assert.Equal("\u2212", await jsonCaret.InnerTextAsync());
+            var jsonCaretStyle = await jsonCaret.EvaluateAsync<string>(
+                "caret=>{const style=getComputedStyle(caret);return [style.width,style.height,style.borderTopWidth,style.borderTopStyle,style.borderRadius,style.backgroundColor,style.fontSize,style.lineHeight,style.textAlign].join('|')}");
+
             await page.Locator("#request-panel-json .tree-collapse-all").ClickAsync();
             var jsonRoot = page.Locator("#request-panel-json .tree-view>.tree-item[aria-expanded]").First;
             Assert.Equal("false", await jsonRoot.GetAttributeAsync("aria-expanded"));
+            Assert.Equal("+", await jsonRoot.Locator(":scope>.tree-row>.tree-caret").InnerTextAsync());
             await search.FillAsync("ENABLED");
             await Assertions.Expect(status).ToHaveTextAsync("1 of 1 matches");
             Assert.Equal("true", await jsonRoot.GetAttributeAsync("aria-expanded"));
+            Assert.Equal("\u2212", await jsonRoot.Locator(":scope>.tree-row>.tree-caret").InnerTextAsync());
             Assert.Equal(1, await page.Locator("#request-panel-json .http-search-match").CountAsync());
             Assert.Equal(0, await page.Locator("#response-panel-xml .http-search-match").CountAsync());
             Assert.True(await search.EvaluateAsync<bool>("input=>document.activeElement===input"));
@@ -822,6 +851,7 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal("", await search.InputValueAsync());
             Assert.Equal("0 matches", await status.InnerTextAsync());
             Assert.Equal("false", await jsonRoot.GetAttributeAsync("aria-expanded"));
+            Assert.Equal("+", await jsonRoot.Locator(":scope>.tree-row>.tree-caret").InnerTextAsync());
 
             await search.FillAsync("a");
             await Assertions.Expect(page.Locator(".http-search-match-current")).ToHaveCountAsync(1);
@@ -921,6 +951,12 @@ public sealed class HtmlReportBrowserTests
             status = page.Locator(".http-view-search-status");
             var mapiRoot = page.Locator("#request-panel-mapi .protocol-tree>.tree-item[aria-expanded]").First;
             await Assertions.Expect(mapiRoot).ToHaveAttributeAsync("aria-expanded", "true");
+            var mapiCaret = mapiRoot.Locator(":scope>.tree-row>.tree-caret");
+            Assert.Equal("\u2212", await mapiCaret.InnerTextAsync());
+            Assert.Equal(
+                jsonCaretStyle,
+                await mapiCaret.EvaluateAsync<string>(
+                    "caret=>{const style=getComputedStyle(caret);return [style.width,style.height,style.borderTopWidth,style.borderTopStyle,style.borderRadius,style.backgroundColor,style.fontSize,style.lineHeight,style.textAlign].join('|')}"));
             await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-technical").First)
                 .ToContainTextAsync("Operation @0 +8");
             Assert.Equal(7, await page.Locator("#request-panel-mapi .tree-item[aria-expanded=true]").CountAsync());
@@ -2589,9 +2625,8 @@ public sealed class HtmlReportBrowserTests
 
             await page.Locator("#request-panel-json [data-view=\"tree\"]").ClickAsync();
             await Assertions.Expect(page.Locator("#request-panel-json .tree-item")).ToHaveCountAsync(301);
-            Assert.Contains(
-                "[] (1000 items)",
-                await page.Locator("#request-panel-json .tree-label").First.InnerTextAsync());
+            Assert.Equal("Root", await page.Locator("#request-panel-json .tree-label").First.InnerTextAsync());
+            Assert.Equal("[0]: 0", await page.Locator("#request-panel-json .tree-label").Nth(1).InnerTextAsync());
 
             await page.ReloadAsync();
             await page.Locator("#httpTable tbody tr").ClickAsync();

@@ -151,6 +151,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .captured-bytes{margin-top:8px}.captured-bytes summary{cursor:pointer;color:var(--accent)}
 .body-view{margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:var(--info-bg)}.session-meta pre{max-height:180px}
 .protocol-meta{margin-bottom:4px}.protocol-block{margin:0;min-height:0;display:flex;flex-direction:column}.protocol-toolbar{position:sticky;top:0;z-index:2;display:flex;gap:5px;align-items:center;min-height:30px;margin:0;padding:3px 0 4px;background:var(--panel)}.protocol-toolbar button{padding:3px 8px}.protocol-load-status{margin-left:auto;color:var(--muted);font-size:11px}.protocol-tree{flex:1;min-height:240px;overflow:auto;border:1px solid var(--line);padding:3px 4px 8px;background:var(--panel);font:12px/1.35 ui-monospace,Consolas,monospace}.protocol-tree>.tree-item{min-width:max-content}.protocol-tree .tree-item{margin:0}.protocol-tree .tree-row{position:relative;display:grid;grid-template-columns:14px minmax(240px,1fr) max-content;gap:4px;align-items:baseline;min-height:20px;padding:1px 4px 1px 0;border-radius:2px}.protocol-tree .tree-row:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}.protocol-tree .tree-group{position:relative;margin-left:7px;padding-left:13px;border-left:1px dotted var(--muted)}.protocol-tree .tree-group>.tree-item>.tree-row::before{content:"";position:absolute;left:-13px;top:10px;width:11px;border-top:1px dotted var(--muted)}.protocol-tree .tree-caret{width:13px;height:16px;border:1px solid var(--line);border-radius:2px;text-align:center;line-height:13px;background:var(--panel2);color:var(--text);font-size:11px}.protocol-tree .tree-caret-leaf{visibility:hidden}.protocol-main{white-space:pre-wrap;overflow-wrap:anywhere}.protocol-name{color:var(--accent);font-weight:700}.protocol-separator{color:var(--muted)}.protocol-value{color:var(--text)}.protocol-value-binary{color:var(--protocol-binary)}.protocol-technical{color:var(--muted);white-space:nowrap;font-size:11px}.protocol-kind{color:var(--protocol-kind)}.protocol-tree-loading{color:var(--muted);font-style:italic;padding:3px 18px}
+.json-tree .tree-row{grid-template-columns:14px minmax(240px,1fr)}
 .syn-key{color:var(--syn-blue)}.syn-string{color:var(--syn-string)}.syn-number{color:var(--syn-number)}.syn-literal{color:var(--syn-red)}.syn-punct{color:var(--syn-punct)}.syn-tag{color:var(--syn-green)}.syn-attr{color:var(--syn-purple)}.syn-comment{color:var(--syn-punct);font-style:italic}.syn-value{color:var(--syn-string)}
 .tree-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 6px}.view-toggle{display:flex;gap:2px}.view-toggle button[aria-pressed=true]{border-color:var(--accent);color:var(--text)}
 .copy-toolbar{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin:0 0 6px}.copy-toolbar button{padding:4px 9px}.copy-status{min-height:1.2em;color:var(--muted);font-size:12px}.copy-toolbar button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -648,12 +649,10 @@ function appendStatus(parent,text){
 }
 function treeLabelText(node,kind){
   if(kind==='json'){
-    const prefix=node.isIndex?`[${node.name}] `:(node.name!==null&&node.name!==undefined?`${node.name}: `:'');
-    if(node.kind==='object')return `${prefix}{} (${node.count??0} propert${node.count===1?'y':'ies'})`;
-    if(node.kind==='array')return `${prefix}[] (${node.count??0} item${node.count===1?'':'s'})`;
-    if(node.kind==='string')return `${prefix}"${node.value??''}"`;
-    if(node.kind==='null')return `${prefix}null`;
-    return `${prefix}${node.value}`;
+    const name=safeProtocolText(String(node.name??'Root'));
+    if(node.kind==='object'||node.kind==='array')return name;
+    const value=node.kind==='string'?safeProtocolText(String(node.value??'')):String(node.value??'null');
+    return `${name}: ${value}`;
   }
   if(node.kind==='attribute')return `@${node.name}="${node.value??''}"`;
   if(node.kind==='element'){
@@ -669,7 +668,7 @@ function buildTree(host,rootNode,kind,generation){
   const buildToken={};
   host._treeBuildToken=buildToken;
   host._treeRendered=false;
-  const tree=document.createElement('div');tree.className='tree-view';tree.setAttribute('role','tree');
+  const tree=document.createElement('div');tree.className=kind==='json'?'protocol-tree tree-view json-tree':'tree-view';tree.setAttribute('role','tree');
   tree.setAttribute('aria-label',kind==='json'?'JSON structure':'XML structure');
   host.replaceChildren(tree);
   // True roving tabindex: exactly one treeitem/status stop in this tree has tabIndex 0 at a
@@ -714,7 +713,7 @@ function buildTree(host,rootNode,kind,generation){
     tree.querySelectorAll('.tree-item[aria-expanded]').forEach(item=>{
       item.setAttribute('aria-expanded',String(value));
       const group=item.querySelector(':scope>.tree-group');if(group)group.hidden=!value;
-      const caret=item.querySelector(':scope>.tree-row>.tree-caret');if(caret)caret.textContent=value?'\u25be':'\u25b8';
+      const caret=item.querySelector(':scope>.tree-row>.tree-caret');if(caret)caret.textContent=kind==='json'?(value?'\u2212':'+'):(value?'\u25be':'\u25b8');
     });
     if(!value)restoreVisibleActive(focusWasInTree);
   };
@@ -791,11 +790,24 @@ function buildTree(host,rootNode,kind,generation){
     const hasKids=(Array.isArray(node.children)&&node.children.length>0)||(Array.isArray(node.attrs)&&node.attrs.length>0)||node.omitted>0||node.depthLimited;
     const item=document.createElement('div');item.className='tree-item';item.setAttribute('role','treeitem');item.tabIndex=-1;
     if(hasKids)item.setAttribute('aria-expanded',String(desiredExpanded));
-    const row=document.createElement('div');row.className='tree-row';
-    const caret=document.createElement('span');caret.className='tree-caret'+(hasKids?'':' tree-caret-leaf');caret.setAttribute('aria-hidden','true');caret.textContent=hasKids?(desiredExpanded?'\u25be':'\u25b8'):'\u2022';
+    const row=document.createElement('div');row.className='tree-row'+(kind==='json'?' protocol-row':'');
+    const caret=document.createElement('span');caret.className='tree-caret'+(hasKids?'':' tree-caret-leaf');caret.setAttribute('aria-hidden','true');caret.textContent=hasKids?(kind==='json'?(desiredExpanded?'\u2212':'+'):(desiredExpanded?'\u25be':'\u25b8')):'\u00b7';
     row.append(caret);
-    const label=document.createElement('span');label.className='tree-label tree-label-'+node.kind;label.textContent=treeLabelText(node,kind);
+    const label=document.createElement('span');
+    if(kind==='json'){
+      label.className='tree-label protocol-main';
+      const name=document.createElement('span');name.className='protocol-name';name.textContent=safeProtocolText(String(node.name??'Root'));label.append(name);
+      if(node.kind!=='object'&&node.kind!=='array'){
+        const separator=document.createElement('span');separator.className='protocol-separator';separator.textContent=': ';
+        const value=document.createElement('span');value.className='protocol-value tree-label-'+node.kind;
+        value.textContent=node.kind==='string'?safeProtocolText(String(node.value??'')):String(node.value??'null');
+        label.append(separator,value);
+      }
+    }else{
+      label.className='tree-label tree-label-'+node.kind;label.textContent=treeLabelText(node,kind);
+    }
     row.append(label);
+    item.setAttribute('aria-label',treeLabelText(node,kind));
     if(node.truncated){const truncated=document.createElement('span');truncated.className='tree-truncated';truncated.textContent=' (truncated)';row.append(truncated)}
     item.append(row);
     let group=null;
@@ -812,7 +824,7 @@ function buildTree(host,rootNode,kind,generation){
         const expanded=item.getAttribute('aria-expanded')==='true';
         item.setAttribute('aria-expanded',String(!expanded));
         group.hidden=expanded;
-        caret.textContent=expanded?'\u25b8':'\u25be';
+        caret.textContent=kind==='json'?(expanded?'+':'\u2212'):(expanded?'\u25b8':'\u25be');
       };
       item._toggle=toggle;
       row.addEventListener('click',event=>{event.stopPropagation();setActive(item,true);toggle()});
@@ -860,7 +872,7 @@ function setAllExpanded(container,expanded){
     const group=item.querySelector(':scope>.tree-group');
     if(group)group.hidden=!expanded;
     const caret=item.querySelector(':scope>.tree-row>.tree-caret');
-    if(caret)caret.textContent=expanded?'\u25be':'\u25b8';
+    if(caret)caret.textContent=expandedTreeCaret(item,expanded);
   });
   if(!expanded){
     const current=container.querySelector('.tree-item[tabindex="0"],.tree-status[tabindex="0"]');
@@ -1005,7 +1017,8 @@ function jsonTreeNode(node,name,isIndex,depth,budget){
     const children=[];let omitted=0;
     for(let index=0;index<node.items.length;index++){
       if(children.length>=TREE_MAX_CHILDREN||budget.count>=TREE_MAX_NODES){omitted=node.items.length-children.length;break}
-      children.push(jsonTreeNode(node.items[index],String(index),true,depth+1,budget));
+      const childName=name===null||name===undefined?`[${index}]`:`${name}[${index}]`;
+      children.push(jsonTreeNode(node.items[index],childName,true,depth+1,budget));
     }
     return{kind:'array',name,isIndex,count:node.items.length,omitted,children};
   }

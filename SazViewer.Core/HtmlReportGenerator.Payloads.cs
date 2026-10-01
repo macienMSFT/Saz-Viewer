@@ -1247,10 +1247,8 @@ window.addEventListener('storage',event=>{
 
         if (depth >= TreeMaxDepth && element.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
         {
-            // The subtree itself is not descended into (that's the whole point of the depth
-            // limit), but the immediate property/item count is cheap to report accurately here
-            // (no recursion needed) so the truncated label doesn't falsely read "0 properties"/
-            // "0 items".
+            // Preserve the immediate count without descending further so the bounded payload
+            // still accurately describes the omitted container.
             var immediateCount = element.ValueKind == JsonValueKind.Object
                 ? element.EnumerateObject().Count()
                 : element.GetArrayLength();
@@ -1294,7 +1292,9 @@ window.addEventListener('storage',event=>{
                             omitted = items.Count - children.Count;
                             break;
                         }
-                        children.Add(BuildJsonNode(items[i], i.ToString(CultureInfo.InvariantCulture), true, depth + 1, budget));
+                        var index = i.ToString(CultureInfo.InvariantCulture);
+                        var childName = name is null ? $"[{index}]" : $"{name}[{index}]";
+                        children.Add(BuildJsonNode(items[i], childName, true, depth + 1, budget));
                     }
                     return new TreeNode { Kind = "array", Name = name, IsIndex = isIndex, Count = items.Count, Omitted = omitted, Children = children };
                 }
