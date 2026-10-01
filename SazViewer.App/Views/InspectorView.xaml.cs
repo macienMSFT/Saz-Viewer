@@ -58,9 +58,16 @@ internal partial class InspectorView : UserControl
             inspector.Navigate(delta);
             e.Handled = true;
         }
-        else if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control && inspector.IsHttp)
+        else if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control && (inspector.IsHttp || inspector.IsWebSocket))
         {
-            FocusSearch();
+            if (inspector.IsWebSocket)
+            {
+                WebSocketView.FocusSearch();
+            }
+            else
+            {
+                FocusSearch();
+            }
             e.Handled = true;
         }
         else if (e.Key == Key.Escape && !e.Handled && !(e.OriginalSource is TextBox { Text.Length: > 0 }))

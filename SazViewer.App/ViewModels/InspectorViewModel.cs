@@ -44,6 +44,7 @@ internal sealed class InspectorViewModel : ObservableObject
     private MessagePaneViewModel? request;
     private MessagePaneViewModel? response;
     private SessionDetailsViewModel? details;
+    private WebSocketInspectorViewModel? webSocket;
     private string selectedSide = RequestSide;
     private string position = "";
     private bool isOpen;
@@ -92,6 +93,9 @@ internal sealed class InspectorViewModel : ObservableObject
     public bool IsHttp => row is not null && !row.IsWebSocket;
 
     public SessionDetailsViewModel? Details => details;
+
+    /// <summary>The WebSocket inspector for sessions that carry WebSocket messages.</summary>
+    public WebSocketInspectorViewModel? WebSocket => webSocket;
 
     public MessagePaneViewModel? Request => request;
 
@@ -142,7 +146,11 @@ internal sealed class InspectorViewModel : ObservableObject
         row = target;
         var session = target.Session;
         details = SessionDetailsViewModel.Create(session);
-        if (!target.IsWebSocket)
+        if (target.IsWebSocket)
+        {
+            webSocket = new WebSocketInspectorViewModel(target.WebSocketMessages, clipboard);
+        }
+        else
         {
             request = new MessagePaneViewModel("Request", MessageContent.Create(session.Request, formatter), session.Mapi?.Request, clipboard);
             response = new MessagePaneViewModel("Response", MessageContent.Create(session.Response, formatter), session.Mapi?.Response, clipboard);
@@ -192,6 +200,8 @@ internal sealed class InspectorViewModel : ObservableObject
         }
         request = null;
         response = null;
+        webSocket?.Deactivate();
+        webSocket = null;
     }
 
     private void OnPaneViewChanged(object? sender, EventArgs e) => Search.Reset();

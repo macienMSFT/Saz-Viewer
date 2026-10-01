@@ -59,10 +59,9 @@
                 <views:ActiveSearchBar x:Name="SearchBar" DockPanel.Dock="Top" DataContext="{Binding Search}" />
                 <ContentControl x:Name="PaneHost" Content="{Binding ActivePane}" Focusable="False" />
             </DockPanel>
-            <!-- WebSocket sessions get their own inspector (milestone 5). -->
-            <TextBlock Visibility="{Binding IsWebSocket, Converter={StaticResource BoolToVisibility}}" Margin="4"
-                       Foreground="{DynamicResource Saz.Muted}" TextWrapping="Wrap"
-                       Text="This session carries WebSocket messages. The native WebSocket inspector is not available yet." />
+            <!-- WebSocket sessions: message list and selected message detail. -->
+            <views:WebSocketInspectorView x:Name="WebSocketView" DataContext="{Binding WebSocket}"
+                                          Visibility="{Binding Converter={StaticResource NotNullToVisibility}}" />
         </Grid>
     </DockPanel>
 </UserControl>

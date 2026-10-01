@@ -11,6 +11,91 @@
     <views:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibility" />
     <views:NotNullToVisibilityConverter x:Key="NotNullToVisibility" />
 
+    <!-- Shared DataGrid styles (session grid and WebSocket message list). -->
+        <Style x:Key="GridCellText" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="8,0" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style x:Key="GridNumberText" TargetType="TextBlock" BasedOn="{StaticResource GridCellText}">
+            <Setter Property="HorizontalAlignment" Value="Right" />
+        </Style>
+
+        <Style x:Key="GridColumnHeader" TargetType="DataGridColumnHeader">
+            <Setter Property="Foreground" Value="{DynamicResource Saz.Muted}" />
+            <Setter Property="Background" Value="{DynamicResource Saz.Panel}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Saz.Line}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource Saz.InsetFocusVisual}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridColumnHeader">
+                        <Grid>
+                            <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="0,0,1,1" Padding="{TemplateBinding Padding}">
+                                <DockPanel>
+                                    <TextBlock x:Name="SortGlyph" DockPanel.Dock="Right" Margin="4,0,0,0" Foreground="{DynamicResource Saz.Accent}" />
+                                    <ContentPresenter VerticalAlignment="Center" />
+                                </DockPanel>
+                            </Border>
+                            <Thumb x:Name="PART_RightHeaderGripper" HorizontalAlignment="Right" Width="6" Cursor="SizeWE" Opacity="0" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="SortDirection" Value="Ascending">
+                                <Setter TargetName="SortGlyph" Property="Text" Value="▲" />
+                                <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
+                            </Trigger>
+                            <Trigger Property="SortDirection" Value="Descending">
+                                <Setter TargetName="SortGlyph" Property="Text" Value="▼" />
+                                <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.Hover}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="GridCell" TargetType="DataGridCell">
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <!-- Overrides the theme's selected/inactive-selection system text brushes. -->
+            <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=DataGridRow}}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridCell">
+                        <Border Background="{TemplateBinding Background}" Padding="0,4">
+                            <ContentPresenter VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource Saz.Selected}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="GridRow" TargetType="DataGridRow">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
+            <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource Saz.InsetFocusVisual}" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource Saz.Hover}" />
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource Saz.Selected}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
     <DataTemplate DataType="{x:Type vm:TextDocumentViewModel}">
         <views:LineDocumentView />
     </DataTemplate>

@@ -8,7 +8,8 @@
     </UserControl.Resources>
     <DockPanel>
         <controls:RichLine DockPanel.Dock="Top" Line="{Binding MetaLine}" Version="{Binding MetaLine.Version}"
-                           TextWrapping="Wrap" Margin="0,0,0,6" Foreground="{DynamicResource Saz.Text}" />
+                           TextWrapping="Wrap" Margin="0,0,0,6" Foreground="{DynamicResource Saz.Text}"
+                           Visibility="{Binding MetaLine, Converter={StaticResource NotNullToVisibility}}" />
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6"
                     AutomationProperties.Name="{Binding ModeGroupName}" KeyboardNavigation.TabNavigation="Once"
                     KeyboardNavigation.DirectionalNavigation="Cycle">

@@ -25,7 +25,7 @@ internal partial class MessagePaneView : UserControl
 
     private void SyncSelection()
     {
-        if (DataContext is MessagePaneViewModel pane && !ReferenceEquals(Tabs.SelectedItem, pane.SelectedTab) && pane.SelectedTab is not null)
+        if (DataContext is ITabbedPane pane && !ReferenceEquals(Tabs.SelectedItem, pane.SelectedTab) && pane.SelectedTab is not null)
         {
             Tabs.SelectedItem = pane.SelectedTab;
         }

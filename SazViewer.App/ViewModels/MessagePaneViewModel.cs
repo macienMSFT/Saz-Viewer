@@ -8,7 +8,7 @@ namespace SazViewer.App.ViewModels;
 /// The Request or Response side of the HTTP inspector: the fixed-order per-side tabs (the report's
 /// <c>createMessagePanel</c>) plus the pane's own active-view search used in split view.
 /// </summary>
-internal sealed class MessagePaneViewModel : ObservableObject
+internal sealed class MessagePaneViewModel : ObservableObject, ITabbedPane
 {
     public static readonly IReadOnlyList<(string Key, string Label)> TabOrder =
     [
@@ -186,4 +186,10 @@ internal sealed class MessagePaneViewModel : ObservableObject
             return CopyResult.Fail($"Copy source could not be decoded. {error.Message}");
         }
     }
+}
+
+/// <summary>A tab strip view-model rendered by <c>MessagePaneView</c> (HTTP sides and WebSocket message detail).</summary>
+internal interface ITabbedPane
+{
+    MessageTabViewModel? SelectedTab { get; set; }
 }

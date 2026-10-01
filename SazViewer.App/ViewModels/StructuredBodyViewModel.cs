@@ -15,11 +15,12 @@ internal sealed class StructuredBodyViewModel : TabContentViewModel
     private readonly ToolbarAction collapseAll;
     private bool isTreeMode = true;
 
-    public StructuredBodyViewModel(BodyFormat format, string label, string status, Func<string> source)
+    public StructuredBodyViewModel(BodyFormat format, string? label, string status, Func<string> source)
     {
         Format = format;
         FormatName = format == BodyFormat.Json ? "JSON" : "XML";
-        MetaLine = new DocumentLine(MessageDocuments.FormatMetaText(label, status, out var spans), LineKind.FormatMeta, spans, 0, 0, null);
+        // WebSocket messages have no body format metadata line.
+        MetaLine = label is null ? null : new DocumentLine(MessageDocuments.FormatMetaText(label, status, out var spans), LineKind.FormatMeta, spans, 0, 0, null);
         try
         {
             var (formatted, items) = Prepare(format, source());
@@ -46,7 +47,7 @@ internal sealed class StructuredBodyViewModel : TabContentViewModel
 
     public string ModeGroupName => $"{FormatName} view mode";
 
-    public DocumentLine MetaLine { get; }
+    public DocumentLine? MetaLine { get; }
 
     /// <summary>The formatted text with CRLF line breaks (what Copy returns), or null when preparation failed.</summary>
     public string? FormattedText { get; }
