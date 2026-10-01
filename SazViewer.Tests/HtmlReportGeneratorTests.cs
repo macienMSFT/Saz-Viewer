@@ -1102,20 +1102,27 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains("function createStructuredBody(model,format)", html, StringComparison.Ordinal);
+        Assert.Contains("function createStructuredBody(model,format,side)", html, StringComparison.Ordinal);
         Assert.Contains("const container=httpElement('div','structured-body')", html, StringComparison.Ordinal);
         Assert.Contains("toggle.setAttribute('role','group')", html, StringComparison.Ordinal);
         Assert.Contains("treeButton.setAttribute('aria-pressed','true')", html, StringComparison.Ordinal);
         Assert.Contains("prettyButton.setAttribute('aria-pressed','false')", html, StringComparison.Ordinal);
-        Assert.Contains("const expand=httpElement('button','tree-expand-all','Expand all')", html, StringComparison.Ordinal);
-        Assert.Contains("const collapse=httpElement('button','tree-collapse-all','Collapse all')", html, StringComparison.Ordinal);
+        Assert.Contains("function addTreeActions(toolbar,treeId)", html, StringComparison.Ordinal);
+        Assert.Contains("toolbar.insertBefore(expand,copy);toolbar.insertBefore(collapse,copy);", html, StringComparison.Ordinal);
+        Assert.Contains("expand.setAttribute('aria-controls',treeId)", html, StringComparison.Ordinal);
+        Assert.Contains("collapse.setAttribute('aria-controls',treeId)", html, StringComparison.Ordinal);
+        Assert.Contains("treeButton.setAttribute('aria-controls',tree.id);prettyButton.setAttribute('aria-controls',pretty.id);", html, StringComparison.Ordinal);
+        Assert.Contains("if(tree)addTreeActions(copy,tree.id);", html, StringComparison.Ordinal);
+        Assert.Contains("addTreeActions(copyToolbar,tree.id);", html, StringComparison.Ordinal);
         Assert.DoesNotContain("data-payload-type=\"json-tree\"", html, StringComparison.Ordinal);
-        Assert.Contains("const pretty=httpElement('div','pretty-subview hidden')", html, StringComparison.Ordinal);
+        Assert.Contains("const pretty=httpElement('div','pretty-subview hidden');pretty.id=", html, StringComparison.Ordinal);
 
         // Toggle behavior and tree accessibility semantics (tree/treeitem/group, focus-visible).
         Assert.Contains("function setupTreeToggles(root){", html, StringComparison.Ordinal);
         Assert.Contains("treeView.classList.toggle('hidden',!showTree);", html, StringComparison.Ordinal);
         Assert.Contains("prettyView.classList.toggle('hidden',showTree);", html, StringComparison.Ordinal);
+        Assert.Contains("treeActions.forEach(action=>action.hidden=!showTree);", html, StringComparison.Ordinal);
+        Assert.Contains("if(!showTree&&treeActions.includes(document.activeElement))focusTarget?.focus();", html, StringComparison.Ordinal);
         Assert.Contains("tree.setAttribute('role','tree');", html, StringComparison.Ordinal);
         Assert.Contains("item.setAttribute('role','treeitem');", html, StringComparison.Ordinal);
         Assert.Contains("group.setAttribute('role','group');", html, StringComparison.Ordinal);

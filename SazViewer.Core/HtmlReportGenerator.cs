@@ -889,7 +889,7 @@ async function renderValueTree(host,generation){
   if(host._treeRendered||host._treeLoading||host._treeBuildToken)return;
   host._treeLoading=true;
   const kind=host.dataset.treeKind||((host._payloadType||host.dataset.payloadType)==='json-tree'?'json':'xml');
-  const controls=host.closest('.structured-body')?.querySelectorAll('.tree-expand-all,.tree-collapse-all')||[];
+  const controls=host.closest('[role="tabpanel"]')?.querySelectorAll(':scope>.copy-toolbar .tree-expand-all,:scope>.copy-toolbar .tree-collapse-all')||[];
   controls.forEach(control=>control.disabled=true);
   try{
     const payload=host._treeData||await decodeCompressedPayload(host,`${kind}-tree`);
@@ -1127,6 +1127,12 @@ function wsCopyToolbar(accessibleName,description,text){
   button.setAttribute('aria-label',accessibleName);button._copyText=text;
   const status=wsElement('span','copy-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
   toolbar.append(button,status);return toolbar;
+}
+function addTreeActions(toolbar,treeId){
+  const copy=toolbar.querySelector('.copy-button');
+  const expand=document.createElement('button');expand.type='button';expand.className='tree-expand-all';expand.textContent='Expand all';expand.setAttribute('aria-controls',treeId);
+  const collapse=document.createElement('button');collapse.type='button';collapse.className='tree-collapse-all';collapse.textContent='Collapse all';collapse.setAttribute('aria-controls',treeId);
+  toolbar.insertBefore(expand,copy);toolbar.insertBefore(collapse,copy);
 }
 function wsTab(key,label,enabled,selected,suffix){
   const button=wsElement('button','',label);button.type='button';button.id=`ws-${key}-tab-${suffix}`;
@@ -1594,20 +1600,21 @@ function renderWebSocketMessageDetail(container,message,generation){
   const panels=wsElement('div','tab-panels');
   const jsonPanel=wsPanel('json',suffix);
   if(hasJson){
-    jsonPanel.append(wsCopyToolbar('Copy WebSocket JSON pretty text','WebSocket JSON pretty text',message.jsonPretty));
+    const copyToolbar=wsCopyToolbar('Copy WebSocket JSON pretty text','WebSocket JSON pretty text',message.jsonPretty);
+    jsonPanel.append(copyToolbar);
     const structured=wsElement('div','structured-body');
     const toolbar=wsElement('div','tree-toolbar');
     const toggle=wsElement('div','view-toggle');toggle.setAttribute('role','group');toggle.setAttribute('aria-label','JSON view');
     const treeButton=wsElement('button','','Tree');treeButton.type='button';treeButton.dataset.view='tree';treeButton.setAttribute('aria-pressed','true');
     const prettyButton=wsElement('button','','Pretty Text');prettyButton.type='button';prettyButton.dataset.view='pretty';prettyButton.setAttribute('aria-pressed','false');
     toggle.append(treeButton,prettyButton);
-    const expand=wsElement('button','tree-expand-all','Expand all');expand.type='button';
-    const collapse=wsElement('button','tree-collapse-all','Collapse all');collapse.type='button';
-    toolbar.append(toggle,expand,collapse);
-    const tree=wsElement('div','tree-subview');tree._payloadType='json-tree';
+    toolbar.append(toggle);
+    const tree=wsElement('div','tree-subview');tree.id=`ws-json-tree-${suffix}`;tree._payloadType='json-tree';
+    const pretty=wsElement('pre','pretty-subview formatted-view hidden',message.jsonPretty);pretty.id=`ws-json-pretty-${suffix}`;pretty.dataset.format='json';
+    treeButton.setAttribute('aria-controls',tree.id);prettyButton.setAttribute('aria-controls',pretty.id);
+    addTreeActions(copyToolbar,tree.id);
     try{tree._payloadData=JSON.parse(message.jsonTree)}
     catch{tree.textContent='JSON tree data is invalid.';tree.classList.add('warning');tree._treeRendered=true}
-    const pretty=wsElement('pre','pretty-subview formatted-view hidden',message.jsonPretty);pretty.dataset.format='json';
     structured.append(toolbar,tree,pretty);jsonPanel.append(structured);
   }else jsonPanel.append(wsElement('div','tab-empty','JSON is unavailable for this message.'));
   const textPanel=wsPanel('text',suffix);
@@ -2229,7 +2236,14 @@ function setupTreeToggles(root){
     const treeView=container.querySelector('.tree-subview');
     const prettyView=container.querySelector('.pretty-subview');
     if(!toolbar)return;
+    const actionToolbar=container.closest('[role="tabpanel"]')?.querySelector(':scope>.copy-toolbar');
+    const treeActions=[...(actionToolbar?.querySelectorAll('.tree-expand-all,.tree-collapse-all')||[])];
+    function showTreeActions(showTree,focusTarget){
+      if(!showTree&&treeActions.includes(document.activeElement))focusTarget?.focus();
+      treeActions.forEach(action=>action.hidden=!showTree);
+    }
     container.dataset.viewMode=treeView&&!treeView.classList.contains('hidden')?'tree':'pretty';
+    showTreeActions(container.dataset.viewMode==='tree',toolbar.querySelector('[data-view=tree]'));
     toolbar.querySelectorAll('.view-toggle button').forEach(btn=>{
       btn.addEventListener('click',()=>{
         if(btn.disabled)return;
@@ -2238,6 +2252,7 @@ function setupTreeToggles(root){
         treeView.classList.toggle('hidden',!showTree);
         prettyView.classList.toggle('hidden',showTree);
         toolbar.querySelectorAll('.view-toggle button').forEach(other=>other.setAttribute('aria-pressed',String(other===btn)));
+        showTreeActions(showTree,btn);
         if(showTree){
           if(!treeView._treeRendered)treeView._treeBuildToken=null;
           renderValueTree(treeView,renderGeneration);
@@ -2245,8 +2260,8 @@ function setupTreeToggles(root){
         container.dispatchEvent(new CustomEvent('saz-view-change',{bubbles:true}));
       });
     });
-    toolbar.querySelector('.tree-expand-all')?.addEventListener('click',()=>setAllExpanded(treeView,true));
-    toolbar.querySelector('.tree-collapse-all')?.addEventListener('click',()=>setAllExpanded(treeView,false));
+    actionToolbar?.querySelector('.tree-expand-all')?.addEventListener('click',()=>setAllExpanded(treeView,true));
+    actionToolbar?.querySelector('.tree-collapse-all')?.addEventListener('click',()=>setAllExpanded(treeView,false));
   });
 }
 const MAX_COPY_CHARACTERS=1048576;
@@ -2584,18 +2599,18 @@ function formatMeta(model){
   meta.append(httpElement('span','format-badge',model.label),httpElement('span','format-status',model.status));
   return meta;
 }
-function createStructuredBody(model,format){
+function createStructuredBody(model,format,side){
   const container=httpElement('div','structured-body');container.dataset.format=format;container.append(formatMeta(model));
   const toolbar=httpElement('div','tree-toolbar'),toggle=httpElement('div','view-toggle');
   toggle.setAttribute('role','group');toggle.setAttribute('aria-label',`${format.toUpperCase()} view mode`);
   const treeButton=httpElement('button','', 'Tree');treeButton.type='button';treeButton.dataset.view='tree';treeButton.setAttribute('aria-pressed','true');
   const prettyButton=httpElement('button','', 'Pretty Text');prettyButton.type='button';prettyButton.dataset.view='pretty';prettyButton.setAttribute('aria-pressed','false');
   toggle.append(treeButton,prettyButton);
-  const expand=httpElement('button','tree-expand-all','Expand all');expand.type='button';
-  const collapse=httpElement('button','tree-collapse-all','Collapse all');collapse.type='button';
-  toolbar.append(toggle,expand,collapse);container.append(toolbar);
-  const tree=httpElement('div','tree-subview','Tree loads when this session is selected.');
-  const pretty=httpElement('div','pretty-subview hidden'),pre=httpElement('pre','body-view formatted-view');
+  toolbar.append(toggle);container.append(toolbar);
+  const tree=httpElement('div','tree-subview','Tree loads when this session is selected.');tree.id=`${side}-${format}-tree`;
+  const pretty=httpElement('div','pretty-subview hidden');pretty.id=`${side}-${format}-pretty`;
+  treeButton.setAttribute('aria-controls',tree.id);prettyButton.setAttribute('aria-controls',pretty.id);
+  const pre=httpElement('pre','body-view formatted-view');
   pre.dataset.format=format;pre.dataset.copyField=format;pretty.append(pre);container.append(tree,pretty);return container;
 }
 function createImageView(model){
@@ -2686,7 +2701,7 @@ function createMessagePanel(side,title,model,protocolSource){
     headers:[`Copy ${lower} headers`,`${lower} headers`],raw:[`Copy ${lower} raw message`,`${lower} raw message`]
   };
   const contents={
-    json:flags.json?createStructuredBody(model,'json'):null,xml:flags.xml?createStructuredBody(model,'xml'):null,
+    json:flags.json?createStructuredBody(model,'json',side):null,xml:flags.xml?createStructuredBody(model,'xml',side):null,
     mapi:flags.mapi?moveProtocolSource(protocolSource):null,image:flags.image?createImageView(model):null,
     webview:flags.webview?createWebView(model):null,
     hex:flags.hex?createHexView(model,model.body.decoded!==null&&model.body.decoded!==undefined):null,
@@ -2709,6 +2724,10 @@ function createMessagePanel(side,title,model,protocolSource){
   Object.keys(labels).forEach(key=>{
     const kind=key==='mapi'?'mapi':key==='image'||key==='hex'?key:'canonical';
     const copy=httpCopyToolbar(key,flags[key],descriptions[key][0],descriptions[key][1],kind);
+    if((key==='json'||key==='xml')&&contents[key]){
+      const tree=contents[key].querySelector('.tree-subview');
+      if(tree)addTreeActions(copy,tree.id);
+    }
     panels.append(httpTabPanel(side,key,initial===key,flags[key],copy,contents[key],unavailable[key]));
   });
   if(!Object.values(flags).some(Boolean))panels.append(httpElement('div','tab-empty',`No ${lower} entry was captured.`));

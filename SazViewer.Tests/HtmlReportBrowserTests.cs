@@ -49,6 +49,7 @@ public sealed class HtmlReportBrowserTests
             await VerifyHttpActiveViewSearchAsync(browser, reportPath);
             await VerifyHttpLayoutDefaultsAndMigrationAsync(browser, reportPath);
             await VerifyHttpSplitViewAsync(browser, reportPath);
+            await VerifyStructuredTreeToolbarsAsync(browser, tempDirectory);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 1440);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 320);
             await VerifyNewTabInspectorAsync(browser, reportPath);
@@ -908,6 +909,7 @@ public sealed class HtmlReportBrowserTests
 
             await page.Locator("#primary-tab-response").ClickAsync();
             Assert.Equal("", await search.InputValueAsync());
+            await AssertTreeActionToolbarAsync(page, "#response-panel-xml");
             await page.Locator("#response-panel-xml .tree-collapse-all").ClickAsync();
             var xmlRoot = page.Locator("#response-panel-xml .tree-view>.tree-item[aria-expanded]").First;
             Assert.Equal("false", await xmlRoot.GetAttributeAsync("aria-expanded"));
@@ -918,6 +920,9 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal("false", await xmlRoot.GetAttributeAsync("aria-expanded"));
 
             await page.Locator("#response-panel-xml [data-view=pretty]").ClickAsync();
+            await Assertions.Expect(page.Locator("#response-panel-xml .tree-expand-all")).ToBeHiddenAsync();
+            await Assertions.Expect(page.Locator("#response-panel-xml .tree-collapse-all")).ToBeHiddenAsync();
+            await Assertions.Expect(page.Locator("#response-panel-xml .copy-button")).ToBeVisibleAsync();
             await search.FillAsync("root");
             await Assertions.Expect(status).ToHaveTextAsync("1 of 2 matches");
             await page.Locator(".http-view-search-prev").ClickAsync();
@@ -1153,6 +1158,104 @@ public sealed class HtmlReportBrowserTests
             }
             await page.CloseAsync();
         }
+    }
+
+    private static async Task VerifyStructuredTreeToolbarsAsync(IBrowser browser, string tempDirectory)
+    {
+        var report = CreateReport();
+        report.Sessions[0].Response = Message(
+            "HTTP/1.1 200 OK",
+            "application/json",
+            """{"result":{"ok":true},"values":[3,4]}""");
+        var reportPath = Path.Combine(tempDirectory, "structured tree toolbars.html");
+        await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(report));
+        var errors = new List<string>();
+        var popupErrors = new List<string>();
+        var page = await browser.NewPageAsync(new()
+        {
+            ViewportSize = new ViewportSize { Width = 1280, Height = 800 },
+        });
+        CaptureErrors(page, errors);
+        IPage? popup = null;
+        try
+        {
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','split')");
+            await page.ReloadAsync();
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            Assert.True(await page.Locator("#inspectorBody")
+                .EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
+
+            await AssertTreeActionToolbarAsync(page, "#request-panel-json");
+            await AssertTreeActionToolbarAsync(page, "#response-panel-json");
+
+            var requestExpand = page.Locator("#request-panel-json .tree-expand-all");
+            var requestPretty = page.Locator("#request-panel-json [data-view='pretty']");
+            await requestExpand.FocusAsync();
+            await page.EvaluateAsync(
+                "()=>document.querySelector(\"#request-panel-json [data-view='pretty']\").click()");
+            await Assertions.Expect(requestPretty).ToBeFocusedAsync();
+            await Assertions.Expect(requestExpand).ToBeHiddenAsync();
+            await Assertions.Expect(page.Locator("#request-panel-json .tree-collapse-all")).ToBeHiddenAsync();
+            await Assertions.Expect(page.Locator("#request-panel-json .copy-button")).ToBeVisibleAsync();
+            await Assertions.Expect(page.Locator("#response-panel-json .tree-expand-all")).ToBeVisibleAsync();
+            await page.Locator("#request-panel-json [data-view='tree']").ClickAsync();
+            await Assertions.Expect(requestExpand).ToBeVisibleAsync();
+
+            await page.Locator("#response-panel-json [data-view='pretty']").ClickAsync();
+            await Assertions.Expect(page.Locator("#response-panel-json .tree-expand-all")).ToBeHiddenAsync();
+            await Assertions.Expect(page.Locator("#response-panel-json .copy-button")).ToBeVisibleAsync();
+            await page.Locator("#response-panel-json [data-view='tree']").ClickAsync();
+
+            var popupTask = page.WaitForPopupAsync();
+            await page.Locator("#inspectorOpenTab").ClickAsync();
+            popup = await popupTask;
+            CaptureErrors(popup, popupErrors);
+            await popup.Locator("#httpInspector[open]").WaitForAsync();
+            await AssertTreeActionToolbarAsync(popup, "#request-panel-json");
+            await AssertTreeActionToolbarAsync(popup, "#response-panel-json");
+            await popup.Locator("#request-panel-json [data-view='pretty']").ClickAsync();
+            await Assertions.Expect(popup.Locator("#request-panel-json .tree-expand-all")).ToBeHiddenAsync();
+            await popup.Locator("#request-panel-json [data-view='tree']").ClickAsync();
+            await popup.CloseAsync();
+            popup = null;
+
+            await page.Locator("#httpFilter").SelectOptionAsync("websocket");
+            await page.Locator("#httpTable tbody tr:not(.hidden)").ClickAsync();
+            await AssertTreeActionToolbarAsync(page, "#ws-json-panel-0");
+            await page.Locator("#ws-json-panel-0 [data-view='pretty']").ClickAsync();
+            await Assertions.Expect(page.Locator("#ws-json-panel-0 .tree-expand-all")).ToBeHiddenAsync();
+            await Assertions.Expect(page.Locator("#ws-json-panel-0 .copy-button")).ToBeVisibleAsync();
+            await page.Locator("#ws-json-panel-0 [data-view='tree']").ClickAsync();
+            await Assertions.Expect(page.Locator("#ws-json-panel-0 .tree-expand-all")).ToBeVisibleAsync();
+
+            Assert.Empty(errors);
+            Assert.Empty(popupErrors);
+        }
+        finally
+        {
+            if (popup is not null)
+            {
+                await popup.CloseAsync();
+            }
+            await page.CloseAsync();
+        }
+    }
+
+    private static async Task AssertTreeActionToolbarAsync(IPage page, string panelSelector)
+    {
+        var toolbar = page.Locator($"{panelSelector}>.copy-toolbar");
+        await toolbar.WaitForAsync();
+        Assert.Equal(
+            ["Expand all", "Collapse all", "Copy"],
+            await toolbar.Locator("button").AllTextContentsAsync());
+        var treeId = await page.Locator($"{panelSelector} .tree-subview").GetAttributeAsync("id");
+        Assert.False(string.IsNullOrEmpty(treeId));
+        Assert.Equal(treeId, await toolbar.Locator(".tree-expand-all").GetAttributeAsync("aria-controls"));
+        Assert.Equal(treeId, await toolbar.Locator(".tree-collapse-all").GetAttributeAsync("aria-controls"));
+        await Assertions.Expect(toolbar.Locator(".tree-expand-all")).ToBeVisibleAsync();
+        await Assertions.Expect(toolbar.Locator(".tree-collapse-all")).ToBeVisibleAsync();
+        await Assertions.Expect(toolbar.Locator(".copy-button")).ToBeVisibleAsync();
     }
 
     private static async Task VerifyHttpSplitViewAsync(IBrowser browser, string reportPath)
