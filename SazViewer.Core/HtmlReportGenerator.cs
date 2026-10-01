@@ -118,9 +118,10 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .inspector-open-status{flex-basis:100%;min-height:0;color:var(--muted)}.inspector-open-status.warning{color:var(--text)}
 .session-details{flex:0 0 auto;max-height:30vh;overflow:auto;margin:2px 14px 0}.session-details summary{font-size:12px}
 .inspector-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-.primary-tab-strip{padding:0 14px;background:var(--panel2);flex:0 0 auto}
+.primary-view-bar{display:flex;align-items:flex-end;gap:8px;padding:0 14px;background:var(--panel2);flex:0 0 auto}.primary-view-bar .primary-tab-strip{padding:0;flex:1}.http-layout-toggle{flex:none;margin:0 0 2px;padding:5px 9px}.http-layout-toggle[aria-pressed=true]{border-color:var(--accent);background:var(--selected)}
 .tab-panels.primary-panels{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;border:none;padding:0;background:transparent}
-.primary-panel{flex:1;min-height:0;display:flex;flex-direction:column;padding:10px 14px;overflow:hidden}
+.primary-panel{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;padding:10px 14px;overflow:hidden}.http-pane-heading{display:none;margin:0 0 3px;font-size:13px;color:var(--muted)}
+.inspector-body.http-split .primary-panels{flex-direction:row;gap:6px;padding:8px 10px}.inspector-body.http-split .primary-panel{padding:4px;min-width:320px;border:1px solid var(--line);background:var(--panel);flex:1 1 0}.inspector-body.http-split #primary-panel-request{flex:0 1 var(--http-left,50%)}.inspector-body.http-split .http-pane-heading{display:block}.http-splitter{flex:0 0 8px;align-self:stretch;border-radius:4px;background:var(--line);cursor:col-resize;touch-action:none;position:relative}.http-splitter::after{content:"";position:absolute;inset:0 2px;border-left:1px solid var(--muted);border-right:1px solid var(--muted)}.http-splitter:hover,.http-splitter:focus-visible{background:var(--accent);outline:2px solid var(--accent);outline-offset:1px}.http-resizing{cursor:col-resize!important;user-select:none!important}.inspector-body.http-split .http-view-search{margin:0 0 5px}
 .message-panel{display:flex;flex-direction:column;flex:1;min-height:0}
 .headers{white-space:pre-wrap}
 .tab-strip{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:8px 0 0;flex:0 0 auto}
@@ -160,7 +161,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .ws-detail-content{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;padding:0 10px 10px}.ws-detail-content>.tab-panels{overflow:auto}.ws-detail-summary{padding:7px 0;color:var(--muted)}.ws-loading{padding:20px;color:var(--muted)}
 .active-view-search{display:flex;align-items:center;gap:5px}.active-view-search input{min-width:0;width:100%;padding:5px 8px}.active-view-search button{padding:4px 8px}.active-view-search-status{flex:none;min-width:88px;color:var(--muted);font-size:12px;text-align:right;white-space:nowrap}.active-search-match{background:#9e6a03;color:#fff;border-radius:2px;padding:0}.active-search-match-current{background:#f2cc60;color:#111;outline:2px solid var(--accent);outline-offset:1px}
 .http-view-search{margin:6px 14px 0;flex:0 0 auto}.ws-view-search{margin:0 0 6px}
-@media(max-width:900px){main{padding:2px}.ws-layout{display:grid;grid-template-columns:1fr;grid-template-rows:minmax(180px,38%) minmax(0,1fr);gap:10px;overflow:hidden}.ws-splitter{display:none}.ws-traffic-pane,.ws-detail-pane{min-width:0}}
+@media(max-width:900px){main{padding:2px}.ws-layout{display:grid;grid-template-columns:1fr;grid-template-rows:minmax(180px,38%) minmax(0,1fr);gap:10px;overflow:hidden}.ws-splitter{display:none}.ws-traffic-pane,.ws-detail-pane{min-width:0}.inspector-body.http-split .primary-panels{flex-direction:column;overflow:auto}.inspector-body.http-split .primary-panel{min-width:0;min-height:300px;flex:1 0 300px}.inspector-body.http-split #primary-panel-request{flex:1 0 300px}.http-splitter{display:none}}
 </style>
 </head>
 <body><main>
@@ -198,6 +199,13 @@ const inspectorOpenStatus=document.getElementById('inspectorOpenStatus');
 const reportStatus=document.getElementById('reportStatus');
 const THEME_STORAGE_KEY='saz-viewer-theme';
 const THEME_VALUES=new Set(['light','dark']);
+const HTTP_LAYOUT_STORAGE_KEY='saz-viewer.http-layout.v1';
+const HTTP_LAYOUT_VALUES=new Set(['single','split']);
+function readHttpLayout(){
+  try{const value=localStorage.getItem(HTTP_LAYOUT_STORAGE_KEY);if(HTTP_LAYOUT_VALUES.has(value))return value}catch{}
+  return'single';
+}
+let httpLayoutMode=readHttpLayout(),httpSplitRatio=.5;
 const systemTheme=matchMedia('(prefers-color-scheme:dark)');
 const themeButtons=[...document.querySelectorAll('.theme-toggle')];
 function effectiveTheme(){
@@ -228,6 +236,11 @@ themeButtons.forEach(button=>button.addEventListener('click',()=>{
 systemTheme.addEventListener?.('change',()=>{if(document.documentElement.dataset.theme==='system'){syncThemeButtons();refreshWebViewThemes()}});
 window.addEventListener('storage',event=>{
   if(event.key===THEME_STORAGE_KEY||event.key===null)applyTheme(event.key===null?null:event.newValue,false);
+  if(event.key===HTTP_LAYOUT_STORAGE_KEY||event.key===null){
+    const value=event.key===null?'single':event.newValue;
+    httpLayoutMode=HTTP_LAYOUT_VALUES.has(value)?value:'single';
+    applyHttpLayout(inspectorBody,httpLayoutMode,false,true);
+  }
 });
 let currentRow=null,originRow=null,renderGeneration=0,inspectorOnly=false,retainSelectionOnClose=false;
 const PAYLOAD_VERSION='1';
@@ -847,6 +860,118 @@ function setupWebSocketSplitter(layout,traffic,detail,splitter){
   observer.observe(layout);
   applyRatio(webSocketSplitRatio,false);
 }
+function setupHttpSplitter(root,layout,request,response,splitter){
+  root._disposeHttpSplitter?.();
+  const MIN_PANE=320;
+  let draggingPointer=null;
+  function metrics(){
+    const style=getComputedStyle(layout);
+    const gap=Number.parseFloat(style.columnGap||style.gap)||0;
+    const available=Math.max(1,layout.clientWidth-splitter.offsetWidth-(2*gap));
+    return{available,minLeft:Math.min(MIN_PANE,available),maxLeft:Math.max(Math.min(MIN_PANE,available),available-MIN_PANE)};
+  }
+  function applyRatio(ratio,remember){
+    const narrow=matchMedia('(max-width:900px)').matches;
+    if(!root.classList.contains('http-split')||narrow){
+      splitter.setAttribute('aria-disabled','true');splitter.setAttribute('aria-hidden','true');return;
+    }
+    splitter.removeAttribute('aria-disabled');splitter.removeAttribute('aria-hidden');
+    const size=metrics();
+    const left=Math.min(size.maxLeft,Math.max(size.minLeft,size.available*ratio));
+    const applied=left/size.available;
+    layout.style.setProperty('--http-left',`${left}px`);
+    if(remember)httpSplitRatio=applied;
+    const min=Math.round((size.minLeft/size.available)*100),max=Math.round((size.maxLeft/size.available)*100),now=Math.round(applied*100);
+    splitter.setAttribute('aria-valuemin',String(min));splitter.setAttribute('aria-valuemax',String(max));
+    splitter.setAttribute('aria-valuenow',String(now));splitter.setAttribute('aria-valuetext',`Request pane ${now} percent; Response pane ${100-now} percent`);
+  }
+  function applyClientX(clientX){
+    const size=metrics(),bounds=layout.getBoundingClientRect();
+    applyRatio((clientX-bounds.left)/size.available,true);
+  }
+  splitter.addEventListener('pointerdown',event=>{
+    if(event.button!==0||matchMedia('(max-width:900px)').matches||!root.classList.contains('http-split'))return;
+    event.preventDefault();draggingPointer=event.pointerId;splitter.setPointerCapture(event.pointerId);
+    document.body.classList.add('http-resizing');applyClientX(event.clientX);
+  });
+  splitter.addEventListener('pointermove',event=>{if(event.pointerId===draggingPointer)applyClientX(event.clientX)});
+  function finishPointer(event){
+    if(event.pointerId!==draggingPointer)return;
+    draggingPointer=null;document.body.classList.remove('http-resizing');
+    if(splitter.hasPointerCapture(event.pointerId))splitter.releasePointerCapture(event.pointerId);
+  }
+  splitter.addEventListener('pointerup',finishPointer);
+  splitter.addEventListener('pointercancel',finishPointer);
+  splitter.addEventListener('lostpointercapture',()=>{draggingPointer=null;document.body.classList.remove('http-resizing')});
+  splitter.addEventListener('keydown',event=>{
+    if(matchMedia('(max-width:900px)').matches||!root.classList.contains('http-split'))return;
+    const size=metrics(),current=request.getBoundingClientRect().width;
+    let next=current;
+    if(event.key==='ArrowLeft')next=current-(event.shiftKey?40:12);
+    else if(event.key==='ArrowRight')next=current+(event.shiftKey?40:12);
+    else if(event.key==='Home')next=size.minLeft;
+    else if(event.key==='End')next=size.maxLeft;
+    else return;
+    event.preventDefault();applyRatio(next/size.available,true);
+  });
+  const observer=new ResizeObserver(()=>{
+    if(!layout.isConnected){observer.disconnect();return}
+    applyRatio(httpSplitRatio,false);
+  });
+  observer.observe(layout);
+  root._applyHttpSplitRatio=()=>applyRatio(httpSplitRatio,false);
+  root._disposeHttpSplitter=()=>{
+    observer.disconnect();
+    document.body.classList.remove('http-resizing');
+    root._applyHttpSplitRatio=null;
+    root._disposeHttpSplitter=null;
+  };
+}
+function applyHttpLayout(root,mode,persist,hydrate){
+  const bar=root.querySelector(':scope>.primary-view-bar');
+  const panels=root.querySelector(':scope>.primary-panels');
+  if(!bar||!panels)return;
+  const tablist=bar.querySelector('.primary-tab-strip'),button=bar.querySelector('.http-layout-toggle');
+  const request=panels.querySelector('#primary-panel-request'),response=panels.querySelector('#primary-panel-response');
+  const splitter=panels.querySelector('.http-splitter');
+  if(!tablist||!button||!request||!response||!splitter)return;
+  root._disposeHttpViewSearch?.();root._clearHttpViewSearch=null;root._disposeHttpViewSearch=null;
+  const next=mode==='split'?'split':'single';
+  httpLayoutMode=next;
+  const split=next==='split';
+  root.classList.toggle('http-split',split);
+  button.setAttribute('aria-pressed',String(split));
+  button.textContent=split?'Single view':'Split view';
+  const label=split?'Show one Request or Response pane at a time':'Show Request and Response side by side';
+  button.setAttribute('aria-label',label);button.title=label;
+  splitter.classList.toggle('hidden',!split);
+  if(split){
+    request.classList.remove('hidden');response.classList.remove('hidden');
+  }else{
+    const selected=tablist.querySelector('[role="tab"][aria-selected="true"]');
+    const requestActive=selected?.dataset.tab!=='response';
+    request.classList.toggle('hidden',!requestActive);response.classList.toggle('hidden',requestActive);
+    deactivateDynamicViews(requestActive?response:request);
+  }
+  root._applyHttpSplitRatio?.();
+  setupHttpViewSearch(root,renderGeneration);
+  if(hydrate&&inspector.open)hydrateViewPayloads(split?panels:(request.classList.contains('hidden')?response:request),renderGeneration);
+  if(persist){
+    try{localStorage.setItem(HTTP_LAYOUT_STORAGE_KEY,next)}catch{}
+  }
+}
+function setupHttpLayout(root){
+  const bar=root.querySelector(':scope>.primary-view-bar');
+  const panels=root.querySelector(':scope>.primary-panels');
+  if(!bar||!panels)return false;
+  const button=bar.querySelector('.http-layout-toggle'),request=panels.querySelector('#primary-panel-request');
+  const response=panels.querySelector('#primary-panel-response'),splitter=panels.querySelector('.http-splitter');
+  if(!button||!request||!response||!splitter)return false;
+  setupHttpSplitter(root,panels,request,response,splitter);
+  button.addEventListener('click',()=>applyHttpLayout(root,httpLayoutMode==='split'?'single':'split',true,true));
+  applyHttpLayout(root,httpLayoutMode,false,false);
+  return true;
+}
 function removeActiveSearchMarks(root,matchClass){
   root.querySelectorAll(`mark.${matchClass}`).forEach(mark=>mark.replaceWith(document.createTextNode(mark.textContent||'')));
   root.normalize();
@@ -1024,19 +1149,24 @@ function setupWebSocketViewSearch(content,generation){
   content._clearWebSocketViewSearch=controller.reset;
 }
 function setupHttpViewSearch(root,generation){
-  const primaryTabs=root.querySelector(':scope>.primary-tab-strip');
+  const primaryTabs=root.querySelector(':scope>.primary-view-bar>.primary-tab-strip');
   const primaryPanels=root.querySelector(':scope>.primary-panels');
   if(!primaryTabs||!primaryPanels)return;
-  const controller=setupActiveViewSearch({
+  const split=root.classList.contains('http-split');
+  const targets=split?[...primaryPanels.querySelectorAll(':scope>.primary-panel')]:[null];
+  const controllers=targets.map(fixedPrimaryPanel=>setupActiveViewSearch({
     toolbarClass:'http-view-search',inputClass:'http-view-search-input',previousClass:'http-view-search-prev',nextClass:'http-view-search-next',statusClass:'http-view-search-status',
-    placeholder:'Search active Request/Response view...',inputLabel:'Search active Request or Response view',
+    placeholder:fixedPrimaryPanel?`Search ${fixedPrimaryPanel.dataset.side} view...`:'Search active Request/Response view...',
+    inputLabel:fixedPrimaryPanel?`Search active ${fixedPrimaryPanel.dataset.side} view`:'Search active Request or Response view',
     previousLabel:'Previous active-view search match',nextLabel:'Next active-view search match',
     matchClass:'http-search-match',currentClass:'http-search-match-current',
-    searchRoot:root,viewEventTarget:root,generation,clearOnViewChange:true,
-    insertToolbar:toolbar=>root.insertBefore(toolbar,primaryPanels),
+    searchRoot:fixedPrimaryPanel||root,viewEventTarget:fixedPrimaryPanel||root,generation,clearOnViewChange:true,
+    insertToolbar:toolbar=>fixedPrimaryPanel
+      ?fixedPrimaryPanel.insertBefore(toolbar,fixedPrimaryPanel.querySelector('.message-panel'))
+      :root.insertBefore(toolbar,primaryPanels),
     resolveTarget:async(token,currentToken)=>{
       const primaryTab=primaryTabs.querySelector('[role="tab"][aria-selected="true"]');
-      const primaryPanel=primaryTab?root.querySelector(`#${CSS.escape(primaryTab.getAttribute('aria-controls'))}`):null;
+      const primaryPanel=fixedPrimaryPanel||(primaryTab?root.querySelector(`#${CSS.escape(primaryTab.getAttribute('aria-controls'))}`):null);
       const messagePanel=primaryPanel?.querySelector('.message-panel');
       if(!messagePanel)return null;
       if(messagePanel._copyReadyPromise)await messagePanel._copyReadyPromise;
@@ -1095,9 +1225,9 @@ function setupHttpViewSearch(root,generation){
       }
       return{roots:[...panel.querySelectorAll('.headers')]};
     }
-  });
-  root._clearHttpViewSearch=controller.reset;
-  root._disposeHttpViewSearch=controller.dispose;
+  }));
+  root._clearHttpViewSearch=()=>controllers.forEach(controller=>controller.reset());
+  root._disposeHttpViewSearch=()=>controllers.forEach(controller=>{controller.dispose();controller.toolbar.remove()});
 }
 function renderWebSocketMessageDetail(container,message,generation){
   container.replaceChildren();
@@ -1741,19 +1871,21 @@ function tabsOf(tablist){return [...tablist.querySelectorAll('[role="tab"]')]}
 function activateTab(tablist,key,options){
   const tabs=tabsOf(tablist),target=tabs.find(tab=>tab.dataset.tab===key&&!tab.disabled);
   if(!target)return;
-  const panels=tablist.parentElement.querySelectorAll(':scope>.tab-panels>.tab-panel');
+  const owner=tablist.classList.contains('primary-tab-strip')?tablist.parentElement.parentElement:tablist.parentElement;
+  const panels=owner.querySelectorAll(':scope>.tab-panels>.tab-panel');
+  const split=tablist.classList.contains('primary-tab-strip')&&owner.classList.contains('http-split');
   let targetPanel=null;
   const previous=tabs.find(tab=>tab.getAttribute('aria-selected')==='true');
-  if(previous&&previous!==target){
-    const previousPanel=tablist.parentElement.querySelector(`#${CSS.escape(previous.getAttribute('aria-controls'))}`);
+  if(previous&&previous!==target&&!split){
+    const previousPanel=owner.querySelector(`#${CSS.escape(previous.getAttribute('aria-controls'))}`);
     if(previousPanel)deactivateDynamicViews(previousPanel);
   }
   tabs.forEach(tab=>{const active=tab===target;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1});
-  panels.forEach(panel=>{const active=panel.id===target.getAttribute('aria-controls');panel.classList.toggle('hidden',!active);if(active)targetPanel=panel});
+  panels.forEach(panel=>{const active=panel.id===target.getAttribute('aria-controls');panel.classList.toggle('hidden',split?false:!active);if(active)targetPanel=panel});
   if(targetPanel)hydrateViewPayloads(targetPanel,renderGeneration);
   if(options&&options.remember)preferredTab[tablist.dataset.side]=key;
   if(options&&options.focus)target.focus();
-  tablist.parentElement.dispatchEvent(new CustomEvent('saz-view-change',{bubbles:true}));
+  if(!split)owner.dispatchEvent(new CustomEvent('saz-view-change',{bubbles:true}));
 }
 function initialTabFor(tablist){
   const tabs=tabsOf(tablist);
@@ -1881,6 +2013,7 @@ function loadRow(row){
   const template=document.getElementById(row.dataset.detail);
   if(!template)return false;
   inspectorBody._disposeHttpViewSearch?.();
+  inspectorBody._disposeHttpSplitter?.();
   deactivateDynamicViews(inspectorBody);
   inspectorBody._clearHttpViewSearch=null;
   inspectorBody._disposeHttpViewSearch=null;
@@ -1899,7 +2032,7 @@ function loadRow(row){
   setupTreeToggles(inspectorBody);
   setupCopyControls(inspectorBody);
   setupDynamicViewControls(inspectorBody,generation);
-  setupHttpViewSearch(inspectorBody,generation);
+  if(!setupHttpLayout(inspectorBody))setupHttpViewSearch(inspectorBody,generation);
   hydrateViewPayloads(inspectorBody,generation);
   updateNavState();
   // Request is always the default-selected primary tab after (re)loading a row (see
@@ -1950,7 +2083,10 @@ function leaveInspectorOnlyMode(){
   try{history.replaceState(null,'',cleanUrl.href)}catch{window.location.hash=''}
 }
 function closeInspector(){
-  inspectorBody._clearHttpViewSearch?.();
+  inspectorBody._disposeHttpViewSearch?.();
+  inspectorBody._disposeHttpSplitter?.();
+  inspectorBody._clearHttpViewSearch=null;
+  inspectorBody._disposeHttpViewSearch=null;
   deactivateDynamicViews(inspectorBody);
   inspectorBody.querySelectorAll('.protocol-block').forEach(host=>{
     if(!host._protocolBuildToken)return;
@@ -2144,14 +2280,14 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             return;
         }
         AppendSessionDetails(html, session);
-        html.Append("<div class=\"primary-tab-strip tab-strip\" role=\"tablist\" aria-label=\"Request or response\" data-side=\"primary\" data-priority=\"request,response\">");
+        html.Append("<div class=\"primary-view-bar\"><div class=\"primary-tab-strip tab-strip\" role=\"tablist\" aria-label=\"Request or response\" data-side=\"primary\" data-priority=\"request,response\">");
         AppendTabButton(html, "primary", "request", "Request", true, true);
         AppendTabButton(html, "primary", "response", "Response", true, false);
-        html.Append("</div><div class=\"primary-panels tab-panels\">");
-        html.Append("<div role=\"tabpanel\" id=\"primary-panel-request\" aria-labelledby=\"primary-tab-request\" tabindex=\"0\" class=\"tab-panel primary-panel\">");
+        html.Append("</div><button type=\"button\" class=\"http-layout-toggle\" aria-pressed=\"false\" aria-label=\"Show Request and Response side by side\" title=\"Show Request and Response side by side\">Split view</button></div><div class=\"primary-panels tab-panels\">");
+        html.Append("<div role=\"tabpanel\" id=\"primary-panel-request\" aria-labelledby=\"primary-tab-request\" tabindex=\"0\" class=\"tab-panel primary-panel\" data-side=\"Request\"><h3 class=\"http-pane-heading\">Request</h3>");
         AppendMessagePanel(html, "Request", "request", session.Request, session.Mapi?.Request);
-        html.Append("</div>");
-        html.Append("<div role=\"tabpanel\" id=\"primary-panel-response\" aria-labelledby=\"primary-tab-response\" tabindex=\"0\" class=\"tab-panel primary-panel hidden\">");
+        html.Append("</div><div class=\"http-splitter hidden\" role=\"separator\" aria-label=\"Resize Request and Response panes\" aria-orientation=\"vertical\" tabindex=\"0\" title=\"Drag or use Left and Right arrow keys to resize Request and Response panes\"></div>");
+        html.Append("<div role=\"tabpanel\" id=\"primary-panel-response\" aria-labelledby=\"primary-tab-response\" tabindex=\"0\" class=\"tab-panel primary-panel hidden\" data-side=\"Response\"><h3 class=\"http-pane-heading\">Response</h3>");
         AppendMessagePanel(html, "Response", "response", session.Response, session.Mapi?.Response);
         html.Append("</div></div></template>");
     }

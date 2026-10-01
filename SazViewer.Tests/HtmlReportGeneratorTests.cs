@@ -149,8 +149,8 @@ public sealed class HtmlReportGeneratorTests
         // Primary tabs are never disabled, even though secondary content availability varies per side.
         Assert.DoesNotContain("id=\"primary-tab-request\" aria-controls=\"primary-panel-request\" aria-selected=\"true\" data-tab=\"request\" tabindex=\"0\" disabled", html, StringComparison.Ordinal);
         Assert.Contains("<div class=\"primary-panels tab-panels\">", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"primary-panel-request\" aria-labelledby=\"primary-tab-request\" tabindex=\"0\" class=\"tab-panel primary-panel\">", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"primary-panel-response\" aria-labelledby=\"primary-tab-response\" tabindex=\"0\" class=\"tab-panel primary-panel hidden\">", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"primary-panel-request\" aria-labelledby=\"primary-tab-request\" tabindex=\"0\" class=\"tab-panel primary-panel\" data-side=\"Request\">", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"primary-panel-response\" aria-labelledby=\"primary-tab-response\" tabindex=\"0\" class=\"tab-panel primary-panel hidden\" data-side=\"Response\">", html, StringComparison.Ordinal);
 
         // Clearing preferredTab on every row load forces primary back to "request" (first in its
         // priority list) whenever a row is freshly opened or navigated to via Previous/Next.
@@ -436,8 +436,8 @@ public sealed class HtmlReportGeneratorTests
 
         Assert.Contains("function setupActiveViewSearch(options)", html, StringComparison.Ordinal);
         Assert.Contains("setupHttpViewSearch(inspectorBody,generation);", html, StringComparison.Ordinal);
-        Assert.Contains("placeholder:'Search active Request/Response view...'", html, StringComparison.Ordinal);
-        Assert.Contains("inputLabel:'Search active Request or Response view'", html, StringComparison.Ordinal);
+        Assert.Contains(":'Search active Request/Response view...'", html, StringComparison.Ordinal);
+        Assert.Contains(":'Search active Request or Response view'", html, StringComparison.Ordinal);
         Assert.Contains("clearOnViewChange:true", html, StringComparison.Ordinal);
         Assert.Contains("matchClass:'http-search-match'", html, StringComparison.Ordinal);
         Assert.Contains("currentClass:'http-search-match-current'", html, StringComparison.Ordinal);
@@ -1098,7 +1098,7 @@ public sealed class HtmlReportGeneratorTests
     }
 
     [Fact]
-    public void ResponsiveLayoutIsSingleFullScreenSideAtAllWidths()
+    public void ResponsiveLayoutSupportsDesktopSplitAndNarrowStacking()
     {
         var report = new SazReport { SourceName = "responsive.saz" };
         report.Sessions.Add(
@@ -1106,12 +1106,48 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        // HTTP remains a single visible side. WebSocket traffic intentionally uses a bounded
-        // two-column inspector that stacks at the existing narrow breakpoint.
         Assert.Contains(".ws-layout{flex:1;min-height:0;display:flex;gap:6px;overflow:hidden}", html, StringComparison.Ordinal);
         Assert.Contains("dialog#httpInspector{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh", html, StringComparison.Ordinal);
         Assert.Contains("@media(max-width:900px){main{padding:2px}.ws-layout{display:grid;grid-template-columns:1fr;grid-template-rows:", html, StringComparison.Ordinal);
-        Assert.Contains(".primary-panel{flex:1;min-height:0;display:flex;flex-direction:column", html, StringComparison.Ordinal);
+        Assert.Contains(".primary-panel{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column", html, StringComparison.Ordinal);
+        Assert.Contains(".inspector-body.http-split .primary-panels{flex-direction:row;gap:6px;padding:8px 10px}", html, StringComparison.Ordinal);
+        Assert.Contains(".inspector-body.http-split .primary-panels{flex-direction:column;overflow:auto}", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EmitsPersistedAccessibleHttpSplitViewControls()
+    {
+        var report = new SazReport { SourceName = "split.saz" };
+        report.Sessions.Add(
+            new HttpSession
+            {
+                Id = "1",
+                ArchiveOrder = 0,
+                Method = "POST",
+                Url = "https://example.test/",
+                StatusCode = 200,
+                Request = Message("POST / HTTP/1.1", "application/json", """{"request":"needle"}"""),
+                Response = Message("HTTP/1.1 200 OK", "application/xml", "<root>needle</root>")
+            });
+
+        var html = new HtmlReportGenerator().Generate(report);
+
+        Assert.Contains("class=\"primary-view-bar\"", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"http-layout-toggle\" aria-pressed=\"false\" aria-label=\"Show Request and Response side by side\"", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"http-splitter hidden\" role=\"separator\" aria-label=\"Resize Request and Response panes\" aria-orientation=\"vertical\" tabindex=\"0\"", html, StringComparison.Ordinal);
+        Assert.Contains("const HTTP_LAYOUT_STORAGE_KEY='saz-viewer.http-layout.v1';", html, StringComparison.Ordinal);
+        Assert.Contains("const HTTP_LAYOUT_VALUES=new Set(['single','split']);", html, StringComparison.Ordinal);
+        Assert.Contains("try{const value=localStorage.getItem(HTTP_LAYOUT_STORAGE_KEY);", html, StringComparison.Ordinal);
+        Assert.Contains("try{localStorage.setItem(HTTP_LAYOUT_STORAGE_KEY,next)}catch{}", html, StringComparison.Ordinal);
+        Assert.Contains("event.key===HTTP_LAYOUT_STORAGE_KEY||event.key===null", html, StringComparison.Ordinal);
+        Assert.Contains("function setupHttpSplitter(root,layout,request,response,splitter)", html, StringComparison.Ordinal);
+        Assert.Contains("if(event.key==='ArrowLeft')next=current-", html, StringComparison.Ordinal);
+        Assert.Contains("else if(event.key==='ArrowRight')next=current+", html, StringComparison.Ordinal);
+        Assert.Contains("splitter.setAttribute('aria-valuenow',String(now));splitter.setAttribute('aria-valuetext'", html, StringComparison.Ordinal);
+        Assert.Contains("function applyHttpLayout(root,mode,persist,hydrate)", html, StringComparison.Ordinal);
+        Assert.Contains("const targets=split?[...primaryPanels.querySelectorAll(':scope>.primary-panel')]:[null];", html, StringComparison.Ordinal);
+        Assert.Contains("viewEventTarget:fixedPrimaryPanel||root", html, StringComparison.Ordinal);
+        Assert.Contains("if(!setupHttpLayout(inspectorBody))setupHttpViewSearch(inspectorBody,generation);", html, StringComparison.Ordinal);
     }
 
     [Fact]
