@@ -399,7 +399,7 @@ window.addEventListener('storage',event=>{
                 frame.Warning)).ToArray());
     }
 
-    private static string BuildWebSocketListPreview(WebSocketMessage message)
+    internal static string BuildWebSocketListPreview(WebSocketMessage message)
     {
         const int maxCharacters = 180;
         string preview;
@@ -431,7 +431,7 @@ window.addEventListener('storage',event=>{
             : string.Concat(preview.AsSpan(0, maxCharacters - 1), "\u2026");
     }
 
-    private static string BuildWebSocketListType(WebSocketMessage message)
+    internal static string BuildWebSocketListType(WebSocketMessage message)
     {
         if (message.Type is not ("Text" or "Binary" or "Ping" or "Pong" or "Close"))
         {
@@ -482,7 +482,7 @@ window.addEventListener('storage',event=>{
         return output.ToString();
     }
 
-    private static string BuildWebSocketRaw(WebSocketMessage message)
+    internal static string BuildWebSocketRaw(WebSocketMessage message)
     {
         var text = new StringBuilder();
         text.Append("Direction: ").Append(WebSocketDirectionLabel(message.Direction)).Append('\n')
@@ -560,10 +560,10 @@ window.addEventListener('storage',event=>{
             .Append("\n[Text payload truncated in Raw view at the 1 MiB copy safety limit]\n");
     }
 
-    private static string FormatWebSocketTimestamp(DateTimeOffset? timestamp) =>
+    internal static string FormatWebSocketTimestamp(DateTimeOffset? timestamp) =>
         timestamp?.ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture) ?? "Unknown";
 
-    private static string WebSocketDirectionLabel(string direction) => direction switch
+    internal static string WebSocketDirectionLabel(string direction) => direction switch
     {
         "Client" => "Client to server",
         "Server" => "Server to client",
@@ -641,7 +641,7 @@ window.addEventListener('storage',event=>{
         html.Append("</details>");
     }
 
-    private static ImageViewInfo? DetectImageView(HttpMessage message)
+    internal static ImageViewInfo? DetectImageView(HttpMessage message)
     {
         var body = message.Body;
         var bytes = body.DecodedBytes.Span;
@@ -1002,7 +1002,7 @@ window.addEventListener('storage',event=>{
         return "No animation detected.";
     }
 
-    private static AuthViewData? BuildAuthView(HttpMessage message)
+    internal static AuthViewData? BuildAuthView(HttpMessage message)
     {
         var headers = message.Headers.Where(header => AuthHeaderNames.Contains(header.Name)).ToArray();
         if (headers.Length == 0)
@@ -1019,7 +1019,7 @@ window.addEventListener('storage',event=>{
         return new AuthViewData(redacted.ToString(), full.ToString());
     }
 
-    private static string RedactAuthValue(string value)
+    internal static string RedactAuthValue(string value)
     {
         var trimmed = value.Trim();
         if (trimmed.Length == 0)
@@ -1207,7 +1207,7 @@ window.addEventListener('storage',event=>{
         writer.WriteEndObject();
     }
 
-    private sealed class TreeNode
+    internal sealed class TreeNode
     {
         public required string Kind { get; init; }
         public string? Name { get; init; }
@@ -1221,19 +1221,22 @@ window.addEventListener('storage',event=>{
         public List<TreeNode>? Children { get; init; }
     }
 
-    private sealed class TreeBudget
+    internal sealed class TreeBudget
     {
         public int NodeCount;
     }
 
-    private static string? BuildJsonTreePayload(string formattedJson)
+    private static string? BuildJsonTreePayload(string formattedJson) =>
+        BuildJsonTree(formattedJson) is { } root ? JsonSerializer.Serialize(root, TreePayloadOptions) : null;
+
+    /// <summary>Builds the bounded JSON value tree shared by the HTML report and the native viewer.</summary>
+    internal static TreeNode? BuildJsonTree(string formattedJson)
     {
         try
         {
             using var document = JsonDocument.Parse(formattedJson);
             var budget = new TreeBudget();
-            var root = BuildJsonNode(document.RootElement, null, false, 0, budget);
-            return JsonSerializer.Serialize(root, TreePayloadOptions);
+            return BuildJsonNode(document.RootElement, null, false, 0, budget);
         }
         catch (JsonException)
         {
@@ -1319,7 +1322,11 @@ window.addEventListener('storage',event=>{
     private static (string Value, bool Truncated) BoundScalar(string raw) =>
         raw.Length <= TreeMaxScalarLength ? (raw, false) : (raw[..TreeMaxScalarLength], true);
 
-    private static string? BuildXmlTreePayload(string formattedXml)
+    private static string? BuildXmlTreePayload(string formattedXml) =>
+        BuildXmlTree(formattedXml) is { } root ? JsonSerializer.Serialize(root, TreePayloadOptions) : null;
+
+    /// <summary>Builds the bounded XML node tree shared by the HTML report and the native viewer.</summary>
+    internal static TreeNode? BuildXmlTree(string formattedXml)
     {
         try
         {
@@ -1352,8 +1359,7 @@ window.addEventListener('storage',event=>{
                 }
                 children.Add(BuildXmlNode(reader, 0, budget));
             }
-            var root = new TreeNode { Kind = "document", Count = count, Omitted = omitted, Children = children };
-            return JsonSerializer.Serialize(root, TreePayloadOptions);
+            return new TreeNode { Kind = "document", Count = count, Omitted = omitted, Children = children };
         }
         catch (XmlException)
         {
@@ -1503,7 +1509,7 @@ window.addEventListener('storage',event=>{
         _ => false
     };
 
-    private static string FormatTimestamp(DateTimeOffset? value) =>
+    internal static string FormatTimestamp(DateTimeOffset? value) =>
         value?.ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture) ?? "-";
 
     private static void AppendHttpTimestamp(StringBuilder html, DateTimeOffset? value)
@@ -1526,7 +1532,7 @@ window.addEventListener('storage',event=>{
         html.Append("</time>");
     }
 
-    private static string FormatBytes(long value)
+    internal static string FormatBytes(long value)
     {
         string[] units = ["B", "KiB", "MiB", "GiB"];
         var size = (double)value;

@@ -50,26 +50,24 @@ public sealed partial class SazParser
     private static void ParseArchive(ISazArchive archive, SazReport report)
     {
         var groups = Discover(archive, report.Warnings);
+        var batch = new List<EntryGroup>();
+        long batchBytes = 0;
         foreach (var group in groups.OrderBy(g => g.ArchiveOrder))
         {
-            var session = new HttpSession { Id = group.Id, ArchiveOrder = group.ArchiveOrder };
-            ParseMetadata(group.Metadata, session);
-            ParseRequest(group.Request, session);
-            ParseResponse(group.Response, session);
-            CompleteSession(session);
-            report.Sessions.Add(session);
-
-            if (group.WebSocket is not null)
+            // Archive entries are read sequentially in the original m/c/s/w order (encrypted archives
+            // enforce cumulative budgets), then the CPU-bound HTTP parsing runs in parallel.
+            batchBytes += BufferEntries(group);
+            batch.Add(group);
+            if (group.WebSocket is not null
+                || batch.Count >= MaxParallelBatchSessions
+                || batchBytes >= MaxParallelBatchBytes)
             {
-                WebSocketParser.Parse(
-                    group.WebSocket,
-                    session.Id,
-                    session.ArchiveOrder,
-                    report.WebSocketMessages,
-                    session.Warnings);
+                ParseBatch(batch, report);
+                batch.Clear();
+                batchBytes = 0;
             }
-
         }
+        ParseBatch(batch, report);
 
         report.Sessions.Sort(CompareSessions);
         report.Mapi = MapiCaptureParser.Parse(report.Sessions);
@@ -84,6 +82,124 @@ public sealed partial class SazParser
         if (groups.Count == 0)
         {
             report.Warnings.Add("No raw/<id>_c.txt, _s.txt, _m.xml, or _w.txt entries were found.");
+        }
+    }
+
+    private const int MaxParallelBatchSessions = 256;
+    private const long MaxParallelBatchBytes = 64L * 1024 * 1024;
+
+    private static void ParseBatch(List<EntryGroup> batch, SazReport report)
+    {
+        if (batch.Count == 0)
+        {
+            return;
+        }
+
+        var sessions = new HttpSession[batch.Count];
+        try
+        {
+            Parallel.For(0, batch.Count, index =>
+            {
+                var group = batch[index];
+                var session = new HttpSession { Id = group.Id, ArchiveOrder = group.ArchiveOrder };
+                ParseMetadata(group.Metadata, session);
+                ParseRequest(group.Request, session);
+                ParseResponse(group.Response, session);
+                CompleteSession(session);
+                sessions[index] = session;
+            });
+        }
+        catch (AggregateException exception) when (exception.InnerExceptions.Count > 0)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception.InnerExceptions[0]).Throw();
+        }
+
+        for (var index = 0; index < batch.Count; index++)
+        {
+            var session = sessions[index];
+            report.Sessions.Add(session);
+            // Only the last group of a batch can carry a WebSocket entry, so streaming it here keeps
+            // the archive read order identical to a fully sequential parse.
+            if (batch[index].WebSocket is { } webSocket)
+            {
+                WebSocketParser.Parse(
+                    webSocket,
+                    session.Id,
+                    session.ArchiveOrder,
+                    report.WebSocketMessages,
+                    session.Warnings);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads the bounded metadata/request/response prefixes the parsers would consume, replacing the
+    /// group's entries with in-memory copies so they can be parsed off the archive's thread.
+    /// </summary>
+    private static long BufferEntries(EntryGroup group)
+    {
+        long total = 0;
+        if (group.Metadata is { } metadata && metadata.Length <= MaxMetadataBytes)
+        {
+            group.Metadata = BufferedEntry.Read(metadata, MaxMetadataBytes + 1);
+            total += ((BufferedEntry)group.Metadata).BufferedBytes;
+        }
+        if (group.Request is { } request)
+        {
+            group.Request = BufferedEntry.Read(request, HttpMessageParser.MaxEntryRead);
+            total += ((BufferedEntry)group.Request).BufferedBytes;
+        }
+        if (group.Response is { } response)
+        {
+            group.Response = BufferedEntry.Read(response, HttpMessageParser.MaxEntryRead);
+            total += ((BufferedEntry)group.Response).BufferedBytes;
+        }
+        return total;
+    }
+
+    private sealed class BufferedEntry : ISazArchiveEntry
+    {
+        private readonly byte[] bytes;
+        private readonly int count;
+        private readonly Exception? failure;
+
+        private BufferedEntry(ISazArchiveEntry source, byte[] bytes, int count, Exception? failure)
+        {
+            FullName = source.FullName;
+            Length = source.Length;
+            this.bytes = bytes;
+            this.count = count;
+            this.failure = failure;
+        }
+
+        public string FullName { get; }
+
+        public long Length { get; }
+
+        public int BufferedBytes => count;
+
+        public static BufferedEntry Read(ISazArchiveEntry source, int limit)
+        {
+            try
+            {
+                using var stream = source.Open();
+                using var buffered = ReadLimited(stream, limit);
+                return new BufferedEntry(source, buffered.GetBuffer(), (int)buffered.Length, null);
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException)
+            {
+                // Surface the failure from Open() exactly where the sequential parser would have seen it.
+                return new BufferedEntry(source, [], 0, exception);
+            }
+        }
+
+        public Stream Open()
+        {
+            if (failure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+            }
+            return new MemoryStream(bytes, 0, count, writable: false);
         }
     }
 

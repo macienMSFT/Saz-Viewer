@@ -13,25 +13,25 @@ public sealed partial class HtmlReportGenerator
 {
     private readonly BodyFormatter bodyFormatter = new();
 
-    private const int TreeMaxNodes = 4000;
-    private const int TreeMaxDepth = 40;
-    private const int TreeMaxChildrenPerNode = 300;
-    private const int TreeMaxScalarLength = 300;
-    private const int MaxCopyCharacters = 1024 * 1024;
-    private const int MaxHydratedDisplayCharacters = 256 * 1024;
-    private const int HexViewBytesLimit = 1024;
+    internal const int TreeMaxNodes = 4000;
+    internal const int TreeMaxDepth = 40;
+    internal const int TreeMaxChildrenPerNode = 300;
+    internal const int TreeMaxScalarLength = 300;
+    internal const int MaxCopyCharacters = 1024 * 1024;
+    internal const int MaxHydratedDisplayCharacters = 256 * 1024;
+    internal const int HexViewBytesLimit = 1024;
     private const int PayloadVersion = 1;
     private const int HttpSessionPayloadMaxDecodedBytes = 32 * 1024 * 1024;
     private const int ProtocolPayloadMaxDecodedBytes = 32 * 1024 * 1024;
     private const int TreePayloadMaxDecodedBytes = 8 * 1024 * 1024;
     private const int WebSocketPayloadMaxDecodedBytes = 32 * 1024 * 1024;
-    private const int MaxWebSocketMessagesPerSession = 5000;
-    private const int MaxWebSocketRawPayloadBytes = 160 * 1024;
+    internal const int MaxWebSocketMessagesPerSession = 5000;
+    internal const int MaxWebSocketRawPayloadBytes = 160 * 1024;
     private const int WebSocketPayloadContentBudgetBytes = 28 * 1024 * 1024;
 
     private sealed record CompressedPayload(string Type, string Base64, int DecodedBytes);
-    private sealed record ImageViewInfo(string MimeType, string Detection, string Animation, string? Warning);
-    private sealed record AuthViewData(string Redacted, string Full);
+    internal sealed record ImageViewInfo(string MimeType, string Detection, string Animation, string? Warning);
+    internal sealed record AuthViewData(string Redacted, string Full);
     private sealed record SessionPayload(int Schema, MessagePayload? Request, MessagePayload? Response);
     private sealed record MessagePayload(
         string StartLine,
@@ -76,7 +76,7 @@ public sealed partial class HtmlReportGenerator
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    private static readonly HashSet<string> AuthHeaderNames = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly HashSet<string> AuthHeaderNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "Authorization",
         "Proxy-Authorization",

@@ -5,7 +5,7 @@ namespace SazViewer.Core;
 
 internal static class HttpMessageParser
 {
-    private const int MaxEntryRead = MapiParseLimits.MaxPayloadBytes + (128 * 1024);
+    internal const int MaxEntryRead = MapiParseLimits.MaxPayloadBytes + (128 * 1024);
     internal const int MaxBodyPreview = 64 * 1024;
 
     public static HttpMessage? Parse(Stream stream, long entryLength, string label, List<string> warnings)
