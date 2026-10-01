@@ -50,7 +50,7 @@ sequenceDiagram
     Inspector->>View: Cancel builds, revoke Blob URLs,<br/>remove iframe, reset Auth reveal
 ```
 
-Single view shows Request or Response tabs. The compact layout icon beside Previous/Next switches to split view; while both panes are visible, the redundant primary tabs are hidden and each pane has a visible heading. Each side owns independent secondary tabs, active-view search, copy status, and lazy state. The desktop divider supports pointer and keyboard resizing; narrow layouts stack the panes and disable the divider. The `single`/`split` preference is the only layout value stored.
+Single view shows Request or Response tabs. The compact layout icon beside Previous/Next switches to split view; while both panes are visible, the redundant primary tabs are hidden and each pane has a visible heading. Each side owns independent secondary tabs, active-view search, copy status, and lazy state. At 900 pixels and wider the default is split with a pointer- and keyboard-resizable divider. Narrow layouts default to single; a remembered narrow split choice stacks the panes and disables the divider. Wide and narrow preferences are stored independently, and crossing the breakpoint applies the corresponding remembered choice or default.
 
 Dynamic resources are tied to the current render generation. Navigation invalidates stale asynchronous work. Image Blob URLs are revoked, WebView iframes are removed, interrupted tree batches stop, and Auth reveal state is discarded.
 
@@ -61,10 +61,10 @@ stateDiagram-v2
     Selected --> Hydrating: validate and decompress envelope
     Hydrating --> Ready: build request and response panes
     Hydrating --> PanelError: invalid envelope or decompression failure
-    Ready --> Single: saved/default single layout
-    Ready --> Split: saved split layout
-    Single --> Split: layout toggle
-    Split --> Single: layout toggle
+    Ready --> Single: narrow default or saved single
+    Ready --> Split: wide default or saved split
+    Single --> Split: toggle or width-class preference
+    Split --> Single: toggle or width-class preference
     Single --> RenderingView: choose enabled secondary tab
     Split --> RenderingView: choose tab in either pane
     RenderingView --> Single: view ready in single layout
@@ -97,9 +97,12 @@ Copy text and active-search text are built from the active model on demand. Sear
 
 ## Browser state
 
-Only two non-sensitive preferences use safely wrapped `localStorage`:
+Three non-sensitive preferences use safely wrapped `localStorage`:
 
 - `saz-viewer-theme`: explicit `light` or `dark`;
-- `saz-viewer.http-layout.v1`: `single` or `split`.
+- `saz-viewer.http-layout.wide.v2`: wide `single` or `split`;
+- `saz-viewer.http-layout.narrow.v2`: narrow `single` or `split`.
+
+On first load after the layout-storage change, legacy `saz-viewer.http-layout.v1=split` is migrated to the wide key. Legacy `single` is removed without migration so the new wide split default applies. Storage failure keeps an in-page toggle usable but returns to the width-class default on reload.
 
 No capture identity, URL, header, body, search query, Auth reveal state, or navigation position is persisted. Storage failure degrades to current-tab behavior.

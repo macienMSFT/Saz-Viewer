@@ -220,13 +220,34 @@ const inspectorOpenStatus=document.getElementById('inspectorOpenStatus');
 const reportStatus=document.getElementById('reportStatus');
 const THEME_STORAGE_KEY='saz-viewer-theme';
 const THEME_VALUES=new Set(['light','dark']);
-const HTTP_LAYOUT_STORAGE_KEY='saz-viewer.http-layout.v1';
+const HTTP_LAYOUT_LEGACY_STORAGE_KEY='saz-viewer.http-layout.v1';
+const HTTP_LAYOUT_WIDE_STORAGE_KEY='saz-viewer.http-layout.wide.v2';
+const HTTP_LAYOUT_NARROW_STORAGE_KEY='saz-viewer.http-layout.narrow.v2';
 const HTTP_LAYOUT_VALUES=new Set(['single','split']);
-function readHttpLayout(){
-  try{const value=localStorage.getItem(HTTP_LAYOUT_STORAGE_KEY);if(HTTP_LAYOUT_VALUES.has(value))return value}catch{}
-  return'single';
+const httpLayoutBreakpoint=matchMedia('(min-width: 900px)');
+function currentHttpLayoutWidthClass(){return httpLayoutBreakpoint.matches?'wide':'narrow'}
+function httpLayoutStorageKey(widthClass){return widthClass==='wide'?HTTP_LAYOUT_WIDE_STORAGE_KEY:HTTP_LAYOUT_NARROW_STORAGE_KEY}
+function defaultHttpLayout(widthClass){return widthClass==='wide'?'split':'single'}
+function migrateLegacyHttpLayout(){
+  try{
+    if(!HTTP_LAYOUT_VALUES.has(localStorage.getItem(HTTP_LAYOUT_WIDE_STORAGE_KEY))
+      &&localStorage.getItem(HTTP_LAYOUT_LEGACY_STORAGE_KEY)==='split'){
+      localStorage.setItem(HTTP_LAYOUT_WIDE_STORAGE_KEY,'split');
+    }
+    localStorage.removeItem(HTTP_LAYOUT_LEGACY_STORAGE_KEY);
+  }catch{}
 }
-let httpLayoutMode=readHttpLayout(),httpSplitRatio=.5;
+function readHttpLayout(widthClass){
+  try{const value=localStorage.getItem(httpLayoutStorageKey(widthClass));if(HTTP_LAYOUT_VALUES.has(value))return value}catch{}
+  return defaultHttpLayout(widthClass);
+}
+migrateLegacyHttpLayout();
+let httpLayoutWidthClass=currentHttpLayoutWidthClass(),httpLayoutMode=readHttpLayout(httpLayoutWidthClass),httpSplitRatio=.5;
+function syncHttpLayoutToViewport(hydrate){
+  httpLayoutWidthClass=currentHttpLayoutWidthClass();
+  httpLayoutMode=readHttpLayout(httpLayoutWidthClass);
+  applyHttpLayout(inspectorBody,httpLayoutMode,false,hydrate);
+}
 const systemTheme=matchMedia('(prefers-color-scheme:dark)');
 const themeButtons=[...document.querySelectorAll('.theme-toggle')];
 function effectiveTheme(){
@@ -257,12 +278,12 @@ themeButtons.forEach(button=>button.addEventListener('click',()=>{
 systemTheme.addEventListener?.('change',()=>{if(document.documentElement.dataset.theme==='system'){syncThemeButtons();refreshWebViewThemes()}});
 window.addEventListener('storage',event=>{
   if(event.key===THEME_STORAGE_KEY||event.key===null)applyTheme(event.key===null?null:event.newValue,false);
-  if(event.key===HTTP_LAYOUT_STORAGE_KEY||event.key===null){
-    const value=event.key===null?'single':event.newValue;
-    httpLayoutMode=HTTP_LAYOUT_VALUES.has(value)?value:'single';
+  if(event.key===httpLayoutStorageKey(httpLayoutWidthClass)||event.key===null){
+    httpLayoutMode=event.key===null?defaultHttpLayout(httpLayoutWidthClass):(HTTP_LAYOUT_VALUES.has(event.newValue)?event.newValue:defaultHttpLayout(httpLayoutWidthClass));
     applyHttpLayout(inspectorBody,httpLayoutMode,false,true);
   }
 });
+httpLayoutBreakpoint.addEventListener?.('change',()=>syncHttpLayoutToViewport(true));
 let currentRow=null,originRow=null,renderGeneration=0,inspectorOnly=false,retainSelectionOnClose=false;
 const PAYLOAD_VERSION='1';
 const PAYLOAD_LIMITS={
@@ -1266,7 +1287,8 @@ function applyHttpLayout(root,mode,persist,hydrate){
   setupHttpViewSearch(root,renderGeneration);
   if(hydrate&&inspector.open)hydrateViewPayloads(split?panels:(request.classList.contains('hidden')?response:request),renderGeneration);
   if(persist){
-    try{localStorage.setItem(HTTP_LAYOUT_STORAGE_KEY,next)}catch{}
+    httpLayoutWidthClass=currentHttpLayoutWidthClass();
+    try{localStorage.setItem(httpLayoutStorageKey(httpLayoutWidthClass),next)}catch{}
   }
 }
 function setupHttpLayout(root){

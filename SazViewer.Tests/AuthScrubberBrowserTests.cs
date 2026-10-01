@@ -60,6 +60,8 @@ public sealed class AuthScrubberBrowserTests
             page.PageError += (_, exception) => errors.Add(exception);
 
             await page.GotoAsync(new Uri(path).AbsoluteUri);
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
+            await page.ReloadAsync();
             var banner = page.Locator(".auth-scrub-banner");
             await Assertions.Expect(banner).ToBeVisibleAsync();
             await Assertions.Expect(banner).ToContainTextAsync("generated with --scrub-auth");

@@ -47,6 +47,7 @@ public sealed class HtmlReportBrowserTests
             await VerifyInspectorAsync(browser, reportPath, 480, exerciseAllControls: false);
             await VerifyThemePersistenceAsync(browser, reportPath);
             await VerifyHttpActiveViewSearchAsync(browser, reportPath);
+            await VerifyHttpLayoutDefaultsAndMigrationAsync(browser, reportPath);
             await VerifyHttpSplitViewAsync(browser, reportPath);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 1440);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 320);
@@ -304,6 +305,8 @@ public sealed class HtmlReportBrowserTests
                     URL.revokeObjectURL=url=>{globalThis.__revokedObjectUrls.push(url);nativeRevokeObjectURL(url)};
                     """);
             await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
+            await page.ReloadAsync();
 
             await page.Locator("#httpTable tbody tr").First.ClickAsync();
             Assert.Equal(
@@ -457,6 +460,8 @@ public sealed class HtmlReportBrowserTests
             page.Download += (_, _) => unexpectedDownloads++;
 
             await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
+            await page.ReloadAsync();
             await page.Locator("#httpTable tbody tr").First.ClickAsync();
             Assert.Equal(
                 ["JSON", "XML", "MAPI", "Image", "WebView", "HexView", "Auth", "Headers", "Raw"],
@@ -614,6 +619,8 @@ public sealed class HtmlReportBrowserTests
             await page.AddInitScriptAsync(
                 "const nativeFrame=requestAnimationFrame.bind(globalThis);globalThis.requestAnimationFrame=callback=>setTimeout(()=>nativeFrame(callback),50)");
             await page.GotoAsync(new Uri(path).AbsoluteUri);
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
+            await page.ReloadAsync();
             await page.Locator("#httpTable tbody tr").ClickAsync();
             await Assertions.Expect(page.Locator(".protocol-load-status")).ToContainTextAsync("Loading");
             await page.Locator("#inspectorClose").ClickAsync();
@@ -757,10 +764,10 @@ public sealed class HtmlReportBrowserTests
             .ToHaveAttributeAsync("aria-label", "Switch to light theme");
         await blockedPage.Locator("#httpTable tbody tr").First.ClickAsync();
         await blockedPage.Locator(".http-layout-toggle").ClickAsync();
-        Assert.True(await blockedPage.Locator("#inspectorBody").EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
+        Assert.False(await blockedPage.Locator("#inspectorBody").EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
         await blockedPage.ReloadAsync();
         await blockedPage.Locator("#httpTable tbody tr").First.ClickAsync();
-        Assert.False(await blockedPage.Locator("#inspectorBody").EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
+        Assert.True(await blockedPage.Locator("#inspectorBody").EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
         Assert.Empty(blockedErrors);
     }
 
@@ -792,6 +799,8 @@ public sealed class HtmlReportBrowserTests
         try
         {
             await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
+            await page.ReloadAsync();
             await page.Locator("#httpTable tbody tr").First.ClickAsync();
 
             var search = page.Locator(".http-view-search-input");
@@ -1019,6 +1028,97 @@ public sealed class HtmlReportBrowserTests
         }
     }
 
+    private static async Task VerifyHttpLayoutDefaultsAndMigrationAsync(IBrowser browser, string reportPath)
+    {
+        const string legacyKey = "saz-viewer.http-layout.v1";
+        const string wideKey = "saz-viewer.http-layout.wide.v2";
+        const string narrowKey = "saz-viewer.http-layout.narrow.v2";
+        var errors = new List<string>();
+        var page = await browser.NewPageAsync(new()
+        {
+            ViewportSize = new ViewportSize { Width = 900, Height = 800 },
+        });
+        IPage? peer = null;
+        CaptureErrors(page, errors);
+        try
+        {
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync(
+                $"()=>{{localStorage.removeItem('{legacyKey}');localStorage.removeItem('{wideKey}');localStorage.removeItem('{narrowKey}')}}");
+            await page.ReloadAsync();
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            await Assertions.Expect(page.Locator(".http-layout-toggle"))
+                .ToHaveAttributeAsync("aria-pressed", "true");
+            Assert.Null(await page.EvaluateAsync<string?>($"()=>localStorage.getItem('{wideKey}')"));
+
+            await page.Locator(".http-layout-toggle").ClickAsync();
+            Assert.Equal("single", await page.EvaluateAsync<string>($"()=>localStorage.getItem('{wideKey}')"));
+            await page.SetViewportSizeAsync(899, 800);
+            await Assertions.Expect(page.Locator(".http-layout-toggle"))
+                .ToHaveAttributeAsync("aria-pressed", "false");
+            Assert.Null(await page.EvaluateAsync<string?>($"()=>localStorage.getItem('{narrowKey}')"));
+
+            await page.Locator(".http-layout-toggle").ClickAsync();
+            Assert.Equal("split", await page.EvaluateAsync<string>($"()=>localStorage.getItem('{narrowKey}')"));
+            await page.SetViewportSizeAsync(900, 800);
+            await Assertions.Expect(page.Locator(".http-layout-toggle"))
+                .ToHaveAttributeAsync("aria-pressed", "false");
+            await page.SetViewportSizeAsync(899, 800);
+            await Assertions.Expect(page.Locator(".http-layout-toggle"))
+                .ToHaveAttributeAsync("aria-pressed", "true");
+
+            var peerTask = page.WaitForPopupAsync();
+            await page.EvaluateAsync("(url)=>window.open(url,'_blank')", new Uri(reportPath).AbsoluteUri);
+            peer = await peerTask;
+            CaptureErrors(peer, errors);
+            await peer.SetViewportSizeAsync(899, 800);
+            await peer.Locator("#httpTable").WaitForAsync();
+            await peer.Locator("#httpTable tbody tr").First.ClickAsync();
+            Assert.True(await peer.Locator("#inspectorBody")
+                .EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
+            await peer.Locator(".http-layout-toggle").ClickAsync();
+            await Assertions.Expect(page.Locator(".http-layout-toggle"))
+                .ToHaveAttributeAsync("aria-pressed", "false");
+            await peer.CloseAsync();
+            peer = null;
+
+            await page.EvaluateAsync(
+                $"()=>{{localStorage.removeItem('{legacyKey}');localStorage.removeItem('{wideKey}');localStorage.removeItem('{narrowKey}')}}");
+            await page.ReloadAsync();
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            Assert.False(await page.Locator("#inspectorBody")
+                .EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
+
+            await page.SetViewportSizeAsync(900, 800);
+            await page.EvaluateAsync(
+                $"()=>{{localStorage.removeItem('{wideKey}');localStorage.removeItem('{narrowKey}');localStorage.setItem('{legacyKey}','split')}}");
+            await page.ReloadAsync();
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            Assert.True(await page.Locator("#inspectorBody")
+                .EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
+            Assert.Equal("split", await page.EvaluateAsync<string>($"()=>localStorage.getItem('{wideKey}')"));
+            Assert.Null(await page.EvaluateAsync<string?>($"()=>localStorage.getItem('{legacyKey}')"));
+
+            await page.EvaluateAsync(
+                $"()=>{{localStorage.removeItem('{wideKey}');localStorage.setItem('{legacyKey}','single')}}");
+            await page.ReloadAsync();
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            Assert.True(await page.Locator("#inspectorBody")
+                .EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
+            Assert.Null(await page.EvaluateAsync<string?>($"()=>localStorage.getItem('{wideKey}')"));
+            Assert.Null(await page.EvaluateAsync<string?>($"()=>localStorage.getItem('{legacyKey}')"));
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            if (peer is not null)
+            {
+                await peer.CloseAsync();
+            }
+            await page.CloseAsync();
+        }
+    }
+
     private static async Task VerifyHttpSplitViewAsync(IBrowser browser, string reportPath)
     {
         var errors = new List<string>();
@@ -1035,7 +1135,11 @@ public sealed class HtmlReportBrowserTests
         try
         {
             await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync(
+                "()=>{localStorage.removeItem('saz-viewer.http-layout.v1');localStorage.removeItem('saz-viewer.http-layout.narrow.v2');localStorage.setItem('saz-viewer.http-layout.wide.v2','single')}");
+            await page.ReloadAsync();
             Assert.Null(await page.EvaluateAsync<string?>("()=>localStorage.getItem('saz-viewer.http-layout.v1')"));
+            Assert.Equal("single", await page.EvaluateAsync<string>("()=>localStorage.getItem('saz-viewer.http-layout.wide.v2')"));
             await page.Locator("#httpTable tbody tr").First.ClickAsync();
 
             var toggle = page.Locator(".http-layout-toggle");
@@ -1071,7 +1175,7 @@ public sealed class HtmlReportBrowserTests
             Assert.False(await page.Locator("#primary-panel-request").EvaluateAsync<bool>("panel=>panel.classList.contains('hidden')"));
             Assert.False(await page.Locator("#primary-panel-response").EvaluateAsync<bool>("panel=>panel.classList.contains('hidden')"));
             Assert.Equal(2, await page.Locator(".http-view-search-input").CountAsync());
-            Assert.Equal("split", await page.EvaluateAsync<string>("()=>localStorage.getItem('saz-viewer.http-layout.v1')"));
+            Assert.Equal("split", await page.EvaluateAsync<string>("()=>localStorage.getItem('saz-viewer.http-layout.wide.v2')"));
 
             var requestSearch = page.Locator("#primary-panel-request .http-view-search-input");
             var responseSearch = page.Locator("#primary-panel-response .http-view-search-input");
@@ -1146,6 +1250,7 @@ public sealed class HtmlReportBrowserTests
             await Assertions.Expect(popup.Locator("#primary-panel-request .http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
             await Assertions.Expect(popup.Locator("#primary-panel-response .http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
 
+            await popup.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.narrow.v2','split')");
             await popup.SetViewportSizeAsync(600, 800);
             var narrowRequest = await popup.Locator("#primary-panel-request").BoundingBoxAsync();
             var narrowResponse = await popup.Locator("#primary-panel-response").BoundingBoxAsync();
@@ -1158,19 +1263,20 @@ public sealed class HtmlReportBrowserTests
             Assert.True(await popup.Locator("#httpInspector").EvaluateAsync<bool>("dialog=>dialog.scrollWidth<=dialog.clientWidth"));
 
             await popup.Locator(".http-layout-toggle").ClickAsync();
-            Assert.Equal("single", await popup.EvaluateAsync<string>("()=>localStorage.getItem('saz-viewer.http-layout.v1')"));
+            Assert.Equal("single", await popup.EvaluateAsync<string>("()=>localStorage.getItem('saz-viewer.http-layout.narrow.v2')"));
             Assert.Equal(1, await popup.Locator(".http-view-search-input").CountAsync());
             await page.Locator("#httpTable tbody tr").First.ClickAsync();
-            Assert.False(await page.Locator("#inspectorBody").EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
+            Assert.True(await page.Locator("#inspectorBody").EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
             await page.Locator("#inspectorClose").ClickAsync();
             await popup.CloseAsync();
             popup = null;
-            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.v1','invalid')");
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','invalid')");
             await page.ReloadAsync();
             await page.Locator("#httpTable tbody tr").First.ClickAsync();
-            Assert.False(await page.Locator("#inspectorBody").EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
+            Assert.True(await page.Locator("#inspectorBody").EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
             await page.Locator("#inspectorClose").ClickAsync();
 
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
             await page.GotoAsync(new Uri(lifecyclePath).AbsoluteUri);
             await page.Locator("#httpTable tbody tr").First.ClickAsync();
             await page.Locator(".http-layout-toggle").ClickAsync();
@@ -1236,6 +1342,8 @@ public sealed class HtmlReportBrowserTests
             try
             {
                 await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+                await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
+                await page.ReloadAsync();
                 await page.Locator("#httpTable tbody tr").ClickAsync();
                 var search = page.Locator(".http-view-search-input");
                 var status = page.Locator(".http-view-search-status");
@@ -1435,6 +1543,9 @@ public sealed class HtmlReportBrowserTests
         try
         {
             await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync(
+                "()=>localStorage.setItem(innerWidth>=900?'saz-viewer.http-layout.wide.v2':'saz-viewer.http-layout.narrow.v2','single')");
+            await page.ReloadAsync();
             var firstRow = page.Locator("#httpTable tbody tr").First;
             await firstRow.ClickAsync();
             await page.Locator("#httpInspector[open]").WaitForAsync();
@@ -1563,6 +1674,8 @@ public sealed class HtmlReportBrowserTests
         {
             var reportUrl = new Uri(reportPath).AbsoluteUri;
             await page.GotoAsync(reportUrl);
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
+            await page.ReloadAsync();
             await page.Locator("#httpSearch").FillAsync(InjectionText);
             await page.Locator("#httpFilter").SelectOptionAsync("2");
             await page.Locator("#hideConnect").CheckAsync();
@@ -1673,6 +1786,9 @@ public sealed class HtmlReportBrowserTests
         try
         {
             await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync(
+                "()=>localStorage.setItem(innerWidth>=900?'saz-viewer.http-layout.wide.v2':'saz-viewer.http-layout.narrow.v2','single')");
+            await page.ReloadAsync();
             await page.Locator("#httpFilter").SelectOptionAsync("websocket");
             Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
             await page.Locator("#httpSearch").FillAsync("ping");
@@ -2460,6 +2576,8 @@ public sealed class HtmlReportBrowserTests
             await page.AddInitScriptAsync(
                 "const nativeFrame=requestAnimationFrame.bind(globalThis);globalThis.requestAnimationFrame=callback=>setTimeout(()=>nativeFrame(callback),100)");
             await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
+            await page.ReloadAsync();
             await page.Locator("#httpTable tbody tr").ClickAsync();
             await page.Locator(".http-view-search-input").FillAsync("999");
             await page.Locator("#request-panel-json [data-view=\"pretty\"]").ClickAsync();
