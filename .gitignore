@@ -5,3 +5,5 @@ TestResults/
 *.user
 *.saz
 *.html
+*.zip
+scratch/
