@@ -5,7 +5,9 @@ This guide explains SAZ Viewer from the outside in. Start here, then follow the 
 ```mermaid
 flowchart LR
     SAZ["Fiddler SAZ<br/>ZIP archive"] --> CLI["SazViewer.Cli"]
+    SAZ --> APP["SazViewer.App<br/>WPF desktop host"]
     CLI --> AF["SazArchiveFactory"]
+    APP --> AF
     AF --> SP["SazParser"]
     SP --> HTTP["HTTP messages<br/>and bounded bodies"]
     SP --> WS["WebSocket frames<br/>and logical messages"]
@@ -16,7 +18,12 @@ flowchart LR
     MODEL --> GEN["HtmlReportGenerator"]
     GEN --> HTML["One self-contained<br/>offline HTML file"]
     HTML --> UI["Browser session list<br/>and lazy inspectors"]
+    GEN --> MEM["In-memory report<br/>served to WebView2"]
+    MEM --> UI
+    APP -.->|Export HTML| HTML
 ```
+
+The CLI writes the report to disk for any browser. The desktop app runs the same parse/scrub/generate pipeline, serves the generated HTML from memory to a locked-down WebView2 control, and writes it to disk only on explicit Export.
 
 ## Documents
 
@@ -34,6 +41,14 @@ flowchart LR
 |---|---|
 | `SazViewer.Cli\Program.cs` | Minimal process entry point that delegates to `CliApplication`. |
 | `SazViewer.Cli\CliApplication.cs` | CLI parsing, help/errors/exit codes, secure interactive or redirected password input, parsing, and report writing. |
+| `SazViewer.App\App.xaml.cs` / `AppArguments.cs` | Desktop entry point and `[--] [capture.saz]` / `--help` argument parsing. |
+| `SazViewer.App\MainWindow.xaml.cs` | File menu (Open, Open Recent, Export, Export scrubbed), drag-and-drop, background parse with busy state, title/status, and popup window tracking. |
+| `SazViewer.App\ReportBuilder.cs` | CLI-equivalent parse → optional `AuthScrubber` → `HtmlReportGenerator` pipeline, UTF-8 (no BOM) export, and failure wording. |
+| `SazViewer.App\SecureReportSession.cs` | Shared per-user WebView2 environment and all WebView2 lockdown: in-memory report serving, request/navigation/new-window/download/permission/context-menu policy. |
+| `SazViewer.App\ReportWebViewPolicy.cs` | Pure URI, frame, dropped-file, and context-menu allowlist decisions used by `SecureReportSession`. |
+| `SazViewer.App\PasswordDialog.xaml.cs` | Modal masked password dialog and the three-attempt `ISazPasswordProvider` adapter. |
+| `SazViewer.App\RecentFilesStore.cs` / `AppPaths.cs` | Per-user `%LOCALAPPDATA%\SazViewer` paths and the bounded, path-only `recent.json` list. |
+| `SazViewer.App\ReportPopupWindow.xaml.cs` | App-controlled window for the report's **Open in new tab** inspector. |
 | `SazViewer.Core\Models.cs` | Public report, HTTP, retained-body, WebSocket message, and frame models. |
 | `SazViewer.Core\SazArchive.cs` / `SazArchiveFactory` | ZIP inspection, plain/encrypted reader selection, archive limits, integrity checks, and bounded entry access. |
 | `SazViewer.Core\SazPasswordProvider.cs` | Password-provider contract, password limit, and archive/password exception taxonomy. |
@@ -47,6 +62,7 @@ flowchart LR
 | `SazViewer.Core\HtmlReportGenerator.cs` | Static HTML/CSS/JavaScript shell, CSP, browser-side list, inspector, tabs, search, copy, theme, popup, and split-view behavior. |
 | `SazViewer.Core\HtmlReportGenerator.Payloads.cs` | Session-list markup plus versioned compressed HTTP, MAPI, and WebSocket payload construction. |
 | `SazViewer.Tests` | Unit, integration, generator/envelope, encryption, CLI, and real Edge coverage. |
+| `SazViewer.App.Tests` | Desktop argument parsing, recent-files storage, CLI byte-for-byte export parity, WebView2 policy, and a launched-app WebView2 smoke test. |
 | `docs\mapi-parity.json` | Machine-readable MAPI protocol coverage inventory. |
 
 ### MAPI files

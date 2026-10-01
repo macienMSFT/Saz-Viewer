@@ -32,6 +32,48 @@ sequenceDiagram
     CLI->>Disk: UTF-8 without BOM
 ```
 
+## Desktop app to WebView2
+
+The desktop app reuses the same pipeline and generated HTML. It keeps the report in memory and serves it to WebView2 from a synthetic origin, so there is no temp file and no `NavigateToString` size limit.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Win as MainWindow
+    participant Builder as ReportBuilder
+    participant Core as Parser + Generator
+    participant Session as SecureReportSession
+    participant View as WebView2 report
+    participant Disk as Exported HTML
+
+    User->>Win: File › Open, drag-and-drop, recent file, or argument
+    Win->>Builder: Build(path, scrub: false) on a worker thread
+    opt encrypted archive
+        Core->>Win: Request password (DialogPasswordProvider, max 3)
+        Win->>User: Modal masked password dialog
+    end
+    Builder->>Core: Parse then Generate
+    Core-->>Builder: SazReport and HTML
+    Builder-->>Win: ReportDocument (HTML + UTF-8 bytes)
+    Win->>Session: Set document, navigate
+    View->>Session: GET https://saz-viewer.invalid/report.html
+    Session-->>View: 200 bytes from memory
+    View->>Session: Any other request or navigation
+    Session-->>View: 403 or cancelled
+    opt Open in new tab
+        View->>Session: NewWindowRequested (report URL + fragment)
+        Session->>Win: Create ReportPopupWindow with its own SecureReportSession
+    end
+    User->>Win: Export HTML or Export scrubbed HTML
+    alt plain export
+        Win->>Disk: Current HTML, UTF-8 without BOM
+    else scrubbed export
+        Win->>Builder: Build(path, scrub: true)
+        Builder->>Core: Parse, AuthScrubber.Scrub, Generate
+        Win->>Disk: Scrubbed HTML, UTF-8 without BOM
+    end
+```
+
 ## Archive discovery
 
 `SazParser` recognizes these independent entries without assuming contiguous IDs:

@@ -1,6 +1,6 @@
 # Security model
 
-SAZ files and every value inside them are untrusted input. The tool has two trust boundaries: archive parsing in .NET and report rendering in the browser.
+SAZ files and every value inside them are untrusted input. The tool has two trust boundaries: archive parsing in .NET and report rendering in the browser. The desktop app adds a WebView2 host boundary around the same report.
 
 ```mermaid
 flowchart LR
@@ -93,6 +93,18 @@ The scrub pass covers request/response start lines and headers, every cookie val
 Opaque data is fail-closed. If a retained HTTP or WebSocket payload cannot be decoded and safely rewritten, its bytes are dropped and the model receives an explicit `removed by --scrub-auth` note. Malformed declared JSON/XML/multipart bodies, binary WebSocket messages, and raw MAPI byte nodes are removed rather than interpreted heuristically; URL user-info is redacted. When decoded HTTP content is scrubbed, pre-decode compressed/transfer-encoded bytes are also removed so HexView, Image, WebView, Raw, search, and copy cannot recover the original. The unflagged path never invokes the scrubber and does not emit scrub metadata or UI.
 
 Scrubbing intentionally favors over-redaction and is defense in depth rather than a data-classification guarantee. Tests seed canaries across synthetic SAZ locations, inspect the resulting model and outer HTML, decompress every embedded gzip envelope, decode retained byte fields, and exercise representative inspector views in Edge.
+
+## Desktop host (WebView2)
+
+`SazViewer.App` adds a third boundary: the WebView2 host around the unchanged report. `SecureReportSession` applies the same policy to the main window and every inspector popup.
+
+- **Content source.** The report is served from memory through `WebResourceRequested` only for `https://saz-viewer.invalid/report.html` (exact scheme, host, path, and default port; no query or user-info). The reserved `.invalid` TLD cannot resolve. Responses carry `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`. The report's CSP is untouched. No report or temp file is written to disk unless the user exports.
+- **Requests.** The filter covers every URI, resource context, and request source kind; every other request receives `403` before reaching the network or file system.
+- **Navigation.** Top-level navigation is cancelled unless it targets the report document (fragments allowed). Subframes may load only `about:srcdoc` and `about:blank`, so the WebView tab's empty-permission sandbox iframe keeps working without exceptions. User-dropped `file:` `.saz` navigations are converted into an app open request; external protocol launches are cancelled.
+- **Windows.** `NewWindowRequested` is handled for every request. Only the report URL from a current document gets a new `ReportPopupWindow` with an identically configured session; everything else makes `window.open` return `null`. Popups close when the capture changes or the app exits.
+- **Other surfaces.** Downloads are cancelled (Export is a WPF save dialog), permission requests are denied, HTTP auth prompts are cancelled, host objects and web messages are disabled, DevTools and browser accelerators are Debug-only, and the context menu is reduced to edit commands.
+- **State.** WebView2 data, including the report's theme/layout/scrub-banner `localStorage`, lives in the per-user `%LOCALAPPDATA%\SazViewer\WebView2` folder. `recent.json` stores fully qualified paths only.
+- **Passwords.** The modal dialog reads `PasswordBox.SecurePassword` into a mutable `char[]` (zeroing the unmanaged copy), clears the box, and returns the buffer to the archive layer, which clears it after use. Passwords are never arguments, settings, or log entries.
 
 ## Review checklist
 

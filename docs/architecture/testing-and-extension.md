@@ -13,6 +13,7 @@
 | FastTransfer | `FastTransferParserTests.cs` | lexical continuation, grammar phases, provenance, ICS state |
 | Report generator | `HtmlReportGeneratorTests.cs`, `HtmlReportPayloadCompressionTests.cs` | encoded markup, envelope schemas, limits, deterministic models |
 | Real browser | `HtmlReportBrowserTests.cs` | Edge layout, keyboard/ARIA, popup, theme, split view, lazy lifecycle, CSP/no-network |
+| Desktop app | `SazViewer.App.Tests\*` | Argument parsing, `recent.json` storage, byte-identical Export/Export scrubbed vs. CLI (plain and encrypted), password retries, WebView2 URI/menu policy, and `AppSmokeTests` (launches `SazViewer.App.exe`, connects over CDP, checks report load, blocked fetch/navigation/pop-ups, `localStorage`, and the app-hosted inspector popup) |
 
 Synthetic ZIP/SAZ fixtures are created during tests. Proprietary captures and generated reports stay outside git.
 

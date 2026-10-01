@@ -1,6 +1,6 @@
 # SAZ Viewer
 
-SAZ Viewer is a local command-line tool that reads Fiddler SAZ archives and writes a single portable HTML report. It has no runtime dependency on Fiddler Classic, FiddlerCore, a browser library, or a network service. Captured values are safely encoded or inserted as text nodes, and the report's Content Security Policy blocks network access and captured active content.
+SAZ Viewer is a local command-line tool and Windows desktop app that read Fiddler SAZ archives. The CLI writes a single portable HTML report; the [desktop app](#desktop-app) shows the same report in a locked-down WebView2 window. Neither has a runtime dependency on Fiddler Classic, FiddlerCore, a browser library, or a network service. Captured values are safely encoded or inserted as text nodes, and the report's Content Security Policy blocks network access and captured active content.
 
 New to the codebase? Start with the [architecture guide](docs/architecture/README.md), which links component, data-flow, MAPI, browser-runtime, security, testing, and extension diagrams.
 
@@ -8,6 +8,7 @@ New to the codebase? Start with the [architecture guide](docs/architecture/READM
 
 - Windows with the .NET 8 SDK or newer to build
 - A current Microsoft Edge or Google Chrome release to open the generated report
+- For the desktop app: the .NET 8 Desktop Runtime and the Microsoft Edge WebView2 Runtime (preinstalled on current Windows 10/11)
 
 ## Build and test
 
@@ -47,6 +48,34 @@ The table and inspector both provide a compact light-bulb theme button. With no 
 
 If a session has associated `_w.txt` traffic, the same row opens a WebSocket inspector instead: chronological logical messages are listed on the left in compact **ID, Type, Body, Preview** columns and the selected message is shown on the right (stacked vertically on narrow screens). The desktop splitter supports pointer and keyboard resizing and remembers its ratio only while that report tab remains open. ID is the logical reassembled-message sequence, Body is the original logical payload byte count, and the one-line Preview is whitespace-normalized and explicitly ellipsized when bounded. The left-pane search filters case-insensitively against retained decoded text/JSON payload content only; binary data and any bytes omitted by safety truncation are not searched. The selected-payload search highlights bounded, case-insensitive literal matches in the active JSON Tree/Formatted Text, Text, or Raw view, with wrapped Previous/Next navigation; matching uses browser `toLowerCase()` behavior and is capped at 5,000 results. Client-to-server messages use a blue up arrow and accessible direction label; server-to-client messages use a green down arrow and label. Fragmented data messages are reassembled independently per direction while interleaved Ping, Pong, and Close frames stay visible. JSON, Text, and Raw tabs expose bounded safe views and Copy controls; Raw retains timestamps, fragmentation state, warnings, and underlying-frame IDs/metadata plus text or hex payload representation. Invalid, orphaned, unfinished, truncated, or unsupported frames remain visible with contextual warnings. Previous/Next may move between HTTP and WebSocket inspectors without changing the filtered table order. **Open in new tab** preserves the current filter and inspector type; after a successful handoff the original tab returns to the table, while a blocked popup leaves the original inspector open.
 
+## Desktop app
+
+`SazViewer.App` is a WPF (`net8.0-windows`) host for the exact report HTML/JavaScript the CLI generates; it does not reimplement the UI.
+
+```powershell
+dotnet run --project .\SazViewer.App
+dotnet run --project .\SazViewer.App -- .\capture.saz
+dotnet build .\SazViewer.App -c Release   # framework-dependent SazViewer.App.exe in bin\Release\net8.0-windows
+```
+
+Features:
+
+- **Open** a capture with **File › Open…** (`Ctrl+O`), by dragging one `.saz` file onto the window, or with a path argument (`SazViewer.App.exe capture.saz`; `--help` lists usage). One window shows one capture; opening another replaces it and closes its inspector windows. The title bar shows the file name. Parsing and report generation run off the UI thread while the status bar shows a busy indicator.
+- **Encrypted captures** prompt with a modal masked password dialog, allowing up to three attempts like the interactive CLI. Passwords are never logged, persisted, or accepted as arguments; the dialog copies the `SecureString` into a mutable buffer that the archive layer clears after use (the same managed-`string` caveat as the CLI applies).
+- **File › Export HTML…** writes the report byte-for-byte as `saz-viewer capture.saz out.html` would. **Export scrubbed HTML (remove credentials)…** matches `saz-viewer --scrub-auth`; it re-parses the capture (re-prompting for an encrypted capture's password) because scrubbing rewrites the in-memory model. Export refuses to overwrite the source capture.
+- **File › Open Recent** lists up to 10 captures, most recent first, stored as full paths only in `%LOCALAPPDATA%\SazViewer\recent.json`. Missing files are removed with a message; **Clear recent files** empties the list. A corrupt or unreadable file is ignored.
+- The report's own `localStorage` features (theme, split layout, scrub banner) persist across captures and sessions, and **Open in new tab** opens an app-controlled inspector window.
+
+Security notes:
+
+- The report is held in memory and served only to the app's WebView2 through `WebResourceRequested` at the synthetic origin `https://saz-viewer.invalid/report.html` (the reserved `.invalid` TLD never resolves). No temp files are written, so reports of any size (for example ~18 MB for 1,172 sessions) load without the `NavigateToString` 2 MB limit. The report's CSP is unchanged.
+- Every other request — network, `file:`, `data:` documents, other paths on the synthetic origin — is answered with `403` before leaving the process. Top-level navigation away from the report is cancelled, subframes may load only `about:srcdoc`/`about:blank` (the WebView tab's empty-permission sandbox is untouched), and external protocol launches, downloads, permission requests, and HTTP authentication prompts are denied. Export is performed by the app, not the browser.
+- New windows are refused except the report's own inspector URL, which opens in a `ReportPopupWindow` with an identical `SecureReportSession`; these windows close when the capture is replaced or the app exits. Dropped `.saz` files are routed to the app instead of being displayed.
+- DevTools and browser accelerator keys are enabled only in Debug builds. Host objects, web messages, autofill, password saving, swipe navigation, the status bar, built-in error pages, browser extensions, and SmartScreen lookups are disabled. The context menu keeps only edit commands (copy, cut, paste, select all, undo, redo).
+- WebView2 browser data lives in the per-user `%LOCALAPPDATA%\SazViewer\WebView2` folder. `SAZVIEWER_DATA_DIR` (fully qualified) redirects the whole `%LOCALAPPDATA%\SazViewer` root and exists for isolated test runs.
+
+Manual check: run `dotnet run --project .\SazViewer.App -- .\capture.saz`; confirm the title and status-bar counts, open a session, use **Open in new tab**, toggle the theme and reopen the app, drag a second capture onto the window, open an encrypted capture (wrong password three times shows an error), and compare **Export HTML** / **Export scrubbed HTML** output with the CLI using `fc.exe /b`.
+
 ## Publish a self-contained Windows executable
 
 ```powershell
@@ -54,7 +83,7 @@ dotnet publish .\SazViewer.Cli\SazViewer.Cli.csproj -c Release -r win-x64 --self
 .\publish\saz-viewer.exe .\capture.saz .\capture.html
 ```
 
-Use `win-arm64` instead of `win-x64` for Windows on ARM. The published executable includes the .NET runtime; only the generated executable is required to run the tool.
+Use `win-arm64` instead of `win-x64` for Windows on ARM. The published executable includes the .NET runtime; only the generated executable is required to run the tool. The desktop app is currently built framework-dependent only; MSIX and single-file packaging are not provided yet.
 
 ## Capture handling
 
