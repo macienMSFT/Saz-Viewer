@@ -806,13 +806,19 @@ public sealed class HtmlReportGeneratorTests
     {
         var report = new SazReport { SourceName = "filter.saz" };
         report.Sessions.Add(
-            new HttpSession { Id = "1", ArchiveOrder = 0, Method = "GET", Url = "https://example.test/", StatusCode = 200 });
+            new HttpSession { Id = "1", ArchiveOrder = 0, Method = "cOnNeCt", Url = "https://example.test/", StatusCode = 200 });
 
         var html = new HtmlReportGenerator().Generate(report);
 
         // The dialog is a fully separate overlay: opening/closing it never touches the underlying
         // table's filter inputs or scroll position, so only one, simple filter binding remains.
-        Assert.Contains("bindFilter('httpSearch','httpFilter','httpTable');", html, StringComparison.Ordinal);
+        Assert.Contains("<input id=\"hideConnect\" type=\"checkbox\">Hide CONNECT", html, StringComparison.Ordinal);
+        Assert.Contains("data-method=\"connect\"", html, StringComparison.Ordinal);
+        Assert.Contains("bindFilter('httpSearch','httpFilter','hideConnect','httpTable');", html, StringComparison.Ordinal);
+        Assert.Contains("(!checkbox.checked||row.dataset.method!=='connect')", html, StringComparison.Ordinal);
+        Assert.Contains("if(hideConnect.checked)params.set('hideConnect','1');", html, StringComparison.Ordinal);
+        Assert.Contains("hideConnectValue!==null&&hideConnectValue!=='1'", html, StringComparison.Ordinal);
+        Assert.Contains("hideConnect.checked=state.hideConnect;", html, StringComparison.Ordinal);
         Assert.DoesNotContain("wsSearch", html, StringComparison.Ordinal);
         Assert.DoesNotContain("wsFilter", html, StringComparison.Ordinal);
         Assert.DoesNotContain("wsTable", html, StringComparison.Ordinal);

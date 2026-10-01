@@ -94,8 +94,8 @@ public sealed class HtmlReportGenerator
 body.inspector-open{overflow:hidden}
 body.inspector-only main{display:none}
 main{width:100%;padding:4px}h2,h3,h4{margin:.25em 0}.muted,.format-status{color:var(--muted)}
-.controls{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 4px}input,select,button{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:7px 10px}
-input{min-width:280px;flex:1}button{cursor:pointer}
+.controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 4px}input,select,button{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:7px 10px}
+input{min-width:280px;flex:1}button{cursor:pointer}.filter-toggle{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}.filter-toggle input{width:16px;height:16px;min-width:0;flex:none;margin:0;padding:0}
 .theme-toggle{flex:0 0 36px;display:inline-flex;align-items:center;justify-content:center;width:36px;min-width:36px;height:36px;padding:6px;color:var(--text)}.theme-toggle svg{display:block;width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.theme-toggle .theme-bulb-core{fill:transparent;stroke:none}.theme-toggle[aria-pressed=true]{color:var(--syn-number);border-color:var(--accent)}.theme-toggle[aria-pressed=true] .theme-bulb-core{fill:currentColor}.theme-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 table{width:100%;border-collapse:collapse;background:var(--panel);font-size:13px}th{position:sticky;top:0;z-index:2;background:var(--panel2);text-align:left}
 th,td{padding:8px;border:1px solid var(--line);vertical-align:top}tbody tr:hover{background:var(--hover)}#httpTable{table-layout:auto}#httpTable th,#httpTable td{padding:5px 7px;line-height:1.3}
@@ -1809,22 +1809,23 @@ function setupCopyControls(root){
     });
   });
 }
-function bindFilter(inputId,selectId,tableId){
-  const input=document.getElementById(inputId),select=document.getElementById(selectId),rows=document.querySelectorAll(`#${tableId} tbody tr`);
+function bindFilter(inputId,selectId,checkboxId,tableId){
+  const input=document.getElementById(inputId),select=document.getElementById(selectId),checkbox=document.getElementById(checkboxId),rows=document.querySelectorAll(`#${tableId} tbody tr`);
   function apply(){
     const query=input.value.toLowerCase(),filter=select.value;
     rows.forEach(row=>{
       const filterMatch=!filter||(filter==='mapi'?row.dataset.mapi==='true':filter==='websocket'?row.dataset.websocket==='true':row.dataset.filter===filter);
-      const visible=(!query||row.dataset.search.includes(query))&&filterMatch;
+      const visible=(!query||row.dataset.search.includes(query))&&filterMatch&&(!checkbox.checked||row.dataset.method!=='connect');
       row.classList.toggle('hidden',!visible);
     });
   }
-  input.addEventListener('input',apply);select.addEventListener('change',apply);
+  input.addEventListener('input',apply);select.addEventListener('change',apply);checkbox.addEventListener('change',apply);
   return apply;
 }
 const httpSearch=document.getElementById('httpSearch');
 const httpFilter=document.getElementById('httpFilter');
-const applyHttpFilter=bindFilter('httpSearch','httpFilter','httpTable');
+const hideConnect=document.getElementById('hideConnect');
+const applyHttpFilter=bindFilter('httpSearch','httpFilter','hideConnect','httpTable');
 const INSPECTOR_HASH_PREFIX='#saz-inspector?';
 const MAX_INSPECTOR_HASH_LENGTH=4096;
 const MAX_INSPECTOR_QUERY_LENGTH=512;
@@ -1836,6 +1837,7 @@ function serializeInspectorState(row){
   params.set('session',row.dataset.detail);
   if(httpSearch.value)params.set('q',httpSearch.value);
   if(httpFilter.value)params.set('filter',httpFilter.value);
+  if(hideConnect.checked)params.set('hideConnect','1');
   const hash=`${INSPECTOR_HASH_PREFIX}${params.toString()}`;
   return hash.length<=MAX_INSPECTOR_HASH_LENGTH?hash:null;
 }
@@ -1846,15 +1848,17 @@ function parseInspectorState(hash){
     const params=new URLSearchParams(hash.slice(INSPECTOR_HASH_PREFIX.length));
     const entries=[...params.entries()];
     if(entries.length>8)return{error:'Inspector link state has too many settings.'};
-    if(entries.some(([key])=>!['v','session','q','filter'].includes(key)))return{error:'Inspector link state contains an unsupported setting.'};
+    if(entries.some(([key])=>!['v','session','q','filter','hideConnect'].includes(key)))return{error:'Inspector link state contains an unsupported setting.'};
     if(params.get('v')!=='1')return{error:'Inspector link version is not supported.'};
     const session=params.get('session')||'';
     const query=params.get('q')||'';
     const filter=params.get('filter')||'';
+    const hideConnectValue=params.get('hideConnect');
     if(!/^http-detail-\d{1,9}$/.test(session))return{error:'Inspector link does not identify a valid session.'};
     if(query.length>MAX_INSPECTOR_QUERY_LENGTH)return{error:'Inspector search text is too long.'};
     if(!ALLOWED_INSPECTOR_FILTERS.has(filter))return{error:'Inspector link contains an unsupported filter.'};
-    return{session,query,filter};
+    if(hideConnectValue!==null&&hideConnectValue!=='1')return{error:'Inspector link contains an unsupported CONNECT filter setting.'};
+    return{session,query,filter,hideConnect:hideConnectValue==='1'};
   }catch{
     return{error:'Inspector link state could not be read.'};
   }
@@ -2141,6 +2145,7 @@ function enterInspectorOnlyMode(state){
   inspectorClose.title='Return to the session table in this tab';
   httpSearch.value=state.query;
   httpFilter.value=state.filter;
+  hideConnect.checked=state.hideConnect;
   applyHttpFilter();
   const rows=visibleRows();
   let row=rows.find(candidate=>candidate.dataset.detail===state.session);
@@ -2189,6 +2194,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
 <section class="http-workspace" aria-label="HTTP sessions">
 <div class="controls"><input id="httpSearch" type="search" aria-label="Search HTTP sessions" placeholder="Search method, URL, result, elapsed time, content type, endpoints...">
 <select id="httpFilter" aria-label="Filter HTTP status or protocol"><option value="">All sessions</option><option value="websocket">WebSocket only</option><option value="mapi">MAPI/NSPI only</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option></select>
+<label class="filter-toggle" for="hideConnect"><input id="hideConnect" type="checkbox">Hide CONNECT</label>
 <button type="button" class="theme-toggle" aria-label="Switch theme" title="Switch theme" aria-pressed="false"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M8.5 15.5A6 6 0 1 1 15.5 15.5C14.6 16.2 14 17 14 18h-4c0-1-.6-1.8-1.5-2.5Z"/><circle class="theme-bulb-core" cx="12" cy="11" r="2.4"/></svg></button></div>
 <div id="reportStatus" class="warning hidden" role="status" aria-live="polite"></div>
 <div class="http-table-scroll"><table id="httpTable"><thead><tr><th class="http-time">Time</th><th class="http-id">ID</th><th class="http-result num">Result</th><th class="http-method">Method</th><th class="http-url">URL</th><th class="http-elapsed num">Elapsed Time</th><th class="http-bytes num">Req</th><th class="http-bytes num">Resp</th></tr></thead><tbody>
@@ -2234,7 +2240,9 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         html.Append("\" data-detail=\"http-detail-").Append(index).Append("\" data-filter=\"")
             .Append(filter).Append("\" data-mapi=\"").Append(session.Mapi is not null ? "true" : "false")
             .Append("\" data-websocket=\"").Append(webSocketMessages.Count > 0 ? "true" : "false")
-            .Append("\" data-summary=\"");
+            .Append("\" data-method=\"");
+        Attribute(html, (session.Method ?? string.Empty).ToLowerInvariant());
+        html.Append("\" data-summary=\"");
         Attribute(html, summary);
         html.Append("\" data-search=\"");
         Attribute(html, search);

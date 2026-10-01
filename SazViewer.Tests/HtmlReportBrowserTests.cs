@@ -85,16 +85,16 @@ public sealed class HtmlReportBrowserTests
                 Assert.Equal("200", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-result").InnerTextAsync());
                 Assert.Equal("HTTP 200 OK", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-result").GetAttributeAsync("title"));
                 Assert.Equal("1,234 ms", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-elapsed").InnerTextAsync());
-                Assert.Equal("\u2014", await page.Locator("#httpTable tbody tr").Nth(2).Locator(".http-result").InnerTextAsync());
-                Assert.Equal("Aborted by client", await page.Locator("#httpTable tbody tr").Nth(2).Locator(".http-result").GetAttributeAsync("title"));
-                Assert.Equal("\u2014", await page.Locator("#httpTable tbody tr").Nth(2).Locator(".http-elapsed").InnerTextAsync());
+                Assert.Equal("\u2014", await page.Locator("#httpTable tbody tr").Nth(3).Locator(".http-result").InnerTextAsync());
+                Assert.Equal("Aborted by client", await page.Locator("#httpTable tbody tr").Nth(3).Locator(".http-result").GetAttributeAsync("title"));
+                Assert.Equal("\u2014", await page.Locator("#httpTable tbody tr").Nth(3).Locator(".http-elapsed").InnerTextAsync());
                 Assert.Equal(0, await page.Locator("#httpTable .http-protocol").CountAsync());
 
                 var layoutError = await page.Locator("#httpTable").EvaluateAsync<string>(
                     """
                     table=>{
                       const header=[...table.tHead.rows[0].cells],rows=[...table.tBodies[0].rows];
-                      if(header.length!==8||rows.length!==3)return'wrong table shape';
+                      if(header.length!==8||rows.length!==4)return'wrong table shape';
                       const contentWidth=cell=>{
                         const range=document.createRange();range.selectNodeContents(cell);
                         const style=getComputedStyle(cell);
@@ -127,6 +127,18 @@ public sealed class HtmlReportBrowserTests
                 var widthsBeforeFilter = await page.Locator("#httpTable thead th").EvaluateAllAsync<float[]>(
                     "cells=>cells.map(cell=>cell.getBoundingClientRect().width)");
                 var search = page.Locator("#httpSearch");
+                var hideConnect = page.Locator("#hideConnect");
+                await hideConnect.CheckAsync();
+                Assert.Equal(3, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+                await search.FillAsync("connect-only");
+                Assert.Equal(0, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+                await search.FillAsync("");
+                await page.Locator("#httpTable tbody tr:not(.hidden)").First.ClickAsync();
+                Assert.Equal("1 of 3", await page.Locator("#inspectorPosition").InnerTextAsync());
+                await page.Locator("#inspectorNext").ClickAsync();
+                Assert.Equal("2 of 3", await page.Locator("#inspectorPosition").InnerTextAsync());
+                Assert.Contains("long-session-id", await page.Locator("#inspectorTitle").InnerTextAsync());
+                await page.Locator("#inspectorClose").ClickAsync();
                 await search.FillAsync("1,234 ms");
                 Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
                 await search.FillAsync("aborted by client");
@@ -142,6 +154,11 @@ public sealed class HtmlReportBrowserTests
                 await page.Locator("#httpFilter").SelectOptionAsync("2");
                 Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
                 await page.Locator("#httpFilter").SelectOptionAsync("0");
+                Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+                await page.Locator("#httpFilter").SelectOptionAsync("");
+                await search.FillAsync("connect-only");
+                Assert.Equal(0, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+                await hideConnect.UncheckAsync();
                 Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
                 Assert.Empty(errors);
             }
@@ -1421,6 +1438,7 @@ public sealed class HtmlReportBrowserTests
             await page.GotoAsync(reportUrl);
             await page.Locator("#httpSearch").FillAsync(InjectionText);
             await page.Locator("#httpFilter").SelectOptionAsync("2");
+            await page.Locator("#hideConnect").CheckAsync();
             Assert.Equal(2, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
             var originalRow = page.Locator("#httpTable tbody tr:not(.hidden)").First;
             var tableScroll = page.Locator(".http-table-scroll");
@@ -1441,6 +1459,7 @@ public sealed class HtmlReportBrowserTests
             Assert.True(await page.Locator("main").IsVisibleAsync());
             Assert.Equal(InjectionText, await page.Locator("#httpSearch").InputValueAsync());
             Assert.Equal("2", await page.Locator("#httpFilter").InputValueAsync());
+            Assert.True(await page.Locator("#hideConnect").IsCheckedAsync());
             Assert.Equal(originalScrollTop, await tableScroll.EvaluateAsync<double>("element=>element.scrollTop"));
             Assert.Equal("http-detail-0", await page.EvaluateAsync<string>(
                 "() => document.activeElement?.getAttribute('data-detail') || ''"));
@@ -1449,6 +1468,7 @@ public sealed class HtmlReportBrowserTests
             Assert.StartsWith(reportUrl, popup.Url, StringComparison.Ordinal);
             Assert.Contains("#saz-inspector?", popup.Url, StringComparison.Ordinal);
             Assert.Contains("q=%3Cimg", popup.Url, StringComparison.Ordinal);
+            Assert.Contains("hideConnect=1", popup.Url, StringComparison.Ordinal);
             Assert.True(await popup.Locator("body").EvaluateAsync<bool>(
                 "body => body.classList.contains('inspector-only')"));
             Assert.True(await popup.Locator("main").EvaluateAsync<bool>(
@@ -1456,6 +1476,7 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal("Back to sessions", await popup.Locator("#inspectorClose").InnerTextAsync());
             Assert.Equal("1 of 2", await popup.Locator("#inspectorPosition").InnerTextAsync());
             Assert.Equal(2, await popup.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            Assert.True(await popup.Locator("#hideConnect").IsCheckedAsync());
             Assert.Contains("payload", await popup.Locator("#primary-panel-request").InnerTextAsync());
             var popupRequest = await popup.Locator("#primary-panel-request").BoundingBoxAsync();
             Assert.NotNull(popupRequest);
@@ -1483,6 +1504,7 @@ public sealed class HtmlReportBrowserTests
 
             Assert.Equal(InjectionText, await page.Locator("#httpSearch").InputValueAsync());
             Assert.Equal("2", await page.Locator("#httpFilter").InputValueAsync());
+            Assert.True(await page.Locator("#hideConnect").IsCheckedAsync());
 
             Assert.False(await popup.EvaluateAsync<bool>("() => Boolean(globalThis.pwned)"));
             Assert.False(await page.EvaluateAsync<bool>("() => Boolean(globalThis.pwned)"));
@@ -1493,6 +1515,7 @@ public sealed class HtmlReportBrowserTests
             Assert.True(await popup.Locator("main").IsVisibleAsync());
             Assert.Equal(InjectionText, await popup.Locator("#httpSearch").InputValueAsync());
             Assert.Equal("2", await popup.Locator("#httpFilter").InputValueAsync());
+            Assert.True(await popup.Locator("#hideConnect").IsCheckedAsync());
             Assert.DoesNotContain("#saz-inspector?", popup.Url, StringComparison.Ordinal);
 
             await popup.WaitForTimeoutAsync(100);
@@ -2584,9 +2607,23 @@ public sealed class HtmlReportBrowserTests
         });
         report.Sessions.Add(new HttpSession
         {
-            Id = "long-session-id",
+            Id = "connect",
             ArchiveOrder = 1,
             Timestamp = new DateTimeOffset(2026, 9, 30, 12, 0, 1, TimeSpan.Zero),
+            Method = "cOnNeCt",
+            Url = "https://connect-only.example.test:443",
+            StatusCode = 200,
+            StatusText = "Connection Established",
+            ElapsedMilliseconds = 11,
+            RequestBytes = 100,
+            ResponseBytes = 200,
+            Response = Message("HTTP/1.1 200 Connection Established", "text/plain", "")
+        });
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "long-session-id",
+            ArchiveOrder = 2,
+            Timestamp = new DateTimeOffset(2026, 9, 30, 12, 0, 2, TimeSpan.Zero),
             Method = "OPTIONS",
             Url = "https://example.test/short",
             StatusCode = 418,
@@ -2599,8 +2636,8 @@ public sealed class HtmlReportBrowserTests
         report.Sessions.Add(new HttpSession
         {
             Id = "3",
-            ArchiveOrder = 2,
-            Timestamp = new DateTimeOffset(2026, 9, 30, 12, 0, 2, TimeSpan.Zero),
+            ArchiveOrder = 3,
+            Timestamp = new DateTimeOffset(2026, 9, 30, 12, 0, 3, TimeSpan.Zero),
             Method = "PATCH",
             Url = "https://example.test/aborted",
             StatusText = "Aborted by client",
