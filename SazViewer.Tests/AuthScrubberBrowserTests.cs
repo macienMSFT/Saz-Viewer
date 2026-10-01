@@ -32,7 +32,7 @@ public sealed class AuthScrubberBrowserTests
             Request = request,
             Response = response
         });
-        AuthScrubber.Scrub(report);
+        var summary = AuthScrubber.Scrub(report);
         Assert.Contains("[REDACTED:", report.Sessions[0].Response!.Body.Preview, StringComparison.Ordinal);
         Assert.DoesNotContain(canary, report.Sessions[0].Response!.Body.Preview, StringComparison.Ordinal);
 
@@ -63,11 +63,49 @@ public sealed class AuthScrubberBrowserTests
             await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
             await page.ReloadAsync();
             var banner = page.Locator(".auth-scrub-banner");
+            var bannerToggle = page.Locator("#authScrubToggle");
+            var bannerDetails = page.Locator("#authScrubDetails");
             await Assertions.Expect(banner).ToBeVisibleAsync();
-            await Assertions.Expect(banner).ToContainTextAsync("generated with --scrub-auth");
-            await Assertions.Expect(banner).ToContainTextAsync("Bearer:");
+            await Assertions.Expect(page.Locator("#authScrubSummary"))
+                .ToHaveTextAsync(
+                    $"Credentials scrubbed: {summary.Total.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} replacements");
+            await Assertions.Expect(bannerToggle).ToHaveAttributeAsync("aria-expanded", "false");
+            await Assertions.Expect(bannerToggle).ToHaveAttributeAsync("aria-controls", "authScrubDetails");
+            await Assertions.Expect(bannerToggle).ToHaveAttributeAsync("aria-label", "Show credential scrub details");
+            await Assertions.Expect(bannerDetails).ToBeHiddenAsync();
+            await bannerToggle.FocusAsync();
+            await bannerToggle.PressAsync("Enter");
+            await Assertions.Expect(bannerToggle).ToHaveAttributeAsync("aria-expanded", "true");
+            await Assertions.Expect(bannerToggle).ToHaveAttributeAsync("aria-label", "Hide credential scrub details");
+            await Assertions.Expect(bannerDetails).ToBeVisibleAsync();
+            await Assertions.Expect(bannerDetails).ToContainTextAsync("Bearer:");
+            Assert.Equal(
+                "expanded",
+                await page.EvaluateAsync<string>("()=>localStorage.getItem('saz-viewer.auth-scrub-banner.v1')"));
+            await page.ReloadAsync();
+            await Assertions.Expect(bannerToggle).ToHaveAttributeAsync("aria-expanded", "true");
+            await Assertions.Expect(bannerDetails).ToBeVisibleAsync();
             await Assertions.Expect(page.Locator(".http-url-value")).ToContainTextAsync("[REDACTED:Token]");
             Assert.DoesNotContain(canary, await page.ContentAsync(), StringComparison.Ordinal);
+
+            await page.Locator("#httpTable tbody tr").ClickAsync();
+            var popupTask = page.WaitForPopupAsync();
+            await page.Locator("#inspectorOpenTab").ClickAsync();
+            var popup = await popupTask;
+            popup.Console += (_, message) =>
+            {
+                if (message.Type == "error")
+                {
+                    errors.Add(message.Text);
+                }
+            };
+            popup.PageError += (_, exception) => errors.Add(exception);
+            await popup.Locator("#inspectorClose").ClickAsync();
+            await Assertions.Expect(popup.Locator("#authScrubToggle")).ToHaveAttributeAsync("aria-expanded", "true");
+            await popup.Locator("#authScrubToggle").FocusAsync();
+            await popup.Locator("#authScrubToggle").PressAsync("Space");
+            await Assertions.Expect(bannerToggle).ToHaveAttributeAsync("aria-expanded", "false");
+            await popup.CloseAsync();
 
             await page.Locator("#httpTable tbody tr").ClickAsync();
             await page.Locator("#request-tab-json").ClickAsync();
@@ -96,6 +134,30 @@ public sealed class AuthScrubberBrowserTests
 
             Assert.DoesNotContain(canary, await page.Locator("#httpInspector").InnerTextAsync(), StringComparison.Ordinal);
             Assert.Empty(errors);
+
+            await using var blockedContext = await browser.NewContextAsync();
+            var blockedPage = await blockedContext.NewPageAsync();
+            var blockedErrors = new List<string>();
+            blockedPage.Console += (_, message) =>
+            {
+                if (message.Type == "error")
+                {
+                    blockedErrors.Add(message.Text);
+                }
+            };
+            blockedPage.PageError += (_, exception) => blockedErrors.Add(exception);
+            await blockedPage.AddInitScriptAsync(
+                "Storage.prototype.getItem=()=>{throw new DOMException('blocked')};Storage.prototype.setItem=()=>{throw new DOMException('blocked')}");
+            await blockedPage.GotoAsync(new Uri(path).AbsoluteUri);
+            await Assertions.Expect(blockedPage.Locator("#authScrubToggle"))
+                .ToHaveAttributeAsync("aria-expanded", "false");
+            await blockedPage.Locator("#authScrubToggle").ClickAsync();
+            await Assertions.Expect(blockedPage.Locator("#authScrubToggle"))
+                .ToHaveAttributeAsync("aria-expanded", "true");
+            await blockedPage.ReloadAsync();
+            await Assertions.Expect(blockedPage.Locator("#authScrubToggle"))
+                .ToHaveAttributeAsync("aria-expanded", "false");
+            Assert.Empty(blockedErrors);
         }
         finally
         {

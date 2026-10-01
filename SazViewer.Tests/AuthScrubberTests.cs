@@ -37,7 +37,15 @@ public sealed class AuthScrubberTests
         Assert.Contains("Bearer", summary.Counts.Keys);
         Assert.Contains("Cookie", summary.Counts.Keys);
         Assert.Contains("AzureSAS", summary.Counts.Keys);
+        Assert.Contains(
+            $"Credentials scrubbed: {summary.Total.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} replacements",
+            html,
+            StringComparison.Ordinal);
         Assert.Contains("This report was generated with --scrub-auth.", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"authScrubToggle\" aria-expanded=\"false\" aria-controls=\"authScrubDetails\"", html, StringComparison.Ordinal);
+        Assert.Contains("<div id=\"authScrubDetails\" hidden", html, StringComparison.Ordinal);
+        Assert.Contains("const key='saz-viewer.auth-scrub-banner.v1';", html, StringComparison.Ordinal);
+        Assert.Contains("if(event.key===key||event.key===null)", html, StringComparison.Ordinal);
         Assert.Contains("[REDACTED:Bearer]", DecompressedPayloadText(html), StringComparison.Ordinal);
         Assert.Contains("[REDACTED:Cookie]", DecompressedPayloadText(html), StringComparison.Ordinal);
         Assert.Contains("[REDACTED:AzureSAS]", DecompressedPayloadText(html), StringComparison.Ordinal);
@@ -59,6 +67,8 @@ public sealed class AuthScrubberTests
 
         Assert.Contains(Canaries[0], DecompressedPayloadText(before), StringComparison.Ordinal);
         Assert.Null(report.AuthScrub);
+        Assert.DoesNotContain("auth-scrub-banner", before, StringComparison.Ordinal);
+        Assert.DoesNotContain("saz-viewer.auth-scrub-banner.v1", before, StringComparison.Ordinal);
 
         var first = AuthScrubber.Scrub(report);
         var firstHtml = new HtmlReportGenerator().Generate(report);

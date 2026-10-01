@@ -13,12 +13,16 @@ public sealed partial class HtmlReportGenerator
 {
     private static void AppendAuthScrubBanner(StringBuilder html, AuthScrubSummary summary)
     {
-        html.Append("<aside class=\"warning auth-scrub-banner\" role=\"status\" aria-label=\"Authentication scrub summary\"><strong>This report was generated with --scrub-auth.</strong> ")
-            .Append(summary.Total.ToString("N0", CultureInfo.InvariantCulture))
-            .Append(" secret value(s) were replaced.");
+        var total = summary.Total;
+        html.Append("<aside class=\"warning auth-scrub-banner\" aria-labelledby=\"authScrubSummary\" style=\"display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:3px 7px;margin:3px 0\">")
+            .Append("<strong id=\"authScrubSummary\" style=\"min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap\">Credentials scrubbed: ")
+            .Append(total.ToString("N0", CultureInfo.InvariantCulture))
+            .Append(total == 1 ? " replacement" : " replacements")
+            .Append("</strong><button type=\"button\" id=\"authScrubToggle\" aria-expanded=\"false\" aria-controls=\"authScrubDetails\" aria-label=\"Show credential scrub details\" title=\"Show credential scrub details\" style=\"flex:none;margin-left:auto;padding:2px 7px;font-size:12px;line-height:1.2\">Details</button>")
+            .Append("<div id=\"authScrubDetails\" hidden style=\"flex-basis:100%\"><span>This report was generated with --scrub-auth.</span>");
         if (summary.Counts.Count > 0)
         {
-            html.Append("<ul>");
+            html.Append("<ul style=\"margin:2px 0 0 24px\">");
             foreach (var item in summary.Counts)
             {
                 html.Append("<li>");
@@ -27,7 +31,31 @@ public sealed partial class HtmlReportGenerator
             }
             html.Append("</ul>");
         }
-        html.Append("</aside>");
+        html.Append("""
+</div></aside>
+<script>
+(()=>{
+const button=document.getElementById('authScrubToggle');
+const details=document.getElementById('authScrubDetails');
+if(!button||!details)return;
+const key='saz-viewer.auth-scrub-banner.v1';
+function apply(expanded,persist){
+  button.setAttribute('aria-expanded',String(expanded));
+  details.hidden=!expanded;
+  const label=`${expanded?'Hide':'Show'} credential scrub details`;
+  button.setAttribute('aria-label',label);
+  button.title=label;
+  if(persist){try{localStorage.setItem(key,expanded?'expanded':'collapsed')}catch{}}
+}
+function read(){try{return localStorage.getItem(key)==='expanded'}catch{return false}}
+apply(read(),false);
+button.addEventListener('click',()=>apply(button.getAttribute('aria-expanded')!=='true',true));
+window.addEventListener('storage',event=>{
+  if(event.key===key||event.key===null)apply(event.key===key&&event.newValue==='expanded',false);
+});
+})();
+</script>
+""");
     }
 
     private void AppendHttpSection(
