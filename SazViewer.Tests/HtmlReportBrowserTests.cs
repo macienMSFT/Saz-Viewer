@@ -63,6 +63,149 @@ public sealed class HtmlReportBrowserTests
         }
     }
 
+    [WindowsEdgeFact]
+    public async Task ImageHexAndAuthViewsAreSafeExactAndResetAcrossNavigation()
+        {
+            var tempDirectory = Path.Combine(Path.GetTempPath(), $"saz viewer content tabs {Guid.NewGuid():N}");
+            var reportPath = Path.Combine(tempDirectory, "content-tabs.html");
+            try
+            {
+                Directory.CreateDirectory(tempDirectory);
+                await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(CreateContentTabReport()));
+
+                using var playwright = await Playwright.CreateAsync();
+                await using var browser = await playwright.Chromium.LaunchAsync(new()
+                {
+                    Channel = "msedge",
+                    Headless = true
+                });
+                await using var context = await browser.NewContextAsync(new()
+                {
+                    ViewportSize = new ViewportSize { Width = 1100, Height = 760 }
+                });
+                var page = await context.NewPageAsync();
+                var errors = new List<string>();
+                CaptureErrors(page, errors);
+                await InstallClipboardTestHookAsync(page);
+                await page.AddInitScriptAsync("""
+                    globalThis.__createdObjectUrls=[];
+                    globalThis.__revokedObjectUrls=[];
+                    const nativeCreateObjectURL=URL.createObjectURL.bind(URL);
+                    const nativeRevokeObjectURL=URL.revokeObjectURL.bind(URL);
+                    URL.createObjectURL=value=>{const url=nativeCreateObjectURL(value);globalThis.__createdObjectUrls.push(url);return url};
+                    URL.revokeObjectURL=url=>{globalThis.__revokedObjectUrls.push(url);nativeRevokeObjectURL(url)};
+                    """);
+                await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+
+                await page.Locator("#httpTable tbody tr").First.ClickAsync();
+                Assert.Equal(
+                    ["JSON", "XML", "MAPI", "Image", "HexView", "Auth", "Headers", "Raw"],
+                    await page.Locator("#primary-panel-request>.message-panel>.tab-strip>[role=tab]").AllTextContentsAsync());
+                await page.Locator("#request-tab-hex").ClickAsync();
+                await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("1F 8B 08 00");
+                await Assertions.Expect(page.Locator("#request-panel-hex .hex-status")).ToHaveTextAsync("Showing all 8 bytes.");
+                await page.Locator("#request-panel-hex .hex-source").SelectOptionAsync("decoded");
+                await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("00 01 02 03 04 05 06 07");
+                await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("F8 F9 FA FB FC FD FE FF");
+                await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("| !\"#$%&'()*+,-./|");
+                var decodedHex = await page.Locator("#request-panel-hex .hex-dump").InnerTextAsync();
+                Assert.Equal(decodedHex, await CopyAndReadAsync(page, "request-panel-hex"));
+                var search = page.Locator(".http-view-search-input");
+                await search.FillAsync("00 01 02");
+                await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 2 matches");
+
+                await page.Locator("#request-tab-auth").ClickAsync();
+                Assert.Equal("", await search.InputValueAsync());
+                var authPanel = page.Locator("#request-panel-auth");
+                await Assertions.Expect(authPanel).ToContainTextAsync("Authorization: Bearer [redacted]");
+                await Assertions.Expect(authPanel).ToContainTextAsync("Proxy-Authorization: [redacted]");
+                Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
+                Assert.Equal(
+                    "Authorization: Bearer [redacted]\nProxy-Authorization: [redacted]\n",
+                    await CopyAndReadAsync(page, "request-panel-auth"));
+                await search.FillAsync("request-secret-token");
+                await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("0 matches");
+
+                await page.EvaluateAsync("""
+                    () => {
+                      document.querySelector('#request-panel-auth .auth-reveal').click();
+                      document.querySelector('#request-tab-hex').click();
+                    }
+                    """);
+                await page.Locator("#request-tab-auth").ClickAsync();
+                await page.WaitForTimeoutAsync(100);
+                Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
+                await Assertions.Expect(authPanel.Locator(".auth-reveal")).ToHaveAttributeAsync("aria-pressed", "false");
+
+                await authPanel.Locator(".auth-reveal").ClickAsync();
+                await Assertions.Expect(search).ToHaveValueAsync("");
+                await Assertions.Expect(authPanel).ToContainTextAsync("request-secret-token");
+                await search.FillAsync("request-secret-token");
+                await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+                var revealed = await CopyAndReadAsync(page, "request-panel-auth");
+                Assert.Contains("request-secret-token", revealed, StringComparison.Ordinal);
+                await page.Locator("#request-tab-hex").ClickAsync();
+                await page.Locator("#request-tab-auth").ClickAsync();
+                Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
+                await Assertions.Expect(authPanel.Locator(".auth-reveal")).ToHaveAttributeAsync("aria-pressed", "false");
+
+                await page.Locator("#primary-tab-response").ClickAsync();
+                await page.Locator("#response-tab-auth").ClickAsync();
+                await Assertions.Expect(page.Locator("#response-panel-auth")).ToContainTextAsync("WWW-Authenticate: Digest realm=[redacted], nonce=[redacted]");
+                await page.Locator("#primary-tab-request").ClickAsync();
+                await page.Locator("#request-tab-auth").ClickAsync();
+                Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
+
+                await page.Locator("#inspectorClose").ClickAsync();
+                await page.Locator("#httpTable tbody tr").Nth(1).ClickAsync();
+                await page.Locator("#request-tab-image").ClickAsync();
+                await Assertions.Expect(page.Locator("#request-panel-image .image-load-status"))
+                    .ToContainTextAsync("decoded locally");
+                Assert.True(await page.Locator("#request-panel-image img").EvaluateAsync<bool>("image=>image.naturalWidth===1&&image.naturalHeight===1"));
+                Assert.Equal(1, await page.EvaluateAsync<int>("globalThis.__createdObjectUrls.length"));
+                Assert.Equal(1, await page.EvaluateAsync<int>("globalThis.__revokedObjectUrls.length"));
+                Assert.NotEqual(
+                    "none",
+                    await page.Locator("#request-panel-image .image-stage").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundImage"));
+                await page.Locator("#primary-tab-response").ClickAsync();
+                await page.Locator("#response-tab-image").ClickAsync();
+                await Assertions.Expect(page.Locator("#response-panel-image .warning"))
+                    .ToContainTextAsync("does not match the retained bytes");
+                await Assertions.Expect(page.Locator("#response-panel-image .image-load-status"))
+                    .ToContainTextAsync("decoded locally");
+
+                await page.SetViewportSizeAsync(420, 760);
+                Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>(
+                    "dialog=>dialog.scrollWidth<=dialog.clientWidth"));
+
+                await page.Locator("#inspectorClose").ClickAsync();
+                await page.Locator("#httpTable tbody tr").First.ClickAsync();
+                await page.Locator("#request-tab-auth").ClickAsync();
+                await page.Locator("#request-panel-auth .auth-reveal").ClickAsync();
+                var popupTask = page.WaitForPopupAsync();
+                await page.Locator("#inspectorOpenTab").ClickAsync();
+                var popup = await popupTask;
+                try
+                {
+                    await popup.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+                    await popup.Locator("#request-tab-auth").ClickAsync();
+                    Assert.DoesNotContain("request-secret-token", await popup.Locator("#request-panel-auth").InnerTextAsync(), StringComparison.Ordinal);
+                    Assert.Null(await popup.EvaluateAsync<object?>("window.opener"));
+                }
+                finally
+                {
+                    await popup.CloseAsync();
+                }
+                Assert.Empty(errors);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDirectory))
+                {
+                    Directory.Delete(tempDirectory, recursive: true);
+                }
+            }
+        }
     private static async Task VerifyLargeMapiTreeAsync(IBrowser browser, string tempDirectory)
     {
             const int leafCount = MapiParseLimits.MaxNodes - 1;
@@ -1919,6 +2062,52 @@ public sealed class HtmlReportBrowserTests
         "Status: Parsed as XML from Content-Type and body content.\n" +
         ResponseBody;
 
+    private static SazReport CreateContentTabReport()
+    {
+        var report = new SazReport { SourceName = "content-tabs.saz" };
+        var captured = new byte[] { 0x1F, 0x8B, 0x08, 0x00, 0xAA, 0xBB, 0xCC, 0xDD };
+        var decoded = Enumerable.Range(0, 256).Select(value => (byte)value).ToArray();
+        var request = ByteMessage(
+            "POST /auth HTTP/1.1",
+            "application/octet-stream",
+            captured,
+            decoded,
+            ["content: gzip"]);
+        request.Headers.Add(new HttpHeader("Authorization", "Bearer request-secret-token"));
+        request.Headers.Add(new HttpHeader("Proxy-Authorization", "opaqueSingleToken"));
+        var responseBytes = Encoding.UTF8.GetBytes("response body");
+        var response = ByteMessage(
+            "HTTP/1.1 401 Unauthorized",
+            "text/plain; charset=utf-8",
+            responseBytes,
+            responseBytes);
+        response.Headers.Add(new HttpHeader("WWW-Authenticate", "Digest realm=\"private\", nonce=\"response-secret\""));
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "POST",
+            Url = "https://example.test/auth",
+            StatusCode = 401,
+            Request = request,
+            Response = response
+        });
+
+        var png = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "2",
+            ArchiveOrder = 1,
+            Method = "POST",
+            Url = "https://example.test/image",
+            StatusCode = 200,
+            Request = ByteMessage("POST /image HTTP/1.1", "image/png", png, png),
+            Response = ByteMessage("HTTP/1.1 200 OK", "text/plain", png, png)
+        });
+        return report;
+    }
+
     private static SazReport CreateReport()
     {
         var report = new SazReport { SourceName = "browser-test.saz" };
@@ -2204,6 +2393,34 @@ public sealed class HtmlReportBrowserTests
                 CapturedLength = body.Length,
                 Preview = body,
             },
+        };
+        message.Headers.Add(new HttpHeader("Content-Type", contentType));
+        return message;
+    }
+
+    private static HttpMessage ByteMessage(
+        string startLine,
+        string contentType,
+        byte[] captured,
+        byte[] decoded,
+        IReadOnlyList<string>? removedEncodings = null)
+    {
+        var isText = contentType.StartsWith("text/", StringComparison.OrdinalIgnoreCase);
+        var message = new HttpMessage
+        {
+            StartLine = startLine,
+            Body = new BodyPreview
+            {
+                Length = decoded.Length,
+                CapturedLength = captured.Length,
+                IsBinary = !isText,
+                Charset = isText ? "utf-8" : null,
+                Preview = isText ? Encoding.UTF8.GetString(decoded) : HttpMessageParser.HexPreview(decoded),
+                CapturedBytes = captured,
+                DecodedBytes = decoded,
+                NormalizedBytes = decoded,
+                RemovedEncodings = removedEncodings ?? []
+            }
         };
         message.Headers.Add(new HttpHeader("Content-Type", contentType));
         return message;

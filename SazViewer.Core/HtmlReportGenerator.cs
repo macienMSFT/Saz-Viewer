@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.IO.Compression;
 using System.Net;
@@ -18,6 +19,7 @@ public sealed class HtmlReportGenerator
     private const int TreeMaxScalarLength = 300;
     private const int MaxCopyCharacters = 1024 * 1024;
     private const int MaxHydratedDisplayCharacters = 256 * 1024;
+    private const int HexViewBytesLimit = 1024;
     private const int PayloadVersion = 1;
     private const int CopyPayloadMaxDecodedBytes = 32 * 1024 * 1024;
     private const int ProtocolPayloadMaxDecodedBytes = 32 * 1024 * 1024;
@@ -45,6 +47,8 @@ public sealed class HtmlReportGenerator
         int CapturedStart = -1,
         int CapturedLength = 0);
     private sealed record CompressedPayload(string Type, string Base64, int DecodedBytes);
+    private sealed record ImageViewInfo(string MimeType, string Detection, string Animation, string? Warning);
+    private sealed record AuthViewData(string Redacted, string Full);
 
     // Each tree level round-trips through two JSON.NET-serializer nesting levels (an object, then
     // its "children" array before the next object), so a TreeMaxDepth-limited document can need
@@ -58,6 +62,14 @@ public sealed class HtmlReportGenerator
         MaxDepth = (2 * TreeMaxDepth) + 32
     };
 
+    private static readonly HashSet<string> AuthHeaderNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Authorization",
+        "Proxy-Authorization",
+        "WWW-Authenticate",
+        "Proxy-Authenticate"
+    };
+
     public string Generate(SazReport report)
     {
         var html = new StringBuilder(256 * 1024);
@@ -67,7 +79,7 @@ public sealed class HtmlReportGenerator
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; connect-src 'none'; worker-src 'none'; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src blob:">
 <title>SAZ capture</title>
 <script>
 (()=>{try{const value=localStorage.getItem('saz-viewer-theme');if(value==='light'||value==='dark')document.documentElement.dataset.theme=value}catch{}})();
@@ -118,6 +130,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .tab-strip [role=tab]:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;z-index:1}
 .tab-panels{flex:1;min-height:0;overflow:auto;border:1px solid var(--line);border-top:none;background:var(--panel);padding:10px 12px}
 .tab-panel.hidden{display:none!important}.tab-panel-mapi{height:100%;min-height:340px;display:flex;flex-direction:column;overflow:hidden}.tab-panel-mapi>.copy-toolbar,.tab-panel-mapi>.protocol-meta,.tab-panel-mapi>.warning{flex:none}.tab-panel-mapi>.protocol-block{flex:1}.tab-empty{color:var(--muted);padding:14px 4px}
+.tab-panel-image,.tab-panel-hex,.tab-panel-auth{min-height:340px}.image-view,.hex-view,.auth-view{height:calc(100% - 34px);min-height:300px;display:flex;flex-direction:column;gap:7px}.image-meta{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--muted)}.image-stage{flex:1;min-height:220px;overflow:auto;display:flex;align-items:center;justify-content:center;border:1px solid var(--line);background-color:var(--panel2);background-image:linear-gradient(45deg,var(--line) 25%,transparent 25%),linear-gradient(-45deg,var(--line) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--line) 75%),linear-gradient(-45deg,transparent 75%,var(--line) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}.image-stage img{display:block;max-width:100%;max-height:100%;object-fit:contain}.image-load-status{color:var(--muted);min-height:1.4em}.hex-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.hex-toolbar label{display:flex;align-items:center;gap:6px}.hex-toolbar select{padding:4px 24px 4px 7px}.hex-dump{flex:1;min-height:240px;margin:0;white-space:pre;word-break:normal;font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}.auth-reveal{align-self:flex-start}.auth-headers{flex:1;min-height:220px;margin:0}.auth-status{color:var(--muted)}
 .format-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 6px}.format-meta .format-status{flex:1;min-width:180px}
 .captured-bytes{margin-top:8px}.captured-bytes summary{cursor:pointer;color:var(--accent)}
 .body-view{margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:var(--info-bg)}.session-meta pre{max-height:180px}
@@ -281,6 +294,42 @@ async function decodeCompressedPayload(host,expectedType){
   try{return await host._payloadPromise}
   catch(error){host._payloadError=error;throw error}
   finally{host._payloadPromise=null}
+}
+function decodeModelBytes(model,key){
+  const encoded=model?.[key];
+  if(typeof encoded!=='string'||encoded.length>128*1024||encoded.length%4!==0||!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded))throw new Error('retained byte data is invalid or oversized');
+  let binary;try{binary=atob(encoded)}catch{throw new Error('retained byte data is not valid base64')}
+  if(binary.length>65536)throw new Error('retained byte data exceeds the 64 KiB view limit');
+  const bytes=new Uint8Array(binary.length);
+  for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
+  return bytes;
+}
+async function decodeEmbeddedUtf8(model){
+  const encoded=model?.authSecret,declared=Number.parseInt(model?.authSecretBytes||'',10);
+  if(typeof encoded!=='string'||encoded.length>2*1024*1024||encoded.length%4!==0||!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)
+    ||!Number.isSafeInteger(declared)||declared<0||declared>MAX_COPY_CHARACTERS)throw new Error('authentication secret payload is invalid or oversized');
+  let binary;try{binary=atob(encoded)}catch{throw new Error('authentication secret payload is not valid base64')}
+  const compressed=new Uint8Array(binary.length);
+  for(let index=0;index<binary.length;index++)compressed[index]=binary.charCodeAt(index);
+  if(typeof DecompressionStream!=='function')throw new Error('local gzip decompression is unavailable');
+  const reader=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+  const chunks=[];let total=0;
+  try{
+    while(true){
+      const result=await reader.read();if(result.done)break;
+      total+=result.value.byteLength;
+      if(total>declared||total>MAX_COPY_CHARACTERS){await reader.cancel();throw new Error('authentication secret exceeds its safety limit')}
+      chunks.push(result.value);
+    }
+  }catch(error){
+    if(error instanceof Error&&error.message.includes('safety limit'))throw error;
+    throw new Error('authentication secret payload is corrupt');
+  }
+  if(total!==declared)throw new Error('authentication secret length does not match its envelope');
+  const bytes=new Uint8Array(total);let offset=0;
+  chunks.forEach(chunk=>{bytes.set(chunk,offset);offset+=chunk.byteLength});
+  try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes)}
+  catch{throw new Error('authentication secret is not valid UTF-8')}
 }
 function payloadFailureText(error,subject,alternative){
   if(error instanceof Error&&error.message.includes('not supported by this browser')){
@@ -1020,6 +1069,21 @@ function setupHttpViewSearch(root,generation){
         const roots=[...panel.querySelectorAll(':scope>h4,:scope>.headers,:scope>.format-meta,:scope>.decode-status,:scope>.warning,:scope>.body-view,:scope>.captured-bytes>summary,:scope>.captured-bytes>pre')];
         return{roots,snapshot:()=>snapshotDetails(details),reveal:revealDetailMatches};
       }
+      if(tab.dataset.tab==='image'){
+        const view=panel.querySelector('.image-view');
+        if(view)await renderImageView(view,generation);
+        if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
+        return{roots:[...panel.querySelectorAll('.image-meta,.format-status,.warning,.image-load-status')]};
+      }
+      if(tab.dataset.tab==='hex'){
+        const view=panel.querySelector('.hex-view');
+        if(view)await renderHexView(view,generation);
+        if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
+        return{roots:[...panel.querySelectorAll('.hex-source-label,.decode-status,.hex-dump,.hex-status,.warning')]};
+      }
+      if(tab.dataset.tab==='auth'){
+        return{roots:[...panel.querySelectorAll('.warning,.auth-headers,.auth-status')]};
+      }
       return{roots:[...panel.querySelectorAll('.headers')]};
     }
   });
@@ -1184,9 +1248,174 @@ async function renderWebSocketInspector(host,generation){
     host.className='websocket-inspector warning';host._wsRendered=true;
   }finally{host._wsLoading=false}
 }
+async function messageViewModel(view){
+  const panel=view.closest('.message-panel');
+  if(!panel)throw new Error('message view is detached');
+  if(panel._copyReadyPromise)await panel._copyReadyPromise;
+  if(panel._copyModelError)throw new Error(panel._copyModelError);
+  return panel._copyModel||{};
+}
+function imageMetadata(view){
+  return [...view.querySelectorAll('.image-meta span,.format-status,.warning')]
+    .map(item=>item.textContent?.trim()).filter(Boolean).join('\n');
+}
+function prepareDynamicCopy(button,text){
+  if(!button)return;
+  delete button.dataset.copyError;button._copyText=text;
+  button.disabled=false;button.removeAttribute('aria-disabled');button.removeAttribute('aria-busy');
+}
+function failDynamicCopy(button,error){
+  if(!button)return;
+  delete button._copyText;button.dataset.copyError=error;
+  button.disabled=false;button.removeAttribute('aria-disabled');button.removeAttribute('aria-busy');
+}
+async function renderImageView(view,generation){
+  if(view._rendered||view._loading)return;
+  view._loading=true;
+  const status=view.querySelector('.image-load-status'),image=view.querySelector('img');
+  const copy=view.closest('[role="tabpanel"]')?.querySelector('.copy-button[data-copy-kind="image"]');
+  try{
+    const model=await messageViewModel(view);
+    if(generation!==renderGeneration||!view.isConnected||view.closest('.tab-panel.hidden'))return;
+    const bytes=decodeModelBytes(model,view.dataset.byteField);
+    const mime=view.dataset.imageMime;
+    if(!mime||!['image/png','image/jpeg','image/gif','image/webp','image/bmp','image/x-icon'].includes(mime))throw new Error('image type is unsupported');
+    const url=URL.createObjectURL(new Blob([bytes],{type:mime}));
+    view._blobUrl=url;
+    image.onload=()=>{
+      if(view._blobUrl!==url)return;
+      const dimensions=view.querySelector('.image-dimensions');
+      if(dimensions)dimensions.textContent=`${image.naturalWidth}\u00d7${image.naturalHeight} pixels`;
+      status.textContent='Image decoded locally from retained body bytes.';status.classList.remove('warning');
+      prepareDynamicCopy(copy,imageMetadata(view));
+      URL.revokeObjectURL(url);view._blobUrl=null;
+    };
+    image.onerror=()=>{
+      if(view._blobUrl!==url)return;
+      status.textContent='The browser could not decode the retained image bytes.';
+      status.classList.add('warning');
+      prepareDynamicCopy(copy,imageMetadata(view)+'\nBrowser decode failed.');
+      URL.revokeObjectURL(url);view._blobUrl=null;
+    };
+    image.src=url;
+    prepareDynamicCopy(copy,imageMetadata(view));
+    view._rendered=true;
+  }catch(error){
+    status.textContent=`Image could not be loaded: ${error.message}`;
+    status.classList.add('warning');
+    failDynamicCopy(copy,`Image metadata could not be prepared. ${error.message}`);
+    view._rendered=true;
+  }finally{view._loading=false}
+}
+function formatHexDump(bytes,source,total,retained,removed){
+  const lines=[`${source} body bytes`,`${total.toLocaleString()} total; ${retained.toLocaleString()} retained${retained<total?' (truncated)':''}`];
+  if(removed)lines.push(`Removed encodings: ${removed}`);
+  lines.push('', 'Offset    00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  ASCII');
+  for(let offset=0;offset<bytes.length;offset+=16){
+    const slice=bytes.subarray(offset,Math.min(offset+16,bytes.length));
+    const hex=[...slice].map(value=>value.toString(16).toUpperCase().padStart(2,'0'));
+    const left=hex.slice(0,8).join(' ').padEnd(23,' '),right=hex.slice(8).join(' ').padEnd(23,' ');
+    const ascii=[...slice].map(value=>value>=32&&value<=126?String.fromCharCode(value):'.').join('');
+    lines.push(`${offset.toString(16).toUpperCase().padStart(8,'0')}  ${left}  ${right}  |${ascii.padEnd(16,' ')}|`);
+  }
+  if(retained<total)lines.push(`\n[HexView truncated: ${retained.toLocaleString()} of ${total.toLocaleString()} bytes retained.]`);
+  return lines.join('\n');
+}
+async function renderHexView(view,generation){
+  const selection=view.querySelector('.hex-source')?.value||'captured';
+  const pre=view.querySelector('.hex-dump'),status=view.querySelector('.hex-status');
+  const copy=view.closest('[role="tabpanel"]')?.querySelector('.copy-button[data-copy-kind="hex"]');
+  try{
+    const model=await messageViewModel(view);
+    if(generation!==renderGeneration||!view.isConnected||view.closest('.tab-panel.hidden'))return;
+    const decoded=selection==='decoded';
+    const bytes=decodeModelBytes(model,decoded?'decodedBytes':'capturedBytes');
+    const total=Number.parseInt(decoded?view.dataset.decodedLength:view.dataset.capturedLength,10);
+    const retained=bytes.length,source=decoded?'Decoded':'Captured';
+    const removed=decoded?view.querySelector('.decode-status')?.textContent?.replace(/^Removed encodings:\s*/,'')||'':'';
+    const text=formatHexDump(bytes,source,total,retained,removed);
+    pre.textContent=text;pre.setAttribute('aria-label',`${source} body byte hex dump`);
+    view.querySelector('.hex-source-label').textContent=`${source} body bytes`;
+    status.textContent=retained<total?`Showing a truncated retained prefix (${retained.toLocaleString()} of ${total.toLocaleString()} bytes).`:`Showing all ${total.toLocaleString()} bytes.`;
+    status.classList.remove('warning');
+    if(copy){
+      copy.setAttribute('aria-label',`Copy ${source.toLowerCase()} body hex view`);
+      copy.dataset.copyDescription=`${source.toLowerCase()} body hex view`;
+    }
+    prepareDynamicCopy(copy,text);
+    view._rendered=true;
+  }catch(error){
+    pre.textContent='';status.textContent=`HexView could not be loaded: ${error.message}`;status.classList.add('warning');
+    failDynamicCopy(copy,`HexView could not be prepared. ${error.message}`);
+  }
+}
+function resetAuthView(view,notify){
+  view._authRevealToken=(view._authRevealToken||0)+1;
+  const panel=view.closest('.message-panel'),model=panel?._copyModel||{};
+  const pre=view.querySelector('.auth-headers'),button=view.querySelector('.auth-reveal');
+  const copy=view.closest('[role="tabpanel"]')?.querySelector('.copy-button');
+  if(typeof model.auth==='string')pre.textContent=model.auth;
+  view.dataset.revealed='false';view._authFullText=null;
+  button.disabled=false;
+  button.textContent='Reveal values';button.setAttribute('aria-pressed','false');button.setAttribute('aria-label','Reveal full authentication header values');
+  const status=view.querySelector('.auth-status');
+  status.textContent='Values are redacted.';status.classList.remove('warning');
+  if(copy){
+    delete copy._copyText;copy.dataset.copyKey='auth';
+    copy.setAttribute('aria-label','Copy redacted authentication headers');copy.dataset.copyDescription='redacted authentication headers';
+  }
+  if(notify)view.dispatchEvent(new CustomEvent('saz-view-change',{bubbles:true}));
+}
+async function toggleAuthView(view){
+  if(view.dataset.revealed==='true'){resetAuthView(view,true);return}
+  const status=view.querySelector('.auth-status'),button=view.querySelector('.auth-reveal');
+  const token=(view._authRevealToken||0)+1,generation=renderGeneration;
+  view._authRevealToken=token;
+  const isCurrent=()=>view._authRevealToken===token&&generation===renderGeneration&&view.isConnected
+    &&!view.closest('.tab-panel.hidden')&&!view.closest('.primary-panel.hidden');
+  button.disabled=true;
+  try{
+    const model=await messageViewModel(view);
+    if(!isCurrent())return;
+    const full=await decodeEmbeddedUtf8(model);
+    if(!isCurrent())return;
+    view.querySelector('.auth-headers').textContent=full;
+    view.dataset.revealed='true';view._authFullText=full;
+    button.textContent='Hide values';button.setAttribute('aria-pressed','true');button.setAttribute('aria-label','Hide full authentication header values');
+    status.textContent='Full captured authentication values are visible.';
+    const copy=view.closest('[role="tabpanel"]')?.querySelector('.copy-button');
+    if(copy){
+      delete copy.dataset.copyKey;copy._copyText=full;
+      copy.setAttribute('aria-label','Copy revealed authentication headers');copy.dataset.copyDescription='revealed authentication headers';
+    }
+    view.dispatchEvent(new CustomEvent('saz-view-change',{bubbles:true}));
+  }catch(error){
+    if(!isCurrent())return;
+    status.textContent=`Authentication values could not be revealed: ${error.message}`;
+    status.classList.add('warning');
+  }finally{if(isCurrent())button.disabled=false}
+}
+function setupDynamicViewControls(root,generation){
+  root.querySelectorAll('.hex-view').forEach(view=>{
+    view.querySelector('.hex-source')?.addEventListener('change',()=>{view._rendered=false;renderHexView(view,generation);view.dispatchEvent(new CustomEvent('saz-view-change',{bubbles:true}))});
+  });
+  root.querySelectorAll('.auth-view').forEach(view=>{
+    view.querySelector('.auth-reveal')?.addEventListener('click',()=>toggleAuthView(view));
+  });
+}
+function deactivateDynamicViews(root){
+  root.querySelectorAll('.image-view').forEach(view=>{
+    if(view._blobUrl){URL.revokeObjectURL(view._blobUrl);view._blobUrl=null}
+    const image=view.querySelector('img');if(image)image.removeAttribute('src');
+    view._rendered=false;
+  });
+  root.querySelectorAll('.auth-view').forEach(view=>resetAuthView(view,false));
+}
 function hydrateViewPayloads(root,generation){
   if(root.classList?.contains('hidden')||root.closest?.('.primary-panel.hidden'))return;
   root.querySelectorAll('.websocket-inspector').forEach(host=>renderWebSocketInspector(host,generation));
+  root.querySelectorAll('.image-view').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderImageView(view,generation)});
+  root.querySelectorAll('.hex-view').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderHexView(view,generation)});
   root.querySelectorAll('.protocol-block').forEach(host=>{
     if((host.dataset.compressedPayload||host._payloadData!==undefined)&&!host.closest('.tab-panel.hidden'))renderProtocolTree(host,generation);
   });
@@ -1198,6 +1427,9 @@ function prepareLazyPayloads(root){
   root.querySelectorAll('.protocol-block').forEach(host=>{
     const button=host.closest('[role="tabpanel"]')?.querySelector('.copy-button[data-copy-kind="mapi"]');
     if(button){button.disabled=true;button.setAttribute('aria-disabled','true')}
+  });
+  root.querySelectorAll('.copy-button[data-copy-kind="image"],.copy-button[data-copy-kind="hex"]').forEach(button=>{
+    button.disabled=true;button.setAttribute('aria-disabled','true');button.setAttribute('aria-busy','true');
   });
 }
 function setupTreeToggles(root){
@@ -1422,6 +1654,11 @@ function activateTab(tablist,key,options){
   if(!target)return;
   const panels=tablist.parentElement.querySelectorAll(':scope>.tab-panels>.tab-panel');
   let targetPanel=null;
+  const previous=tabs.find(tab=>tab.getAttribute('aria-selected')==='true');
+  if(previous&&previous!==target){
+    const previousPanel=tablist.parentElement.querySelector(`#${CSS.escape(previous.getAttribute('aria-controls'))}`);
+    if(previousPanel)deactivateDynamicViews(previousPanel);
+  }
   tabs.forEach(tab=>{const active=tab===target;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1});
   panels.forEach(panel=>{const active=panel.id===target.getAttribute('aria-controls');panel.classList.toggle('hidden',!active);if(active)targetPanel=panel});
   if(targetPanel)hydrateViewPayloads(targetPanel,renderGeneration);
@@ -1555,6 +1792,7 @@ function loadRow(row){
   const template=document.getElementById(row.dataset.detail);
   if(!template)return false;
   inspectorBody._disposeHttpViewSearch?.();
+  deactivateDynamicViews(inspectorBody);
   inspectorBody._clearHttpViewSearch=null;
   inspectorBody._disposeHttpViewSearch=null;
   const focusWasInBody=inspectorBody.contains(document.activeElement);
@@ -1571,6 +1809,7 @@ function loadRow(row){
   setupTabs(inspectorBody);
   setupTreeToggles(inspectorBody);
   setupCopyControls(inspectorBody);
+  setupDynamicViewControls(inspectorBody,generation);
   setupHttpViewSearch(inspectorBody,generation);
   hydrateViewPayloads(inspectorBody,generation);
   updateNavState();
@@ -1623,6 +1862,7 @@ function leaveInspectorOnlyMode(){
 }
 function closeInspector(){
   inspectorBody._clearHttpViewSearch?.();
+  deactivateDynamicViews(inspectorBody);
   inspectorBody.querySelectorAll('.protocol-block').forEach(host=>{
     if(!host._protocolBuildToken)return;
     host._protocolBuildToken=null;
@@ -2193,6 +2433,490 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         html.Append("</details>");
     }
 
+    private static ImageViewInfo? DetectImageView(HttpMessage message)
+    {
+        var body = message.Body;
+        var bytes = body.DecodedBytes.Span;
+        if (body.IsTruncated || bytes.IsEmpty || body.Length != bytes.Length)
+        {
+            return null;
+        }
+
+        var sniffed = SniffImageMime(bytes);
+        if (sniffed is null)
+        {
+            return null;
+        }
+
+        var declared = NormalizeMediaType(message.Header("Content-Type"));
+        var warning = declared.Length > 0 && !declared.Equals(sniffed, StringComparison.OrdinalIgnoreCase)
+            ? $"Declared Content-Type '{declared}' does not match the retained bytes; rendering as '{sniffed}'."
+            : null;
+        var detection = declared.Equals(sniffed, StringComparison.OrdinalIgnoreCase)
+            ? $"Content-Type and retained-byte signature agree on {sniffed}."
+            : $"Detected {sniffed} from the retained-byte signature.";
+        return new ImageViewInfo(sniffed, detection, ImageAnimation(bytes, sniffed), warning);
+    }
+
+    private static string? SniffImageMime(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length >= 8
+            && bytes[..8].SequenceEqual(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A })
+            && ValidatePng(bytes))
+        {
+            return "image/png";
+        }
+        if (ValidateJpeg(bytes))
+        {
+            return "image/jpeg";
+        }
+        if (bytes.Length >= 6
+            && (bytes[..6].SequenceEqual("GIF87a"u8) || bytes[..6].SequenceEqual("GIF89a"u8))
+            && ValidateGif(bytes))
+        {
+            return "image/gif";
+        }
+        if (ValidateWebP(bytes))
+        {
+            return "image/webp";
+        }
+        if (ValidateBmp(bytes))
+        {
+            return "image/bmp";
+        }
+        if (ValidateIco(bytes))
+        {
+            return "image/x-icon";
+        }
+        return null;
+    }
+
+    private static bool ValidatePng(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 20
+            || !bytes[..8].SequenceEqual(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }))
+        {
+            return false;
+        }
+        var offset = 8;
+        var first = true;
+        while (offset <= bytes.Length - 12)
+        {
+            var length = BinaryPrimitives.ReadUInt32BigEndian(bytes[offset..]);
+            if (length > int.MaxValue)
+            {
+                return false;
+            }
+            var end = offset + 12L + length;
+            if (end > bytes.Length)
+            {
+                return false;
+            }
+            var type = bytes.Slice(offset + 4, 4);
+            if (first && (!type.SequenceEqual("IHDR"u8) || length != 13))
+            {
+                return false;
+            }
+            first = false;
+            offset = checked((int)end);
+            if (type.SequenceEqual("IEND"u8))
+            {
+                return length == 0 && offset == bytes.Length;
+            }
+        }
+        return false;
+    }
+
+    private static bool ValidateJpeg(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 8 || bytes[0] != 0xFF || bytes[1] != 0xD8)
+        {
+            return false;
+        }
+        var offset = 2;
+        var hasFrame = false;
+        var hasScan = false;
+        while (offset < bytes.Length)
+        {
+            if (bytes[offset++] != 0xFF)
+            {
+                return false;
+            }
+            while (offset < bytes.Length && bytes[offset] == 0xFF)
+            {
+                offset++;
+            }
+            if (offset >= bytes.Length)
+            {
+                return false;
+            }
+            var marker = bytes[offset++];
+            if (marker == 0xD9)
+            {
+                return hasFrame && hasScan && offset == bytes.Length;
+            }
+            if (marker == 0xD8 || marker == 0x00)
+            {
+                return false;
+            }
+            if (marker is 0x01 or >= 0xD0 and <= 0xD7)
+            {
+                continue;
+            }
+            if (offset > bytes.Length - 2)
+            {
+                return false;
+            }
+            var length = BinaryPrimitives.ReadUInt16BigEndian(bytes[offset..]);
+            if (length < 2 || offset + length > bytes.Length)
+            {
+                return false;
+            }
+            if (marker is >= 0xC0 and <= 0xC3 or >= 0xC5 and <= 0xC7 or >= 0xC9 and <= 0xCB or >= 0xCD and <= 0xCF)
+            {
+                hasFrame = true;
+            }
+            offset += length;
+            if (marker != 0xDA)
+            {
+                continue;
+            }
+            hasScan = true;
+            while (offset < bytes.Length)
+            {
+                if (bytes[offset] != 0xFF)
+                {
+                    offset++;
+                    continue;
+                }
+                if (offset + 1 >= bytes.Length)
+                {
+                    return false;
+                }
+                var next = bytes[offset + 1];
+                if (next == 0x00 || next is >= 0xD0 and <= 0xD7)
+                {
+                    offset += 2;
+                    continue;
+                }
+                break;
+            }
+        }
+        return false;
+    }
+
+    private static bool ValidateGif(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 14)
+        {
+            return false;
+        }
+        var offset = 13;
+        if ((bytes[10] & 0x80) != 0)
+        {
+            offset += 3 * (1 << ((bytes[10] & 0x07) + 1));
+        }
+        var images = 0;
+        while (offset < bytes.Length)
+        {
+            var introducer = bytes[offset++];
+            if (introducer == 0x3B)
+            {
+                return images > 0 && offset == bytes.Length;
+            }
+            if (introducer == 0x21)
+            {
+                if (offset >= bytes.Length)
+                {
+                    return false;
+                }
+                offset++;
+                if (!SkipGifSubBlocks(bytes, ref offset))
+                {
+                    return false;
+                }
+                continue;
+            }
+            if (introducer != 0x2C || offset > bytes.Length - 9)
+            {
+                return false;
+            }
+            var packed = bytes[offset + 8];
+            offset += 9;
+            if ((packed & 0x80) != 0)
+            {
+                offset += 3 * (1 << ((packed & 0x07) + 1));
+            }
+            if (offset >= bytes.Length)
+            {
+                return false;
+            }
+            offset++;
+            if (!SkipGifSubBlocks(bytes, ref offset))
+            {
+                return false;
+            }
+            images++;
+        }
+        return false;
+    }
+
+    private static bool SkipGifSubBlocks(ReadOnlySpan<byte> bytes, ref int offset)
+    {
+        while (offset < bytes.Length)
+        {
+            var size = bytes[offset++];
+            if (size == 0)
+            {
+                return true;
+            }
+            if (offset > bytes.Length - size)
+            {
+                return false;
+            }
+            offset += size;
+        }
+        return false;
+    }
+
+    private static bool ValidateWebP(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 20 || !bytes[..4].SequenceEqual("RIFF"u8)
+            || !bytes[8..12].SequenceEqual("WEBP"u8)
+            || BinaryPrimitives.ReadUInt32LittleEndian(bytes[4..]) + 8L != bytes.Length)
+        {
+            return false;
+        }
+        var offset = 12;
+        var imageChunk = false;
+        while (offset <= bytes.Length - 8)
+        {
+            var type = bytes.Slice(offset, 4);
+            var length = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(offset + 4)..]);
+            var end = offset + 8L + length + (length & 1);
+            if (end > bytes.Length)
+            {
+                return false;
+            }
+            imageChunk |= type.SequenceEqual("VP8 "u8) || type.SequenceEqual("VP8L"u8) || type.SequenceEqual("VP8X"u8);
+            offset = checked((int)end);
+        }
+        return imageChunk && offset == bytes.Length;
+    }
+
+    private static bool ValidateBmp(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 26 || !bytes[..2].SequenceEqual("BM"u8)
+            || BinaryPrimitives.ReadUInt32LittleEndian(bytes[2..]) != bytes.Length)
+        {
+            return false;
+        }
+        var pixelOffset = BinaryPrimitives.ReadUInt32LittleEndian(bytes[10..]);
+        var dibSize = BinaryPrimitives.ReadUInt32LittleEndian(bytes[14..]);
+        return dibSize is >= 12 and <= 124
+            && 14L + dibSize <= pixelOffset
+            && pixelOffset < bytes.Length;
+    }
+
+    private static bool ValidateIco(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 22 || !bytes[..4].SequenceEqual(new byte[] { 0, 0, 1, 0 }))
+        {
+            return false;
+        }
+        var count = BinaryPrimitives.ReadUInt16LittleEndian(bytes[4..]);
+        var directoryEnd = 6 + (count * 16);
+        if (count is 0 or > 256 || directoryEnd > bytes.Length)
+        {
+            return false;
+        }
+        var ranges = new List<(uint Offset, uint End)>(count);
+        for (var index = 0; index < count; index++)
+        {
+            var entry = bytes[(6 + (index * 16))..];
+            var size = BinaryPrimitives.ReadUInt32LittleEndian(entry[8..]);
+            var offset = BinaryPrimitives.ReadUInt32LittleEndian(entry[12..]);
+            if (size == 0 || offset < directoryEnd || offset + (ulong)size > (ulong)bytes.Length)
+            {
+                return false;
+            }
+            var image = bytes.Slice(checked((int)offset), checked((int)size));
+            if (!ValidatePng(image) && !ValidateIcoDib(image))
+            {
+                return false;
+            }
+            ranges.Add((offset, checked(offset + size)));
+        }
+        ranges.Sort((left, right) => left.Offset.CompareTo(right.Offset));
+        if (ranges[0].Offset != directoryEnd)
+        {
+            return false;
+        }
+        for (var index = 1; index < ranges.Count; index++)
+        {
+            if (ranges[index].Offset != ranges[index - 1].End)
+            {
+                return false;
+            }
+        }
+        return ranges[^1].End == bytes.Length;
+    }
+
+    private static bool ValidateIcoDib(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 40)
+        {
+            return false;
+        }
+        var headerSize = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
+        var width = BinaryPrimitives.ReadInt32LittleEndian(bytes[4..]);
+        var height = BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]);
+        return headerSize is >= 40 and <= 124
+            && headerSize <= bytes.Length
+            && width > 0
+            && height != 0;
+    }
+
+    private static string ImageAnimation(ReadOnlySpan<byte> bytes, string mimeType)
+    {
+        if (mimeType == "image/gif")
+        {
+            return "Animation status is not determined for GIF.";
+        }
+        if (mimeType == "image/png")
+        {
+            return bytes.IndexOf("acTL"u8) >= 0 ? "Animated image." : "No animation detected.";
+        }
+        if (mimeType == "image/webp")
+        {
+            return bytes.IndexOf("ANIM"u8) >= 0 ? "Animated image." : "No animation detected.";
+        }
+        return "No animation detected.";
+    }
+
+    private static AuthViewData? BuildAuthView(HttpMessage message)
+    {
+        var headers = message.Headers.Where(header => AuthHeaderNames.Contains(header.Name)).ToArray();
+        if (headers.Length == 0)
+        {
+            return null;
+        }
+        var redacted = new StringBuilder();
+        var full = new StringBuilder();
+        foreach (var header in headers)
+        {
+            redacted.Append(header.Name).Append(": ").Append(RedactAuthValue(header.Value)).Append('\n');
+            full.Append(header.Name).Append(": ").Append(header.Value).Append('\n');
+        }
+        return new AuthViewData(redacted.ToString(), full.ToString());
+    }
+
+    private static string RedactAuthValue(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+        {
+            return "[redacted]";
+        }
+        var separator = trimmed.IndexOfAny([' ', '\t', ',']);
+        var candidate = separator < 0 ? trimmed : trimmed[..separator];
+        var scheme = candidate.ToLowerInvariant() switch
+        {
+            "basic" => "Basic",
+            "bearer" => "Bearer",
+            "digest" => "Digest",
+            "ntlm" => "NTLM",
+            "negotiate" => "Negotiate",
+            _ => null
+        };
+        if (scheme is null)
+        {
+            return "[redacted]";
+        }
+        if (scheme != "Digest")
+        {
+            return $"{scheme} [redacted]";
+        }
+        var parameterNames = DigestParameterNames(separator < 0 ? string.Empty : trimmed[(separator + 1)..])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(32)
+            .Select(name => $"{name}=[redacted]")
+            .ToArray();
+        return parameterNames.Length == 0
+            ? $"{scheme} [redacted]"
+            : $"{scheme} {string.Join(", ", parameterNames)}";
+    }
+
+    private static IEnumerable<string> DigestParameterNames(string value)
+    {
+        var segmentStart = 0;
+        var quoted = false;
+        var escaped = false;
+        for (var index = 0; index <= value.Length; index++)
+        {
+            if (index < value.Length)
+            {
+                var character = value[index];
+                if (quoted)
+                {
+                    if (escaped)
+                    {
+                        escaped = false;
+                    }
+                    else if (character == '\\')
+                    {
+                        escaped = true;
+                    }
+                    else if (character == '"')
+                    {
+                        quoted = false;
+                    }
+                    continue;
+                }
+                if (character == '"')
+                {
+                    quoted = true;
+                    continue;
+                }
+                if (character != ',')
+                {
+                    continue;
+                }
+            }
+
+            var segment = value.AsSpan(segmentStart, index - segmentStart).Trim();
+            var equals = segment.IndexOf('=');
+            var name = equals > 0 ? segment[..equals].Trim() : [];
+            if (name.Length is > 0 and <= 64 && IsAuthToken(name))
+            {
+                yield return name.ToString();
+            }
+            segmentStart = index + 1;
+        }
+    }
+
+    private static bool IsAuthToken(ReadOnlySpan<char> value)
+    {
+        if (!char.IsAsciiLetter(value[0]))
+        {
+            return false;
+        }
+        foreach (var character in value[1..])
+        {
+            if (!char.IsAsciiLetterOrDigit(character)
+                && character is not '!' and not '#' and not '$' and not '%' and not '&' and not '\''
+                    and not '*' and not '+' and not '-' and not '.' and not '^' and not '_' and not '`'
+                    and not '|' and not '~')
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static string NormalizeMediaType(string? contentType) =>
+        contentType?.Split(';', 2)[0].Trim().ToLowerInvariant() ?? string.Empty;
+
     private void AppendMessagePanel(
         StringBuilder html,
         string title,
@@ -2205,9 +2929,19 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         var jsonEnabled = body is { Format: BodyFormat.Json, CanToggle: true };
         var xmlEnabled = body is { Format: BodyFormat.Xml, CanToggle: true };
         var mapiEnabled = protocol is not null;
+        var image = message is null ? null : DetectImageView(message);
+        var imageEnabled = image is not null;
+        var hexEnabled = message is not null && !message.Body.CapturedBytes.IsEmpty;
+        var decodedHexEnabled = hexEnabled
+            && message!.Body.WasDecoded
+            && !message.Body.DecodedBytes.IsEmpty
+            && !message.Body.DecodedBytes.Span.SequenceEqual(message.Body.CapturedBytes.Span);
+        var auth = message is null ? null : BuildAuthView(message);
+        var authEnabled = auth is not null;
         var headersEnabled = message is not null && message.Headers.Count > 0;
         var rawEnabled = message is not null;
-        var anyEnabled = jsonEnabled || xmlEnabled || mapiEnabled || headersEnabled || rawEnabled;
+        var anyEnabled = jsonEnabled || xmlEnabled || mapiEnabled || imageEnabled
+            || hexEnabled || authEnabled || headersEnabled || rawEnabled;
         var jsonCopy = CopyText(
             $"Copy {lowerTitle} JSON pretty text",
             $"{lowerTitle} JSON pretty text",
@@ -2221,6 +2955,20 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             $"{lowerTitle} MAPI protocol tree",
             null,
             mapiEnabled ? "mapi" : null);
+        var imageCopy = new CopySource(
+            $"Copy {lowerTitle} image metadata",
+            $"{lowerTitle} image metadata",
+            null,
+            imageEnabled ? "image" : null);
+        var hexCopy = new CopySource(
+            $"Copy {lowerTitle} hex view",
+            $"{lowerTitle} hex view",
+            null,
+            hexEnabled ? "hex" : null);
+        var authCopy = CopyText(
+            $"Copy redacted {lowerTitle} authentication headers",
+            $"redacted {lowerTitle} authentication headers",
+            auth?.Redacted);
         var headersCopy = CopyText(
             $"Copy {lowerTitle} headers",
             $"{lowerTitle} headers",
@@ -2230,7 +2978,16 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             $"{lowerTitle} raw message",
             rawEnabled ? BuildRawText(message!, body!) : default);
         html.Append("<section class=\"message-panel\"");
-        AppendCopyModelAttribute(html, jsonCopy, xmlCopy, headersCopy, rawCopy, message, body);
+        AppendCopyModelAttribute(
+            html,
+            jsonCopy,
+            xmlCopy,
+            authCopy,
+            auth?.Full,
+            headersCopy,
+            rawCopy,
+            message,
+            body);
         html.Append('>');
 
         string? initial = !anyEnabled
@@ -2245,7 +3002,19 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
                             ? "raw"
                             : "headers";
 
-        AppendTabStrip(html, title, side, jsonEnabled, xmlEnabled, mapiEnabled, headersEnabled, rawEnabled, initial);
+        AppendTabStrip(
+            html,
+            title,
+            side,
+            jsonEnabled,
+            xmlEnabled,
+            mapiEnabled,
+            imageEnabled,
+            hexEnabled,
+            authEnabled,
+            headersEnabled,
+            rawEnabled,
+            initial);
 
         html.Append("<div class=\"tab-panels\">");
         AppendTabPanel(
@@ -2260,6 +3029,18 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             html, side, "mapi", initial == "mapi", mapiEnabled, mapiCopy,
             $"MAPI view is not available: no protocol tree was parsed for this {lowerTitle}.",
             mapiEnabled ? inner => AppendProtocol(inner, protocol!) : null);
+        AppendAuxiliaryTabPanel(
+            html, side, "image", false, imageEnabled, imageCopy,
+            $"Image view is not available: the {lowerTitle} body is not a complete retained PNG, JPEG, GIF, WebP, BMP, or ICO image.",
+            imageEnabled ? inner => AppendImageView(inner, image!, message!.Body) : null);
+        AppendAuxiliaryTabPanel(
+            html, side, "hex", false, hexEnabled, hexCopy,
+            $"HexView is not available: no captured {lowerTitle} body bytes were retained.",
+            hexEnabled ? inner => AppendHexView(inner, message!.Body, decodedHexEnabled) : null);
+        AppendAuxiliaryTabPanel(
+            html, side, "auth", false, authEnabled, authCopy,
+            $"Auth view is not available: no Authorization, Proxy-Authorization, WWW-Authenticate, or Proxy-Authenticate header was captured for this {lowerTitle}.",
+            authEnabled ? AppendAuthView : null);
         AppendTabPanel(
             html, side, "headers", initial == "headers", headersEnabled, headersCopy,
             message is null
@@ -2284,6 +3065,9 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         bool jsonEnabled,
         bool xmlEnabled,
         bool mapiEnabled,
+        bool imageEnabled,
+        bool hexEnabled,
+        bool authEnabled,
         bool headersEnabled,
         bool rawEnabled,
         string? initial)
@@ -2293,6 +3077,9 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         AppendTabButton(html, side, "json", "JSON", jsonEnabled, initial == "json");
         AppendTabButton(html, side, "xml", "XML", xmlEnabled, initial == "xml");
         AppendTabButton(html, side, "mapi", "MAPI", mapiEnabled, initial == "mapi");
+        AppendTabButton(html, side, "image", "Image", imageEnabled, false);
+        AppendTabButton(html, side, "hex", "HexView", hexEnabled, false);
+        AppendTabButton(html, side, "auth", "Auth", authEnabled, false);
         AppendTabButton(html, side, "headers", "Headers", headersEnabled, initial == "headers");
         AppendTabButton(html, side, "raw", "Raw", rawEnabled, initial == "raw");
         html.Append("</div>");
@@ -2350,6 +3137,29 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         html.Append("</div>");
     }
 
+    private static void AppendAuxiliaryTabPanel(
+        StringBuilder html,
+        string side,
+        string key,
+        bool selected,
+        bool enabled,
+        CopySource copy,
+        string unavailableMessage,
+        Action<StringBuilder>? content)
+    {
+        if (enabled)
+        {
+            AppendTabPanel(html, side, key, selected, true, copy, unavailableMessage, content);
+            return;
+        }
+        html.Append("<div role=\"tabpanel\" id=\"").Append(side).Append("-panel-").Append(key)
+            .Append("\" aria-labelledby=\"").Append(side).Append("-tab-").Append(key)
+            .Append("\" tabindex=\"0\" class=\"tab-panel tab-panel-").Append(key).Append(" hidden\">")
+            .Append("<div class=\"tab-empty\">");
+        Text(html, unavailableMessage);
+        html.Append("</div></div>");
+    }
+
     private static void AppendCopyToolbar(StringBuilder html, string key, bool enabled, CopySource source)
     {
         html.Append("<div class=\"copy-toolbar\"><button type=\"button\" class=\"copy-button\" aria-label=\"");
@@ -2386,6 +3196,8 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         StringBuilder html,
         CopySource json,
         CopySource xml,
+        CopySource auth,
+        string? authFull,
         CopySource headers,
         CopySource raw,
         HttpMessage? message,
@@ -2394,8 +3206,37 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         var model = new Dictionary<string, string>(StringComparer.Ordinal);
         Add("json", json);
         Add("xml", xml);
+        Add("auth", auth);
         Add("headers", headers);
         Add("raw", raw);
+        if (authFull is not null)
+        {
+            var secret = CreateCompressedPayload(
+                "auth-secret",
+                Encoding.UTF8.GetBytes(authFull),
+                MaxCopyCharacters);
+            if (secret is not null)
+            {
+                model.Add("authSecret", secret.Base64);
+                model.Add("authSecretBytes", secret.DecodedBytes.ToString(CultureInfo.InvariantCulture));
+            }
+        }
+        if (message is not null && !message.Body.CapturedBytes.IsEmpty)
+        {
+            model.Add("capturedBytes", Convert.ToBase64String(message.Body.CapturedBytes.Span));
+        }
+        if (message is not null && message.Body.WasDecoded && !message.Body.DecodedBytes.IsEmpty)
+        {
+            model.Add(
+                "decodedBytes",
+                Convert.ToBase64String(message.Body.DecodedBytes.Span[..Math.Min(
+                    message.Body.DecodedBytes.Length,
+                    HexViewBytesLimit)]));
+        }
+        if (message is not null && DetectImageView(message) is not null)
+        {
+            model.Add("imageBytes", Convert.ToBase64String(message.Body.DecodedBytes.Span));
+        }
         if (message is not null && headers.Text is null)
         {
             model.Add("displayHeaders", BuildHeadersDisplayText(message));
@@ -2764,6 +3605,70 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             }
             html.Append("\"></pre></details>");
         }
+    }
+
+    private static void AppendImageView(
+        StringBuilder html,
+        ImageViewInfo image,
+        BodyPreview body)
+    {
+        html.Append("<div class=\"image-view\" data-byte-field=\"")
+            .Append("imageBytes")
+            .Append("\" data-image-mime=\"");
+        Attribute(html, image.MimeType);
+        html.Append("\"><div class=\"image-meta\"><span>");
+        Text(html, image.MimeType);
+        html.Append("</span><span>");
+        Text(html, $"{body.Length:N0} bytes");
+        html.Append("</span><span>");
+        Text(html, image.Animation);
+        html.Append("</span><span class=\"image-dimensions\">Dimensions load with the image.</span></div>");
+        html.Append("<div class=\"format-status\">");
+        Text(html, image.Detection);
+        html.Append("</div>");
+        if (image.Warning is not null)
+        {
+            html.Append("<div class=\"warning\">");
+            Text(html, image.Warning);
+            html.Append("</div>");
+        }
+        html.Append("<div class=\"image-stage\"><img alt=\"Captured HTTP image\" decoding=\"async\" referrerpolicy=\"no-referrer\" draggable=\"false\"></div>")
+            .Append("<div class=\"image-load-status\" role=\"status\" aria-live=\"polite\">Image loads when this tab is selected.</div></div>");
+    }
+
+    private static void AppendHexView(
+        StringBuilder html,
+        BodyPreview body,
+        bool decodedEnabled)
+    {
+        html.Append("<div class=\"hex-view\" data-captured-length=\"")
+            .Append(body.CapturedLength)
+            .Append("\" data-decoded-length=\"").Append(body.Length)
+            .Append("\" data-captured-retained=\"").Append(body.CapturedBytes.Length)
+            .Append("\" data-decoded-retained=\"").Append(Math.Min(body.DecodedBytes.Length, HexViewBytesLimit))
+            .Append("\"><div class=\"hex-toolbar\"><span class=\"hex-source-label\">Captured body bytes</span>")
+            .Append("<label>Source <select class=\"hex-source\" aria-label=\"Hex byte source\"><option value=\"captured\">Captured</option><option value=\"decoded\"");
+        if (!decodedEnabled)
+        {
+            html.Append(" disabled");
+        }
+        html.Append(">Decoded</option></select></label></div>");
+        if (body.RemovedEncodings.Count > 0)
+        {
+            html.Append("<div class=\"decode-status\">Removed encodings: ");
+            Text(html, string.Join(" -> ", body.RemovedEncodings));
+            html.Append("</div>");
+        }
+        html.Append("<pre class=\"hex-dump\" tabindex=\"0\" aria-label=\"Captured body byte hex dump\"></pre>")
+            .Append("<div class=\"hex-status muted\"></div></div>");
+    }
+
+    private static void AppendAuthView(StringBuilder html)
+    {
+        html.Append("<div class=\"auth-view\" data-revealed=\"false\"><div class=\"warning\">Authentication values are redacted. Reveal only when it is safe to display captured credentials or challenge tokens.</div>")
+            .Append("<button type=\"button\" class=\"auth-reveal\" aria-pressed=\"false\" aria-label=\"Reveal full authentication header values\">Reveal values</button>")
+            .Append("<pre class=\"auth-headers\" data-copy-field=\"auth\"></pre>")
+            .Append("<div class=\"auth-status\" role=\"status\" aria-live=\"polite\">Values are redacted.</div></div>");
     }
 
     private static void AppendProtocol(StringBuilder html, MapiMessageParse protocol)

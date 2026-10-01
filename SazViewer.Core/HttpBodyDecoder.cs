@@ -16,6 +16,8 @@ internal static class HttpBodyDecoder
     private const int MaxTrailerCount = 100;
     private const int MaxGzipMembers = 128;
     private const int CapturedBytesPreviewLimit = 16 * 1024;
+    private const int HexViewBytesLimit = 1024;
+    private const int DecodedPresentationBytesLimit = HttpMessageParser.MaxBodyPreview;
 
     static HttpBodyDecoder()
     {
@@ -170,6 +172,8 @@ internal static class HttpBodyDecoder
             CapturedBytesPreviewTruncated = original.Length > CapturedBytesPreviewLimit,
             RemovedEncodings = removed,
             DecodingStatus = $"Decoded in wire-removal order: {string.Join(" -> ", removed)}.",
+            CapturedBytes = original.AsMemory(0, Math.Min(original.Length, HexViewBytesLimit)),
+            DecodedBytes = current.AsMemory(0, Math.Min(current.Length, DecodedPresentationBytesLimit)),
             NormalizedBytes = retainNormalizedBody ? current : ReadOnlyMemory<byte>.Empty
         };
     }
@@ -191,6 +195,8 @@ internal static class HttpBodyDecoder
             CapturedBytesPreviewTruncated = preview.CapturedBytesPreviewTruncated,
             RemovedEncodings = preview.RemovedEncodings,
             DecodingStatus = preview.DecodingStatus,
+            CapturedBytes = availableBody[..Math.Min(availableBody.Length, HexViewBytesLimit)].ToArray(),
+            DecodedBytes = availableBody[..Math.Min(availableBody.Length, DecodedPresentationBytesLimit)].ToArray(),
             NormalizedBytes = retainNormalizedBody
                 && capturedLength == availableBody.Length
                 && availableBody.Length <= MapiParseLimits.MaxPayloadBytes
@@ -214,7 +220,8 @@ internal static class HttpBodyDecoder
             IsBinary = true,
             IsTruncated = capturedLength > previewLength,
             Preview = HttpMessageParser.HexPreview(availableBody[..previewLength]),
-            DecodingStatus = status
+            DecodingStatus = status,
+            CapturedBytes = availableBody[..Math.Min(availableBody.Length, HexViewBytesLimit)].ToArray()
         };
     }
 

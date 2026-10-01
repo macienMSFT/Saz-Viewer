@@ -10,8 +10,9 @@ public sealed class HttpBodyDecodingTests
     public void DecodesGzipJsonAndExposesCapturedBytes()
     {
         const string json = """{"message":"decoded","value":42}""";
+        var captured = Gzip(Bytes(json));
         using var saz = ResponseFixture(
-            Gzip(Bytes(json)),
+            captured,
             ("Content-Type", "application/json"),
             ("Content-Encoding", "GZip"));
 
@@ -22,8 +23,32 @@ public sealed class HttpBodyDecodingTests
         Assert.True(body.WasDecoded);
         Assert.Equal(["content: gzip"], body.RemovedEncodings);
         Assert.NotNull(body.CapturedBytesPreview);
+        Assert.Equal(captured, body.CapturedBytes.ToArray());
+        Assert.Equal(Bytes(json), body.DecodedBytes.ToArray());
+        Assert.True(body.NormalizedBytes.IsEmpty);
         Assert.Contains("wire-removal order", body.DecodingStatus, StringComparison.Ordinal);
         Assert.DoesNotContain(report.Warnings, warning => warning.Contains("decoding failed", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RetainsExactBoundedCapturedAndDecodedByteRepresentations()
+    {
+        var decoded = Enumerable.Range(0, (80 * 1024) + 17).Select(index => (byte)(index % 251)).ToArray();
+        var captured = Gzip(decoded);
+        using var saz = ResponseFixture(
+            captured,
+            ("Content-Type", "application/octet-stream"),
+            ("Content-Encoding", "gzip"));
+
+        var body = Assert.Single(new SazParser().Parse(saz).Sessions).Response!.Body;
+
+        Assert.True(body.WasDecoded);
+        Assert.Equal(decoded.Length, body.Length);
+        Assert.Equal(captured.Length, body.CapturedLength);
+        Assert.Equal(captured.AsSpan(0, Math.Min(captured.Length, 1024)).ToArray(), body.CapturedBytes.ToArray());
+        Assert.Equal(decoded.AsSpan(0, 64 * 1024).ToArray(), body.DecodedBytes.ToArray());
+        Assert.True(body.NormalizedBytes.IsEmpty);
+        Assert.True(body.IsTruncated);
     }
 
     [Fact]

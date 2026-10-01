@@ -530,6 +530,228 @@ public sealed class HtmlReportGeneratorTests
     }
 
     [Fact]
+    public void EmitsImageHexAndAuthTabsWithBoundedLazySideData()
+    {
+        const string htmlBody = """
+            <!doctype html><html><head><meta http-equiv="refresh" content="0;url=https://blocked.invalid/">
+            <script>globalThis.pwned=true</script></head><body><img src="https://blocked.invalid/image.png">Needle</body></html>
+            """;
+        var bytes = Encoding.UTF8.GetBytes(htmlBody);
+        var request = BinaryMessage("POST /views HTTP/1.1", "text/html", bytes);
+        request.Headers.Add(new HttpHeader("Authorization", "opaqueSecretToken"));
+        request.Headers.Add(new HttpHeader("Proxy-Authorization", "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ=="));
+        var response = BinaryMessage("HTTP/1.1 200 OK", "text/html", bytes);
+        response.Headers.Add(new HttpHeader("WWW-Authenticate", "Digest realm=\"private\", nonce=\"secret\""));
+        var report = new SazReport { SourceName = "views.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "POST",
+            Url = "https://example.test/views",
+            StatusCode = 200,
+            Request = request,
+            Response = response
+        });
+
+        var generated = new HtmlReportGenerator().Generate(report);
+        var order = new[]
+        {
+            "request-tab-json", "request-tab-xml", "request-tab-mapi", "request-tab-image",
+            "request-tab-hex", "request-tab-auth",
+            "request-tab-headers", "request-tab-raw"
+        }.Select(id => generated.IndexOf($"id=\"{id}\"", StringComparison.Ordinal)).ToArray();
+
+        Assert.All(order, index => Assert.True(index >= 0));
+        Assert.True(order.SequenceEqual(order.Order()));
+        Assert.Contains("id=\"request-tab-hex\" aria-controls=\"request-panel-hex\" aria-selected=\"false\" data-tab=\"hex\" tabindex=\"-1\">HexView</button>", generated, StringComparison.Ordinal);
+        Assert.Contains("id=\"request-tab-auth\" aria-controls=\"request-panel-auth\" aria-selected=\"false\" data-tab=\"auth\" tabindex=\"-1\">Auth</button>", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-tab=\"webview\"", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("webview-frame", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("innerHTML", generated, StringComparison.Ordinal);
+        Assert.Contains("img-src blob:", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("frame-src", generated, StringComparison.Ordinal);
+        Assert.Contains("data-copy-kind=\"hex\"", PanelCopyButton(generated, "request-panel-hex"));
+        Assert.Contains("data-copy-key=\"auth\"", PanelCopyButton(generated, "request-panel-auth"));
+        Assert.Contains(".copy-button[data-copy-kind=\"image\"],.copy-button[data-copy-kind=\"hex\"]", generated, StringComparison.Ordinal);
+        Assert.Contains("prepareDynamicCopy(copy,text);", generated, StringComparison.Ordinal);
+        Assert.Contains("failDynamicCopy(copy,`HexView could not be prepared.", generated, StringComparison.Ordinal);
+        Assert.Contains("view._authRevealToken=(view._authRevealToken||0)+1;", generated, StringComparison.Ordinal);
+        Assert.Contains("if(!isCurrent())return;", generated, StringComparison.Ordinal);
+        Assert.Contains("!view.closest('.tab-panel.hidden')&&!view.closest('.primary-panel.hidden')", generated, StringComparison.Ordinal);
+
+        var panelStart = generated.IndexOf("id=\"request-panel-auth\"", StringComparison.Ordinal);
+        var messageStart = generated.LastIndexOf("<section class=\"message-panel\"", panelStart, StringComparison.Ordinal);
+        using var model = ExtractCompressedPayload(generated, "copy-model", messageStart, panelStart);
+        var root = model.RootElement;
+        Assert.Equal(
+            "Authorization: [redacted]\nProxy-Authorization: Basic [redacted]\n",
+            root.GetProperty("auth").GetString());
+        Assert.Equal(Convert.ToBase64String(bytes), root.GetProperty("capturedBytes").GetString());
+        var secretBytes = int.Parse(root.GetProperty("authSecretBytes").GetString()!, CultureInfo.InvariantCulture);
+        var secret = DecompressText(root.GetProperty("authSecret").GetString()!);
+        Assert.Equal(secretBytes, Encoding.UTF8.GetByteCount(secret));
+        Assert.Equal(
+            "Authorization: opaqueSecretToken\nProxy-Authorization: Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==\n",
+            secret);
+    }
+
+    [Fact]
+    public void DisablesUnsafeIncompleteSvgAndCorruptImageViews()
+    {
+        var report = new SazReport { SourceName = "unsafe-images.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "GET",
+            Url = "https://example.test/svg",
+            StatusCode = 200,
+            Request = BinaryMessage("GET /svg HTTP/1.1", "image/svg+xml", "<svg onload='alert(1)'/>"u8.ToArray()),
+            Response = new HttpMessage
+            {
+                StartLine = "HTTP/1.1 200 OK",
+                Body = new BodyPreview
+                {
+                    Length = 100,
+                    CapturedLength = 100,
+                    IsBinary = true,
+                    IsTruncated = true,
+                    Preview = "89 50 4E 47",
+                    CapturedBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47 },
+                    DecodedBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47 },
+                    NormalizedBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47 }
+                }
+            }
+        });
+        report.Sessions[0].Response!.Headers.Add(new HttpHeader("Content-Type", "image/png"));
+
+        var generated = new HtmlReportGenerator().Generate(report);
+
+        Assert.Contains("id=\"request-tab-image\"", generated, StringComparison.Ordinal);
+        Assert.Contains("id=\"request-tab-image\" aria-controls=\"request-panel-image\" aria-selected=\"false\" data-tab=\"image\" tabindex=\"-1\" disabled aria-disabled=\"true\"", generated, StringComparison.Ordinal);
+        Assert.Contains("id=\"response-tab-image\" aria-controls=\"response-panel-image\" aria-selected=\"false\" data-tab=\"image\" tabindex=\"-1\" disabled aria-disabled=\"true\"", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AuthRedactionIsCaseInsensitiveOrderedAndConservativeAcrossSchemes()
+    {
+        var request = BinaryMessage("GET /auth HTTP/1.1", "text/plain", "safe"u8.ToArray());
+        request.Headers.Add(new HttpHeader("authorization", string.Concat("Basic ", "QWxhZGRpbjpvcGVuIHNlc2FtZQ==")));
+        request.Headers.Add(new HttpHeader("AUTHORIZATION", string.Concat("Bearer ", "eyJhbGciOiJub25lIn0.payload.signature")));
+        request.Headers.Add(new HttpHeader("Proxy-Authorization", "NTLM TlRMTVNTUAABAAA"));
+        request.Headers.Add(new HttpHeader("Authorization", "Negotiate YIIB-gYGKw"));
+        request.Headers.Add(new HttpHeader("Authorization", "opaqueSingleToken"));
+        request.Headers.Add(new HttpHeader(
+            "WWW-Authenticate",
+            "Digest realm=\"corp=eng\", nonce=\"s=1\", username=\"admin\", response=\"secret\""));
+        request.Headers.Add(new HttpHeader("Proxy-Authenticate", ""));
+        var report = new SazReport { SourceName = "auth.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "GET",
+            Url = "https://example.test/auth",
+            Request = request
+        });
+
+        var generated = new HtmlReportGenerator().Generate(report);
+        var panelStart = generated.IndexOf("id=\"request-panel-auth\"", StringComparison.Ordinal);
+        var messageStart = generated.LastIndexOf("<section class=\"message-panel\"", panelStart, StringComparison.Ordinal);
+        using var model = ExtractCompressedPayload(generated, "copy-model", messageStart, panelStart);
+
+        Assert.Equal(
+            "authorization: Basic [redacted]\n" +
+            "AUTHORIZATION: Bearer [redacted]\n" +
+            "Proxy-Authorization: NTLM [redacted]\n" +
+            "Authorization: Negotiate [redacted]\n" +
+            "Authorization: [redacted]\n" +
+            "WWW-Authenticate: Digest realm=[redacted], nonce=[redacted], username=[redacted], response=[redacted]\n" +
+            "Proxy-Authenticate: [redacted]\n",
+            model.RootElement.GetProperty("auth").GetString());
+        Assert.DoesNotContain("corp", model.RootElement.GetProperty("auth").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("eng", model.RootElement.GetProperty("auth").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("admin", model.RootElement.GetProperty("auth").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RejectsRasterPolyglotsWithTrailingBytes()
+    {
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        var polyglot = png.Concat("<script>alert(1)</script>"u8.ToArray()).ToArray();
+        var report = new SazReport { SourceName = "polyglot.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "POST",
+            Url = "https://example.test/polyglot",
+            Request = BinaryMessage("POST /polyglot HTTP/1.1", "image/png", polyglot)
+        });
+
+        var generated = new HtmlReportGenerator().Generate(report);
+
+        Assert.Contains("id=\"request-tab-image\" aria-controls=\"request-panel-image\" aria-selected=\"false\" data-tab=\"image\" tabindex=\"-1\" disabled aria-disabled=\"true\"", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("<script>alert(1)</script>", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RejectsIcoWhoseEmbeddedImageOnlyResemblesPngChunks()
+    {
+        var fakePng = new byte[45];
+        fakePng[11] = 13;
+        Encoding.ASCII.GetBytes("IHDR").CopyTo(fakePng, 12);
+        Encoding.ASCII.GetBytes("IEND").CopyTo(fakePng, 37);
+        var report = new SazReport { SourceName = "fake-png-ico.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "POST",
+            Url = "https://example.test/fake.ico",
+            Request = BinaryMessage("POST /fake.ico HTTP/1.1", "image/x-icon", PngIco(fakePng))
+        });
+
+        var generated = new HtmlReportGenerator().Generate(report);
+
+        Assert.Contains(
+            "id=\"request-tab-image\" aria-controls=\"request-panel-image\" aria-selected=\"false\" data-tab=\"image\" tabindex=\"-1\" disabled aria-disabled=\"true\"",
+            generated,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [MemberData(nameof(SupportedRasterImages))]
+    public void EnablesStructurallyValidSupportedRasterImages(string mimeType, byte[] bytes)
+    {
+        var report = new SazReport { SourceName = "image.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "POST",
+            Url = "https://example.test/image",
+            Request = BinaryMessage("POST /image HTTP/1.1", mimeType, bytes)
+        });
+
+        var generated = new HtmlReportGenerator().Generate(report);
+
+        Assert.Contains("id=\"request-tab-image\" aria-controls=\"request-panel-image\" aria-selected=\"false\" data-tab=\"image\" tabindex=\"-1\">Image</button>", generated, StringComparison.Ordinal);
+    }
+
+    public static IEnumerable<object[]> SupportedRasterImages()
+    {
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        yield return ["image/png", png];
+        yield return ["image/gif", Convert.FromBase64String("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==")];
+        yield return ["image/jpeg", Convert.FromBase64String("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/EH//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/EH//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/EH//2Q==")];
+        yield return ["image/webp", Convert.FromBase64String("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA")];
+        yield return ["image/bmp", MinimalBmp()];
+        yield return ["image/x-icon", PngIco(png)];
+    }
+
+    [Fact]
     public void NavigationControlsExposeAccessibleLabelsAndOperateOnVisibleFilteredRows()
     {
         var report = new SazReport { SourceName = "nav.saz" };
@@ -1894,5 +2116,73 @@ public sealed class HtmlReportGeneratorTests
         };
         message.Headers.Add(new HttpHeader("Content-Type", contentType));
         return message;
+    }
+
+    private static HttpMessage BinaryMessage(
+        string startLine,
+        string contentType,
+        byte[] bytes)
+    {
+        var text = contentType.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
+            || contentType.Equals("application/xhtml+xml", StringComparison.OrdinalIgnoreCase);
+        var message = new HttpMessage
+        {
+            StartLine = startLine,
+            Body = new BodyPreview
+            {
+                Length = bytes.Length,
+                CapturedLength = bytes.Length,
+                IsBinary = !text,
+                Charset = text ? "utf-8" : null,
+                Preview = text ? Encoding.UTF8.GetString(bytes) : HttpMessageParser.HexPreview(bytes),
+                CapturedBytes = bytes,
+                DecodedBytes = bytes,
+                NormalizedBytes = bytes
+            }
+        };
+        message.Headers.Add(new HttpHeader("Content-Type", contentType));
+        return message;
+    }
+
+    private static string DecompressText(string base64)
+    {
+        using var input = new MemoryStream(Convert.FromBase64String(base64));
+        using var gzip = new GZipStream(input, CompressionMode.Decompress);
+        using var reader = new StreamReader(gzip, Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
+
+    private static byte[] MinimalBmp()
+    {
+        var bytes = new byte[58];
+        bytes[0] = (byte)'B';
+        bytes[1] = (byte)'M';
+        BitConverter.GetBytes(bytes.Length).CopyTo(bytes, 2);
+        BitConverter.GetBytes(54).CopyTo(bytes, 10);
+        BitConverter.GetBytes(40).CopyTo(bytes, 14);
+        BitConverter.GetBytes(1).CopyTo(bytes, 18);
+        BitConverter.GetBytes(1).CopyTo(bytes, 22);
+        BitConverter.GetBytes((short)1).CopyTo(bytes, 26);
+        BitConverter.GetBytes((short)24).CopyTo(bytes, 28);
+        BitConverter.GetBytes(4).CopyTo(bytes, 34);
+        bytes[54] = 0x20;
+        bytes[55] = 0x60;
+        bytes[56] = 0xA0;
+        return bytes;
+    }
+
+    private static byte[] PngIco(byte[] png)
+    {
+        var bytes = new byte[22 + png.Length];
+        bytes[2] = 1;
+        bytes[4] = 1;
+        bytes[6] = 1;
+        bytes[7] = 1;
+        bytes[10] = 1;
+        bytes[12] = 32;
+        BitConverter.GetBytes(png.Length).CopyTo(bytes, 14);
+        BitConverter.GetBytes(22).CopyTo(bytes, 18);
+        png.CopyTo(bytes, 22);
+        return bytes;
     }
 }

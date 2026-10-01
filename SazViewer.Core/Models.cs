@@ -59,6 +59,8 @@ public sealed class BodyPreview
     public IReadOnlyList<string> RemovedEncodings { get; init; } = [];
     public string? DecodingStatus { get; init; }
     public bool WasDecoded => RemovedEncodings.Count > 0;
+    internal ReadOnlyMemory<byte> CapturedBytes { get; init; }
+    internal ReadOnlyMemory<byte> DecodedBytes { get; init; }
     internal ReadOnlyMemory<byte> NormalizedBytes { get; init; }
 }
 
