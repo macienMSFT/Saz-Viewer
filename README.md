@@ -54,13 +54,17 @@ If a session has associated `_w.txt` traffic, the same row opens a WebSocket ins
 
 ```powershell
 dotnet run --project .\SazViewer.App
-dotnet run --project .\SazViewer.App -- .\capture.saz
+dotnet run --project .\SazViewer.App -- .\capture.saz .\other.saz
 dotnet build .\SazViewer.App -c Release   # framework-dependent SazViewer.App.exe in bin\Release\net8.0-windows
 ```
 
 Features:
 
-- **Open** a capture with **File › Open…** (`Ctrl+O`), by dragging one `.saz` file onto the window, or with a path argument (`SazViewer.App.exe capture.saz`; `--help` lists usage). One window shows one capture; opening another replaces it and closes its inspector windows. The title bar shows the file name. Parsing and report generation run off the UI thread while the status bar shows a busy indicator.
+- **Tabs.** Each capture opens in its own tab. Captures come from **File › Open…** (`Ctrl+O`, multi-select), by dragging one or more `.saz` files onto the window, from **Open Recent**, or as path arguments (`SazViewer.App.exe a.saz b.saz`, up to 32; `--help` lists usage). Opening a file that is already open focuses its tab instead. The tab header shows the file name, and its tooltip shows the full path. Close a tab with its **✕** button, a middle-click, **File › Close tab**, or `Ctrl+W` (`Ctrl+F4`). Switch tabs with `Ctrl+Tab` / `Ctrl+Shift+Tab` (`Ctrl+PageDown` / `Ctrl+PageUp`). The title bar shows the active tab's file, and Export applies to the active tab. Parsing and report generation run off the UI thread while the status bar shows a busy indicator; opens, reloads and exports are serialized, so password prompts never overlap.
+- **Memory.** All tabs share one WebView2 environment, which means one browser process plus a renderer per loaded tab. A tab creates its WebView2 the first time it is shown. Closing a tab disposes its WebView2, in-memory report, file watcher and inspector windows.
+- **Single instance.** If SAZ Viewer is already running for your account, a second launch (for example, double-clicking a `.saz` file) forwards its paths to the running window and exits. The running window opens them as tabs and comes to the foreground. Only existing, fully qualified `.saz` paths are accepted, and passwords are never forwarded.
+- **File association (per user, no admin).** **Tools › Register as .saz handler** adds SAZ Viewer as an *Open with* choice for `.saz` files under `HKCU\Software\Classes`. This creates the `SazViewer.Capture` ProgID, a `.saz\OpenWithProgids` entry and an `Applications\SazViewer.App.exe` entry. It does not replace your current default. Windows 10/11 may still ask you to confirm in *Open with › Choose another app* (tick *Always*), and the app offers to open **Settings › Default apps**. The menu item is checked while registered. If the exe has moved, the item reads *update moved app path*. **Unregister** removes only the keys and values the app created and leaves other handlers (for example Fiddler's) intact.
+- **File changes.** Each tab watches its file, with debouncing and support for editors that save through a temp file and rename. When the file changes, the tab shows *This file changed on disk.* with **Reload** and **Dismiss**. Reload re-parses off the UI thread and asks for the password again for an encrypted capture. It keeps the tab and its position. If the reload fails, the previous report stays and the error is shown. A deleted file shows *File no longer exists*, and the loaded report stays viewable.
 - **Encrypted captures** prompt with a modal masked password dialog, allowing up to three attempts like the interactive CLI. Passwords are never logged, persisted, or accepted as arguments; the dialog copies the `SecureString` into a mutable buffer that the archive layer clears after use (the same managed-`string` caveat as the CLI applies).
 - **File › Export HTML…** writes the report byte-for-byte as `saz-viewer capture.saz out.html` would. **Export scrubbed HTML (remove credentials)…** matches `saz-viewer --scrub-auth`; it re-parses the capture (re-prompting for an encrypted capture's password) because scrubbing rewrites the in-memory model. Export refuses to overwrite the source capture.
 - **File › Open Recent** lists up to 10 captures, most recent first, stored as full paths only in `%LOCALAPPDATA%\SazViewer\recent.json`. Missing files are removed with a message; **Clear recent files** empties the list. A corrupt or unreadable file is ignored.
@@ -70,11 +74,20 @@ Security notes:
 
 - The report is held in memory and served only to the app's WebView2 through `WebResourceRequested` at the synthetic origin `https://saz-viewer.invalid/report.html` (the reserved `.invalid` TLD never resolves). No temp files are written, so reports of any size (for example ~18 MB for 1,172 sessions) load without the `NavigateToString` 2 MB limit. The report's CSP is unchanged.
 - Every other request — network, `file:`, `data:` documents, other paths on the synthetic origin — is answered with `403` before leaving the process. Top-level navigation away from the report is cancelled, subframes may load only `about:srcdoc`/`about:blank` (the WebView tab's empty-permission sandbox is untouched), and external protocol launches, downloads, permission requests, and HTTP authentication prompts are denied. Export is performed by the app, not the browser.
-- New windows are refused except the report's own inspector URL, which opens in a `ReportPopupWindow` with an identical `SecureReportSession`; these windows close when the capture is replaced or the app exits. Dropped `.saz` files are routed to the app instead of being displayed.
+- New windows are refused except the report's own inspector URL, which opens in a `ReportPopupWindow` with an identical `SecureReportSession`. These windows belong to their tab and close when the tab closes, its capture is reloaded, or the app exits. Dropped `.saz` files are routed to the app as new tabs instead of being displayed.
+- Single-instance hand-off uses a per-user `Local\` mutex and a named pipe. The pipe's ACL grants access only to the current user and denies network logons, and the client also checks that the pipe is owned by the current user. Requests use a small versioned binary header and a strict JSON `{"paths":[…]}` body capped at 256 KiB, 32 paths and 2,048 characters per path. Anything else is rejected. The receiving instance then opens only existing, normalized `.saz` paths.
 - DevTools and browser accelerator keys are enabled only in Debug builds. Host objects, web messages, autofill, password saving, swipe navigation, the status bar, built-in error pages, browser extensions, and SmartScreen lookups are disabled. The context menu keeps only edit commands (copy, cut, paste, select all, undo, redo).
-- WebView2 browser data lives in the per-user `%LOCALAPPDATA%\SazViewer\WebView2` folder. `SAZVIEWER_DATA_DIR` (fully qualified) redirects the whole `%LOCALAPPDATA%\SazViewer` root and exists for isolated test runs.
+- WebView2 browser data lives in the per-user `%LOCALAPPDATA%\SazViewer\WebView2` folder. `SAZVIEWER_DATA_DIR` (fully qualified) redirects the whole `%LOCALAPPDATA%\SazViewer` root and exists for isolated test runs. The single-instance names include a hash of this folder, so test runs never forward to your real instance.
 
-Manual check: run `dotnet run --project .\SazViewer.App -- .\capture.saz`; confirm the title and status-bar counts, open a session, use **Open in new tab**, toggle the theme and reopen the app, drag a second capture onto the window, open an encrypted capture (wrong password three times shows an error), and compare **Export HTML** / **Export scrubbed HTML** output with the CLI using `fc.exe /b`.
+Manual check: run `dotnet run --project .\SazViewer.App -- .\capture.saz`, then:
+
+1. Confirm the title and status-bar counts, open a session, use **Open in new tab**, toggle the theme, and reopen the app.
+2. Drag two captures onto the window and check that you get one tab each and that a duplicate focuses the existing tab. Click into the report and use `Ctrl+Tab`, `Ctrl+Shift+Tab` and `Ctrl+W`.
+3. Launch `SazViewer.App.exe other.saz` again. It should exit and the first window should gain a tab.
+4. Register, double-click a `.saz` in Explorer (confirming *Open with* if asked), then unregister and check that `HKCU\Software\Classes\SazViewer.Capture` is gone.
+5. Save a changed copy over an open capture, click **Reload**, and delete the file to see the notice.
+6. Open an encrypted capture. Three wrong passwords show an error.
+7. Compare **Export HTML** and **Export scrubbed HTML** with the CLI output using `fc.exe /b`.
 
 ## Publish a self-contained Windows executable
 

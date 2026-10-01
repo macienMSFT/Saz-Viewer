@@ -25,6 +25,22 @@ flowchart LR
 
 The CLI writes the report to disk for any browser. The desktop app runs the same parse/scrub/generate pipeline, serves the generated HTML from memory to a locked-down WebView2 control, and writes it to disk only on explicit Export.
 
+The desktop app is a tabbed host: `MainWindow` owns a `CaptureTabCollection` of `CaptureTab` objects. Each tab owns one capture's in-memory report, a lazily created WebView2, its inspector popups and a file watcher. Three small services sit beside the window: `SingleInstanceService` forwards second launches, `FileAssociationService` registers `.saz` per user, and `CaptureFileWatcher` detects file changes.
+
+```mermaid
+flowchart LR
+    LAUNCH["Second launch<br/>(double-click .saz)"] -->|"pipe: SAZV v1 + {paths}"| SI["SingleInstanceService"]
+    SI --> WIN["MainWindow"]
+    WIN --> TABS["CaptureTabCollection<br/>dedupe · active · cycle"]
+    TABS --> TAB1["CaptureTab"]
+    TABS --> TAB2["CaptureTab"]
+    TAB1 --> WV["Lazy WebView2 +<br/>SecureReportSession"]
+    TAB1 --> POP["Inspector popups"]
+    TAB1 --> FW["CaptureFileWatcher"]
+    WV --> ENV["Shared CoreWebView2Environment"]
+    WIN --> FA["FileAssociationService"] --> REG["IRegistryStore<br/>(HKCU\Software\Classes)"]
+```
+
 ## Documents
 
 | Document | Read it when you need to |
@@ -41,8 +57,14 @@ The CLI writes the report to disk for any browser. The desktop app runs the same
 |---|---|
 | `SazViewer.Cli\Program.cs` | Minimal process entry point that delegates to `CliApplication`. |
 | `SazViewer.Cli\CliApplication.cs` | CLI parsing, help/errors/exit codes, secure interactive or redirected password input, parsing, and report writing. |
-| `SazViewer.App\App.xaml.cs` / `AppArguments.cs` | Desktop entry point and `[--] [capture.saz]` / `--help` argument parsing. |
-| `SazViewer.App\MainWindow.xaml.cs` | File menu (Open, Open Recent, Export, Export scrubbed), drag-and-drop, background parse with busy state, title/status, and popup window tracking. |
+| `SazViewer.App\App.xaml.cs` / `AppArguments.cs` | Desktop entry point, `[--] [capture.saz ...]` / `--help` parsing, and the single-instance start-up decision (primary, forwarded, or standalone). |
+| `SazViewer.App\MainWindow.xaml.cs` | Tab strip host: File menu (Open, Open Recent, Close tab, Export, Export scrubbed), Tools menu (register/unregister), drag-and-drop, keyboard shortcuts, serialized background parse/reload/export with busy state, and title/status. |
+| `SazViewer.App\CaptureTab.cs` / `CaptureTabView.xaml` | One open capture: tab header, in-memory `ReportDocument`, lazily created WebView2 and `SecureReportSession`, inspector popups, file watcher, and the inline changed/deleted/reload-failed notice. `Dispose` releases all of them. |
+| `SazViewer.App\CaptureTabCollection.cs` | UI-free ordered tab list: path de-duplication, active tab, cycling, and the next tab to activate on close. |
+| `SazViewer.App\SingleInstanceService.cs` / `SingleInstanceProtocol.cs` | Per-user `Local\` mutex plus a current-user-ACL named pipe, and the versioned length-prefixed request format. |
+| `SazViewer.App\ForwardedPathValidator.cs` | Resolves arguments to full paths and accepts only existing, normalized, fully qualified `.saz` paths up to 2,048 characters. |
+| `SazViewer.App\FileAssociationService.cs` / `RegistryStore.cs` | Per-user `.saz` Open-with registration through the `IRegistryStore` abstraction (HKCU implementation plus a test fake), stale-path detection, and `SHChangeNotify`. |
+| `SazViewer.App\CaptureFileWatcher.cs` | `FileSystemWatcher` wrapper, `Debouncer` (`TimeProvider`-based), `FileFingerprint`, and `FileChangeTracker`, which decides whether to show a notice. |
 | `SazViewer.App\ReportBuilder.cs` | CLI-equivalent parse → optional `AuthScrubber` → `HtmlReportGenerator` pipeline, UTF-8 (no BOM) export, and failure wording. |
 | `SazViewer.App\SecureReportSession.cs` | Shared per-user WebView2 environment and all WebView2 lockdown: in-memory report serving, request/navigation/new-window/download/permission/context-menu policy. |
 | `SazViewer.App\ReportWebViewPolicy.cs` | Pure URI, frame, dropped-file, and context-menu allowlist decisions used by `SecureReportSession`. |
@@ -62,7 +84,7 @@ The CLI writes the report to disk for any browser. The desktop app runs the same
 | `SazViewer.Core\HtmlReportGenerator.cs` | Static HTML/CSS/JavaScript shell, CSP, browser-side list, inspector, tabs, search, copy, theme, popup, and split-view behavior. |
 | `SazViewer.Core\HtmlReportGenerator.Payloads.cs` | Session-list markup plus versioned compressed HTTP, MAPI, and WebSocket payload construction. |
 | `SazViewer.Tests` | Unit, integration, generator/envelope, encryption, CLI, and real Edge coverage. |
-| `SazViewer.App.Tests` | Desktop argument parsing, recent-files storage, CLI byte-for-byte export parity, WebView2 policy, and a launched-app WebView2 smoke test. |
+| `SazViewer.App.Tests` | Desktop argument parsing and forwarding validation, the single-instance protocol and real-pipe service, registry layout through a fake and a sandboxed HKCU key, watcher debounce, change tracking and real file events, tab de-duplication and lifecycle, recent-files storage, byte-for-byte CLI export parity, WebView2 policy, and launched-app WebView2 smoke tests (including second-launch forwarding into a new tab). |
 | `docs\mapi-parity.json` | Machine-readable MAPI protocol coverage inventory. |
 
 ### MAPI files

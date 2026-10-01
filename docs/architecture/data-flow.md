@@ -34,45 +34,131 @@ sequenceDiagram
 
 ## Desktop app to WebView2
 
-The desktop app reuses the same pipeline and generated HTML. It keeps the report in memory and serves it to WebView2 from a synthetic origin, so there is no temp file and no `NavigateToString` size limit.
+The desktop app reuses the same pipeline and generated HTML. It keeps each tab's report in memory and serves it to that tab's WebView2 from a synthetic origin, so there is no temp file and no `NavigateToString` size limit.
 
 ```mermaid
 sequenceDiagram
     actor User
     participant Win as MainWindow
+    participant Tabs as CaptureTabCollection
     participant Builder as ReportBuilder
     participant Core as Parser + Generator
+    participant Tab as CaptureTab
     participant Session as SecureReportSession
     participant View as WebView2 report
     participant Disk as Exported HTML
 
-    User->>Win: File › Open, drag-and-drop, recent file, or argument
-    Win->>Builder: Build(path, scrub: false) on a worker thread
-    opt encrypted archive
-        Core->>Win: Request password (DialogPasswordProvider, max 3)
-        Win->>User: Modal masked password dialog
+    User->>Win: File › Open, drop, recent file, argument, or forwarded path
+    Win->>Tabs: Find(path)
+    alt already open
+        Tabs-->>Win: existing tab
+        Win->>Tab: Activate (no re-parse)
+    else new capture
+        Win->>Builder: Build(path, scrub: false) on a worker thread (serialized)
+        opt encrypted archive
+            Core->>Win: Request password (DialogPasswordProvider, max 3)
+            Win->>User: Modal masked password dialog
+        end
+        Builder->>Core: Parse then Generate
+        Core-->>Builder: SazReport and HTML
+        Builder-->>Win: ReportDocument (HTML + UTF-8 bytes)
+        Win->>Tabs: Add(new CaptureTab), make active
+        Win->>Tab: Activate
+        Tab->>Session: First activation: create WebView2 on the shared environment, set document, navigate
     end
-    Builder->>Core: Parse then Generate
-    Core-->>Builder: SazReport and HTML
-    Builder-->>Win: ReportDocument (HTML + UTF-8 bytes)
-    Win->>Session: Set document, navigate
     View->>Session: GET https://saz-viewer.invalid/report.html
     Session-->>View: 200 bytes from memory
     View->>Session: Any other request or navigation
     Session-->>View: 403 or cancelled
     opt Open in new tab
         View->>Session: NewWindowRequested (report URL + fragment)
-        Session->>Win: Create ReportPopupWindow with its own SecureReportSession
+        Session->>Tab: Create ReportPopupWindow with its own SecureReportSession
     end
-    User->>Win: Export HTML or Export scrubbed HTML
+    User->>Win: Export HTML or Export scrubbed HTML (active tab)
     alt plain export
-        Win->>Disk: Current HTML, UTF-8 without BOM
+        Win->>Disk: Active tab's HTML, UTF-8 without BOM
     else scrubbed export
         Win->>Builder: Build(path, scrub: true)
         Builder->>Core: Parse, AuthScrubber.Scrub, Generate
         Win->>Disk: Scrubbed HTML, UTF-8 without BOM
     end
+    User->>Win: Close tab (✕, middle-click, Ctrl+W)
+    Win->>Tab: Dispose: popups, watcher, WebView2, report bytes
 ```
+
+### Tab lifecycle, file changes, and reload
+
+The tab records a `FileFingerprint` (length plus last-write time) just before each parse. `CaptureFileWatcher` watches the containing directory for the file name, including renames into or out of that name, so temp-file-then-rename saves are detected. It coalesces bursts with a 400 ms `Debouncer` and then raises one event, which the tab handles on the UI thread. `FileChangeTracker` compares the current fingerprint with the baseline. The app's own reads do not change the fingerprint, so they never raise a notice, and a dismissed state is not reported again.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Parsing: open (new path)
+    Parsing --> [*]: parse failed / password cancelled (no tab)
+    Parsing --> Loaded: tab added + activated
+    state Loaded {
+        [*] --> Lazy
+        Lazy --> Live: first activation creates WebView2
+        Live --> Live: activate / deactivate (Visibility)
+    }
+    Loaded --> Changed: watcher fingerprint != baseline
+    Loaded --> Deleted: file missing
+    Changed --> Loaded: Dismiss (remembered) / file restored
+    Deleted --> Loaded: Dismiss / file reappears unchanged
+    Deleted --> Changed: file reappears with new content
+    Changed --> Reloading: Reload (user click)
+    Reloading --> Loaded: success: replace document, close popups, new baseline
+    Reloading --> ReloadFailed: parse error / wrong password
+    ReloadFailed --> Reloading: Reload again
+    ReloadFailed --> Loaded: Dismiss (old report kept)
+    Loaded --> Closed: close tab
+    Changed --> Closed: close tab
+    Deleted --> Closed: close tab
+    ReloadFailed --> Closed: close tab
+    Closed --> [*]: dispose WebView2, report, watcher, popups
+```
+
+### Single-instance hand-off
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Shell as Explorer
+    participant B as Second launch (App)
+    participant M as Local\ mutex
+    participant Pipe as Named pipe (current-user ACL)
+    participant A as Running instance
+    participant Win as MainWindow
+
+    User->>Shell: Double-click capture.saz
+    Shell->>B: SazViewer.App.exe "C:\…\capture.saz"
+    B->>B: Parse args, resolve relative paths to full paths
+    B->>M: WaitOne(0)
+    alt mutex acquired (no running instance)
+        B->>Pipe: Start server
+        B->>B: Become primary and open the paths as tabs
+    else mutex held by A
+        B->>Pipe: Connect (CurrentUserOnly, 3 s timeout)
+        alt pipe not listening yet (A starting)
+            B->>M: WaitOne(500 ms), then retry (up to 4 attempts)
+        end
+        B->>B: AllowSetForegroundWindow(A's pipe server PID)
+        B->>Pipe: "SAZV" + v1 + length + {"paths":[...]}
+        Pipe->>A: Request
+        A->>A: Strict decode (header, version, size, JSON schema)
+        alt well-formed request
+            A->>A: Keep only existing, normalized .saz paths (others counted as ignored)
+            A-->>B: 0x00 Accepted
+            A->>Win: Dispatcher: open each path as a tab (dedupe), bring window to front
+            B->>B: Exit 0
+        else malformed request
+            A-->>B: 0x01 Rejected
+            B->>User: "refused the request" message, exit 1
+        end
+    end
+    Note over B,A: If A exits mid-handshake, B retries and becomes primary once the mutex is released or abandoned. If no role is settled after 4 attempts, B runs standalone.
+```
+
+The forwarding client finds the server process with `GetNamedPipeServerProcessId` and calls `AllowSetForegroundWindow` for it. This lets the running window come to the front even though the second launch owns the foreground. No password, option, or working directory is ever sent.
 
 ## Archive discovery
 
