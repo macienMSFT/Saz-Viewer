@@ -160,52 +160,89 @@ public sealed class HtmlReportBrowserTests
         var page = await context.NewPageAsync();
         var errors = new List<string>();
         CaptureErrors(page, errors);
+        await page.EmulateMediaAsync(new() { ColorScheme = ColorScheme.Dark });
         await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
         await page.EvaluateAsync("()=>{try{localStorage.removeItem('saz-viewer-theme')}catch{}}");
         await page.ReloadAsync();
 
-        var mainTheme = page.Locator(".controls .theme-select");
-        var inspectorTheme = page.Locator(".inspector-header .theme-select");
+        var mainTheme = page.Locator(".controls .theme-toggle");
+        var inspectorTheme = page.Locator(".inspector-header .theme-toggle");
         Assert.Equal("system", await page.Locator("html").GetAttributeAsync("data-theme"));
-        Assert.Equal("system", await mainTheme.InputValueAsync());
-        Assert.Equal("system", await inspectorTheme.InputValueAsync());
+        await Assertions.Expect(mainTheme).ToHaveAttributeAsync("aria-label", "Switch to light theme");
+        await Assertions.Expect(inspectorTheme).ToHaveAttributeAsync("aria-label", "Switch to light theme");
+        await Assertions.Expect(mainTheme).ToHaveAttributeAsync("aria-pressed", "true");
+        var buttonBox = await mainTheme.BoundingBoxAsync();
+        Assert.NotNull(buttonBox);
+        Assert.InRange(buttonBox.Width, 35, 40);
+        Assert.InRange(buttonBox.Height, 35, 40);
+        Assert.Equal(
+            "rgb(13, 17, 23)",
+            await page.Locator("body").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundColor"));
 
-        await mainTheme.SelectOptionAsync("light");
+        await page.EmulateMediaAsync(new() { ColorScheme = ColorScheme.Light });
+        await Assertions.Expect(mainTheme).ToHaveAttributeAsync("aria-label", "Switch to dark theme");
+        Assert.Equal("system", await page.Locator("html").GetAttributeAsync("data-theme"));
+        Assert.Equal(
+            "rgb(255, 255, 255)",
+            await page.Locator("body").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundColor"));
+
+        await mainTheme.FocusAsync();
+        await page.Keyboard.PressAsync("Space");
+        Assert.Equal("dark", await page.Locator("html").GetAttributeAsync("data-theme"));
+        Assert.Equal("dark", await page.EvaluateAsync<string>("()=>localStorage.getItem('saz-viewer-theme')"));
+        await Assertions.Expect(mainTheme).ToBeFocusedAsync();
+        await Assertions.Expect(mainTheme).ToHaveAttributeAsync("aria-label", "Switch to light theme");
+        await Assertions.Expect(mainTheme).ToHaveAttributeAsync("title", "Switch to light theme");
+        await Assertions.Expect(inspectorTheme).ToHaveAttributeAsync("aria-label", "Switch to light theme");
+        await page.ReloadAsync();
+        Assert.Equal("dark", await page.Locator("html").GetAttributeAsync("data-theme"));
+
+        var secondPage = await context.NewPageAsync();
+        var secondErrors = new List<string>();
+        CaptureErrors(secondPage, secondErrors);
+        await secondPage.EmulateMediaAsync(new() { ColorScheme = ColorScheme.Light });
+        await secondPage.GotoAsync(new Uri(reportPath).AbsoluteUri);
+        Assert.Equal("dark", await secondPage.Locator("html").GetAttributeAsync("data-theme"));
+
+        await page.Locator("#httpTable tbody tr").First.ClickAsync();
+        inspectorTheme = page.Locator(".inspector-header .theme-toggle");
+        await inspectorTheme.ClickAsync();
         Assert.Equal("light", await page.Locator("html").GetAttributeAsync("data-theme"));
-        Assert.Equal("light", await inspectorTheme.InputValueAsync());
+        await Assertions.Expect(page.Locator(".controls .theme-toggle")).ToHaveAttributeAsync("aria-label", "Switch to dark theme");
+        await Assertions.Expect(secondPage.Locator("html")).ToHaveAttributeAsync("data-theme", "light");
+        await Assertions.Expect(secondPage.Locator(".controls .theme-toggle")).ToHaveAttributeAsync("aria-label", "Switch to dark theme");
+        await page.EvaluateAsync("()=>localStorage.clear()");
+        await Assertions.Expect(secondPage.Locator("html")).ToHaveAttributeAsync("data-theme", "system");
+        await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer-theme','light')");
+        await Assertions.Expect(secondPage.Locator("html")).ToHaveAttributeAsync("data-theme", "light");
+        await secondPage.CloseAsync();
         Assert.Equal(
             "rgb(255, 255, 255)",
             await page.Locator("body").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundColor"));
         await page.ReloadAsync();
         Assert.Equal("light", await page.Locator("html").GetAttributeAsync("data-theme"));
-
-        var secondPage = await context.NewPageAsync();
-        var secondErrors = new List<string>();
-        CaptureErrors(secondPage, secondErrors);
-        await secondPage.GotoAsync(new Uri(reportPath).AbsoluteUri);
-        Assert.Equal("light", await secondPage.Locator("html").GetAttributeAsync("data-theme"));
-
         await page.Locator("#httpTable tbody tr").First.ClickAsync();
-        inspectorTheme = page.Locator(".inspector-header .theme-select");
-        await inspectorTheme.SelectOptionAsync("dark");
-        Assert.Equal("dark", await page.Locator("html").GetAttributeAsync("data-theme"));
-        Assert.Equal("dark", await page.Locator(".controls .theme-select").InputValueAsync());
-        await Assertions.Expect(secondPage.Locator("html")).ToHaveAttributeAsync("data-theme", "dark");
-        Assert.Equal("dark", await secondPage.Locator(".controls .theme-select").InputValueAsync());
-        await secondPage.CloseAsync();
-        Assert.Equal(
-            "rgb(13, 17, 23)",
-            await page.Locator("body").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundColor"));
-        await page.ReloadAsync();
-        Assert.Equal("dark", await page.Locator("html").GetAttributeAsync("data-theme"));
-        await page.Locator(".controls .theme-select").SelectOptionAsync("system");
+        var popupTask = page.WaitForPopupAsync();
+        await page.Locator("#inspectorOpenTab").ClickAsync();
+        var popup = await popupTask;
+        await popup.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+        Assert.Equal("light", await popup.Locator("html").GetAttributeAsync("data-theme"));
+        await Assertions.Expect(popup.Locator(".inspector-header .theme-toggle"))
+            .ToHaveAttributeAsync("aria-label", "Switch to dark theme");
+        await popup.CloseAsync();
+
+        await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer-theme','system')");
         await page.ReloadAsync();
         Assert.Equal("system", await page.Locator("html").GetAttributeAsync("data-theme"));
-
         await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer-theme','invalid')");
         await page.ReloadAsync();
         Assert.Equal("system", await page.Locator("html").GetAttributeAsync("data-theme"));
-        Assert.Equal("system", await page.Locator(".controls .theme-select").InputValueAsync());
+        await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer-theme','dark')");
+        await page.ReloadAsync();
+        Assert.Equal("dark", await page.Locator("html").GetAttributeAsync("data-theme"));
+        await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer-theme','light')");
+        await page.ReloadAsync();
+        Assert.Equal("light", await page.Locator("html").GetAttributeAsync("data-theme"));
         Assert.Empty(errors);
         Assert.Empty(secondErrors);
 
@@ -215,12 +252,15 @@ public sealed class HtmlReportBrowserTests
         CaptureErrors(blockedPage, blockedErrors);
         await blockedPage.AddInitScriptAsync(
             "Storage.prototype.getItem=()=>{throw new DOMException('blocked')};Storage.prototype.setItem=()=>{throw new DOMException('blocked')}");
+        await blockedPage.EmulateMediaAsync(new() { ColorScheme = ColorScheme.Dark });
         await blockedPage.GotoAsync(new Uri(reportPath).AbsoluteUri);
         Assert.Equal("system", await blockedPage.Locator("html").GetAttributeAsync("data-theme"));
-        await blockedPage.Locator(".controls .theme-select").SelectOptionAsync("dark");
-        Assert.Equal("dark", await blockedPage.Locator("html").GetAttributeAsync("data-theme"));
+        await blockedPage.Locator(".controls .theme-toggle").ClickAsync();
+        Assert.Equal("light", await blockedPage.Locator("html").GetAttributeAsync("data-theme"));
         await blockedPage.ReloadAsync();
         Assert.Equal("system", await blockedPage.Locator("html").GetAttributeAsync("data-theme"));
+        await Assertions.Expect(blockedPage.Locator(".controls .theme-toggle"))
+            .ToHaveAttributeAsync("aria-label", "Switch to light theme");
         Assert.Empty(blockedErrors);
     }
 

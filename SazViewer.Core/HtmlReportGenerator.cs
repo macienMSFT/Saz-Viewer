@@ -70,20 +70,21 @@ public sealed class HtmlReportGenerator
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
 <title>SAZ capture</title>
 <script>
-(()=>{try{const value=localStorage.getItem('saz-viewer-theme');if(value==='system'||value==='light'||value==='dark')document.documentElement.dataset.theme=value}catch{}})();
+(()=>{try{const value=localStorage.getItem('saz-viewer-theme');if(value==='light'||value==='dark')document.documentElement.dataset.theme=value}catch{}})();
 </script>
 <style>
 :root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--warn:#d29922;--warning-bg:#2b2111;--info-bg:#13233a;--protocol-kind:#d2a8ff;--protocol-binary:#ffa657;--syn-blue:#79c0ff;--syn-string:#a5d6ff;--syn-number:#ffa657;--syn-red:#ff7b72;--syn-punct:#8b949e;--syn-green:#7ee787;--syn-purple:#d2a8ff;--direction-client:#58a6ff;--direction-server:#3fb950;--selected:#1f6feb55;--hover:#1f2630}
 :root[data-theme=system]{color-scheme:light dark}
 :root[data-theme=light]{color-scheme:light;--bg:#fff;--panel:#f6f8fa;--panel2:#eaeef2;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--accent:#0969da;--warn:#9a6700;--warning-bg:#fff8c5;--info-bg:#ddf4ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#59636e;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#0969da;--direction-server:#1a7f37;--selected:#ddf4ff;--hover:#f3f4f6}
 @media(prefers-color-scheme:light){:root[data-theme=system]{--bg:#fff;--panel:#f6f8fa;--panel2:#eaeef2;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--accent:#0969da;--warn:#9a6700;--warning-bg:#fff8c5;--info-bg:#ddf4ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#59636e;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#0969da;--direction-server:#1a7f37;--selected:#ddf4ff;--hover:#f3f4f6}}
+@media print{:root,:root[data-theme=system],:root[data-theme=light],:root[data-theme=dark]{color-scheme:light;--bg:#fff;--panel:#fff;--panel2:#f6f8fa;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--accent:#0969da;--warn:#9a6700;--warning-bg:#fff8c5;--info-bg:#ddf4ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#59636e;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#0969da;--direction-server:#1a7f37;--selected:#ddf4ff;--hover:#f3f4f6}}
 *{box-sizing:border-box}html{scrollbar-gutter:stable}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
 body.inspector-open{overflow:hidden}
 body.inspector-only main{display:none}
 main{width:100%;padding:4px}h2,h3,h4{margin:.25em 0}.muted,.format-status{color:var(--muted)}
 .controls{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 4px}input,select,button{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:7px 10px}
 input{min-width:280px;flex:1}button{cursor:pointer}
-.theme-control{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:12px;white-space:nowrap}.theme-control select{padding:5px 24px 5px 8px;font:inherit;color:var(--text)}.theme-control select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.theme-toggle{flex:0 0 36px;display:inline-flex;align-items:center;justify-content:center;width:36px;min-width:36px;height:36px;padding:6px;color:var(--text)}.theme-toggle svg{display:block;width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.theme-toggle .theme-bulb-core{fill:transparent;stroke:none}.theme-toggle[aria-pressed=true]{color:var(--syn-number);border-color:var(--accent)}.theme-toggle[aria-pressed=true] .theme-bulb-core{fill:currentColor}.theme-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 table{width:100%;border-collapse:collapse;background:var(--panel);font-size:13px}th{position:sticky;top:0;z-index:2;background:var(--panel2);text-align:left}
 th,td{padding:8px;border:1px solid var(--line);vertical-align:top}tbody tr:hover{background:var(--hover)}#httpTable{min-width:1140px;table-layout:auto}#httpTable th,#httpTable td{padding:5px 7px;line-height:1.3}
 #httpTable .http-time{width:184px;min-width:184px;white-space:nowrap}#httpTable .http-id{width:60px}#httpTable .http-method{width:84px}#httpTable .http-protocol{width:96px}
@@ -162,7 +163,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 <span id="inspectorPosition" class="inspector-position" aria-live="polite"></span>
 <button type="button" id="inspectorNext" aria-label="Next session">Next &#9654;</button>
 </div>
-<label class="theme-control"><span>Theme</span><select class="theme-select" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+<button type="button" class="theme-toggle" aria-label="Switch theme" title="Switch theme" aria-pressed="false"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M8.5 15.5A6 6 0 1 1 15.5 15.5C14.6 16.2 14 17 14 18h-4c0-1-.6-1.8-1.5-2.5Z"/><circle class="theme-bulb-core" cx="12" cy="11" r="2.4"/></svg></button>
 <button type="button" id="inspectorOpenTab" aria-label="Open in new tab: this session inspector" title="Open this session inspector in a new tab">Open in new tab</button>
 <button type="button" id="inspectorClose" class="inspector-close" aria-label="Close session inspector">&#10005;</button>
 <span id="inspectorOpenStatus" class="inspector-open-status" role="status" aria-live="polite"></span>
@@ -183,18 +184,36 @@ const inspectorClose=document.getElementById('inspectorClose');
 const inspectorOpenStatus=document.getElementById('inspectorOpenStatus');
 const reportStatus=document.getElementById('reportStatus');
 const THEME_STORAGE_KEY='saz-viewer-theme';
-const THEME_VALUES=new Set(['system','light','dark']);
-const themeSelects=[...document.querySelectorAll('.theme-select')];
+const THEME_VALUES=new Set(['light','dark']);
+const systemTheme=matchMedia('(prefers-color-scheme:dark)');
+const themeButtons=[...document.querySelectorAll('.theme-toggle')];
+function effectiveTheme(){
+  const theme=document.documentElement.dataset.theme;
+  return THEME_VALUES.has(theme)?theme:(systemTheme.matches?'dark':'light');
+}
+function syncThemeButtons(){
+  const current=effectiveTheme();
+  const next=current==='dark'?'light':'dark';
+  themeButtons.forEach(button=>{
+    const label=`Switch to ${next} theme`;
+    button.setAttribute('aria-label',label);
+    button.title=label;
+    button.setAttribute('aria-pressed',current==='dark'?'true':'false');
+  });
+}
 function applyTheme(value,persist){
   const theme=THEME_VALUES.has(value)?value:'system';
   document.documentElement.dataset.theme=theme;
-  themeSelects.forEach(select=>{select.value=theme});
-  if(persist){try{localStorage.setItem(THEME_STORAGE_KEY,theme)}catch{}}
+  syncThemeButtons();
+  if(persist&&THEME_VALUES.has(theme)){try{localStorage.setItem(THEME_STORAGE_KEY,theme)}catch{}}
 }
 applyTheme(document.documentElement.dataset.theme,false);
-themeSelects.forEach(select=>select.addEventListener('change',()=>applyTheme(select.value,true)));
+themeButtons.forEach(button=>button.addEventListener('click',()=>{
+  applyTheme(effectiveTheme()==='dark'?'light':'dark',true);
+}));
+systemTheme.addEventListener?.('change',()=>{if(document.documentElement.dataset.theme==='system')syncThemeButtons()});
 window.addEventListener('storage',event=>{
-  if(event.key===THEME_STORAGE_KEY)applyTheme(event.newValue,false);
+  if(event.key===THEME_STORAGE_KEY||event.key===null)applyTheme(event.key===null?null:event.newValue,false);
 });
 let currentRow=null,originRow=null,renderGeneration=0,inspectorOnly=false,retainSelectionOnClose=false;
 const PAYLOAD_VERSION='1';
@@ -1705,7 +1724,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
 <section class="http-workspace" aria-label="HTTP sessions">
 <div class="controls"><input id="httpSearch" type="search" aria-label="Search HTTP sessions" placeholder="Search method, URL, status, content type, endpoints...">
 <select id="httpFilter" aria-label="Filter HTTP status or protocol"><option value="">All sessions</option><option value="websocket">WebSocket only</option><option value="mapi">MAPI/NSPI only</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option></select>
-<label class="theme-control"><span>Theme</span><select class="theme-select" aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div>
+<button type="button" class="theme-toggle" aria-label="Switch theme" title="Switch theme" aria-pressed="false"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M8.5 15.5A6 6 0 1 1 15.5 15.5C14.6 16.2 14 17 14 18h-4c0-1-.6-1.8-1.5-2.5Z"/><circle class="theme-bulb-core" cx="12" cy="11" r="2.4"/></svg></button></div>
 <div id="reportStatus" class="warning hidden" role="status" aria-live="polite"></div>
 <div class="http-table-scroll"><table id="httpTable"><thead><tr><th class="http-time">Time</th><th class="http-id">ID</th><th class="http-method">Method</th><th class="http-protocol">Protocol</th><th class="http-url">URL</th><th class="http-status">Status</th><th class="http-bytes num">Req</th><th class="http-bytes num">Resp</th></tr></thead><tbody>
 """);

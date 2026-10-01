@@ -499,18 +499,28 @@ public sealed class HtmlReportGeneratorTests
     }
 
     [Fact]
-    public void EmitsPersistentAccessibleSystemLightDarkThemeControls()
+    public void EmitsPersistentAccessibleCompactThemeToggleControls()
     {
         var html = new HtmlReportGenerator().Generate(new SazReport { SourceName = "theme.saz" });
 
         Assert.Contains("<html lang=\"en\" data-theme=\"system\">", html, StringComparison.Ordinal);
-        Assert.Equal(2, html.Split("class=\"theme-select\"", StringSplitOptions.None).Length - 1);
-        Assert.Equal(2, html.Split("aria-label=\"Color theme\"", StringSplitOptions.None).Length - 1);
-        Assert.Contains("<option value=\"system\">System</option><option value=\"light\">Light</option><option value=\"dark\">Dark</option>", html, StringComparison.Ordinal);
+        Assert.Equal(2, html.Split("class=\"theme-toggle\"", StringSplitOptions.None).Length - 1);
+        Assert.Equal(2, html.Split("<svg aria-hidden=\"true\" viewBox=\"0 0 24 24\">", StringSplitOptions.None).Length - 1);
+        Assert.Equal(2, html.Split("class=\"theme-bulb-core\"", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("class=\"theme-select\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("aria-label=\"Color theme\"", html, StringComparison.Ordinal);
         Assert.Contains("localStorage.getItem('saz-viewer-theme')", html, StringComparison.Ordinal);
-        Assert.Contains("try{localStorage.setItem(THEME_STORAGE_KEY,theme)}catch{}", html, StringComparison.Ordinal);
-        Assert.Contains("const THEME_VALUES=new Set(['system','light','dark'])", html, StringComparison.Ordinal);
+        Assert.Contains("if(persist&&THEME_VALUES.has(theme)){try{localStorage.setItem(THEME_STORAGE_KEY,theme)}catch{}}", html, StringComparison.Ordinal);
+        Assert.Contains("const THEME_VALUES=new Set(['light','dark'])", html, StringComparison.Ordinal);
+        Assert.Contains("return THEME_VALUES.has(theme)?theme:(systemTheme.matches?'dark':'light')", html, StringComparison.Ordinal);
+        Assert.Contains("applyTheme(effectiveTheme()==='dark'?'light':'dark',true)", html, StringComparison.Ordinal);
+        Assert.Contains("systemTheme.addEventListener?.('change'", html, StringComparison.Ordinal);
+        Assert.Contains("button.setAttribute('aria-label',label)", html, StringComparison.Ordinal);
+        Assert.Contains("button.setAttribute('aria-pressed',current==='dark'?'true':'false')", html, StringComparison.Ordinal);
         Assert.Contains("window.addEventListener('storage'", html, StringComparison.Ordinal);
+        Assert.Contains("event.key===THEME_STORAGE_KEY||event.key===null", html, StringComparison.Ordinal);
+        Assert.Contains(".theme-toggle{flex:0 0 36px", html, StringComparison.Ordinal);
+        Assert.Contains("@media print{:root,:root[data-theme=system],:root[data-theme=light],:root[data-theme=dark]{color-scheme:light", html, StringComparison.Ordinal);
         Assert.Contains(":root[data-theme=light]{color-scheme:light", html, StringComparison.Ordinal);
         Assert.Contains(":root[data-theme=system]{color-scheme:light dark}", html, StringComparison.Ordinal);
         Assert.Contains("@media(prefers-color-scheme:light){:root[data-theme=system]", html, StringComparison.Ordinal);
