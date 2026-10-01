@@ -2,6 +2,8 @@
 
 SAZ Viewer is a local command-line tool that reads Fiddler SAZ archives and writes a single portable HTML report. It has no runtime dependency on Fiddler Classic, FiddlerCore, a browser library, or a network service. Captured values are safely encoded or inserted as text nodes, and the report's Content Security Policy blocks network access and captured active content.
 
+New to the codebase? Start with the [architecture guide](docs/architecture/README.md), which links component, data-flow, MAPI, browser-runtime, security, testing, and extension diagrams.
+
 ## Prerequisites
 
 - Windows with the .NET 8 SDK or newer to build
