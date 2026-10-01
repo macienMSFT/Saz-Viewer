@@ -60,6 +60,13 @@ public static class AuthScrubber
         @"(?<prefix>https?://api\.github\.com/repos/[^/\s]+/[^/\s]+/hooks/)(?<secret>[^/?#\s""'<>]+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    // Only starts a name at the first letter of an [A-Za-z0-9_-] run. Every later offset in the run reaches the same
+    // run end and suffix, so it would match or fail identically; skipping them avoids quadratic backtracking on long
+    // tokens (for example Bearer JWTs) without changing any match.
+    private static readonly Regex ChallengeParameterPattern = new(
+        @"(?<![A-Za-z][0-9_-]*)(?<name>[A-Za-z][A-Za-z0-9_-]*)\s*=\s*""?(?<value>[^"",\s]+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     private static readonly Regex UrlUserInfoPattern = new(
         @"(?<prefix>(?:[A-Za-z][A-Za-z0-9+.-]*:)?//)(?<userinfo>[^/?#@\s]+)@",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -70,7 +77,9 @@ public static class AuthScrubber
         var context = new ScrubContext();
         context.CollectKnownSecrets(report);
 
-        foreach (var session in report.Sessions)
+        // Sessions and messages are independent and the context only accumulates commutative counts, so scrubbing
+        // them in parallel produces exactly the same report as a sequential pass.
+        Parallel.ForEach(report.Sessions, session =>
         {
             session.Url = context.ScrubUrl(session.Url);
             session.StatusText = context.ScrubText(session.StatusText);
@@ -80,12 +89,10 @@ public static class AuthScrubber
             ScrubDictionary(session.Metadata, context);
             ScrubDictionary(session.Timers, context);
             ScrubList(session.Warnings, context);
-        }
+        });
 
-        for (var index = 0; index < report.WebSocketMessages.Count; index++)
-        {
-            report.WebSocketMessages[index] = context.ScrubWebSocket(report.WebSocketMessages[index]);
-        }
+        Parallel.For(0, report.WebSocketMessages.Count, index =>
+            report.WebSocketMessages[index] = context.ScrubWebSocket(report.WebSocketMessages[index]));
 
         ScrubList(report.Warnings, context);
         if (report.Mapi is not null)
@@ -589,10 +596,7 @@ public static class AuthScrubber
             string value,
             Dictionary<string, string> collected)
         {
-            foreach (Match match in Regex.Matches(
-                         value,
-                         @"(?<name>[A-Za-z][A-Za-z0-9_-]*)\s*=\s*""?(?<value>[^"",\s]+)",
-                         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            foreach (Match match in ChallengeParameterPattern.Matches(value))
             {
                 var name = match.Groups["name"].Value;
                 if (IsSensitiveName(name)
@@ -1106,8 +1110,13 @@ public static class AuthScrubber
             };
         }
 
-        private void Record(string type) =>
-            Counts[type] = Counts.GetValueOrDefault(type) + 1;
+        private void Record(string type)
+        {
+            lock (Counts)
+            {
+                Counts[type] = Counts.GetValueOrDefault(type) + 1;
+            }
+        }
 
         private bool IsSensitiveQueryName(string name) =>
             IsSensitiveName(name)

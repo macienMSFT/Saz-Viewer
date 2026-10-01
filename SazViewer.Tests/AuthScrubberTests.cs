@@ -173,6 +173,49 @@ public sealed class AuthScrubberTests
     }
 
     [Fact]
+    public void CollectsChallengeParametersThatStartInsideIdentifierRuns()
+    {
+        var secrets = new[] { "midrun-nonce-canary-6a1f20", "digit-prefixed-canary-0b77c3" };
+        var report = new SazReport { SourceName = "challenge-runs.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "GET",
+            Url = "https://example.test/",
+            Request = Message(
+                "GET / HTTP/1.1",
+                "text/plain",
+                $"echo {secrets[0]} {secrets[1]}",
+                [new("WWW-Authenticate", $"Digest _nonce=\"{secrets[0]}\", 9-response={secrets[1]}")])
+        });
+
+        AuthScrubber.Scrub(report);
+
+        AssertNoCanaries(report.Sessions[0].Request!.Body.Preview, secrets);
+    }
+
+    [Fact]
+    public void ScrubsVeryLongAuthorizationTokensInLinearTime()
+    {
+        var token = new string('a', 200_000);
+        var report = new SazReport { SourceName = "long-token.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "GET",
+            Url = "https://example.test/",
+            Request = Message("GET / HTTP/1.1", "text/plain", "body", [new("Authorization", "Bearer " + token)])
+        });
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        AuthScrubber.Scrub(report);
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"Scrub took {stopwatch.Elapsed}.");
+        Assert.DoesNotContain(token, report.Sessions[0].Request!.Headers[0].Value, StringComparison.Ordinal);
+    }
+    [Fact]
     public void ScrubsRequiredAuthenticationSchemesHeadersAndStandaloneTokenFamilies()
     {
         var secrets = new[]
