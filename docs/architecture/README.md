@@ -28,21 +28,53 @@ flowchart LR
 | [Security model](security.md) | Review archive, password, captured-content, CSP, WebView, and Auth trust boundaries |
 | [Testing and extension guide](testing-and-extension.md) | Find the right tests or add a parser, ROP, inspector view, or report field |
 
-## Repository map
+## Project and file map
 
-| Path | Responsibility |
+| Path / principal type | Responsibility |
 |---|---|
-| `SazViewer.Cli` | Argument handling, secure password input, exit codes, and writing the report |
-| `SazViewer.Core\SazArchive.cs` | ZIP inspection, encryption selection, archive limits, authenticated entry reads |
-| `SazViewer.Core\SazParser.cs` | Sparse `raw/<id>_*` discovery, per-session orchestration, metadata, ordering |
-| `SazViewer.Core\HttpMessageParser.cs` | HTTP start line, headers, body boundary, charset-safe preview |
-| `SazViewer.Core\HttpBodyDecoder.cs` | Chunked transfer removal, content decoding, byte retention, safety limits |
-| `SazViewer.Core\WebSocket*.cs` | Fiddler `_w.txt` records, RFC 6455 frames, fragmentation and logical messages |
-| `SazViewer.Core\Mapi` | MAPI/HTTP, NSPI, ROP, property, FastTransfer, and capture-state parsing |
-| `SazViewer.Core\HtmlReportGenerator.cs` | Static HTML/CSS/JavaScript shell and browser-side behavior |
-| `SazViewer.Core\HtmlReportGenerator.Payloads.cs` | Server-side list markup, canonical HTTP envelopes, MAPI/WS payloads |
-| `SazViewer.Tests` | Unit, integration, generated-report, encryption, and real Edge coverage |
-| `docs\mapi-parity.json` | Machine-readable MAPI coverage inventory |
+| `SazViewer.Cli\Program.cs` | Minimal process entry point that delegates to `CliApplication`. |
+| `SazViewer.Cli\CliApplication.cs` | CLI parsing, help/errors/exit codes, secure interactive or redirected password input, parsing, and report writing. |
+| `SazViewer.Core\Models.cs` | Public report, HTTP, retained-body, WebSocket message, and frame models. |
+| `SazViewer.Core\SazArchive.cs` / `SazArchiveFactory` | ZIP inspection, plain/encrypted reader selection, archive limits, integrity checks, and bounded entry access. |
+| `SazViewer.Core\SazPasswordProvider.cs` | Password-provider contract, password limit, and archive/password exception taxonomy. |
+| `SazViewer.Core\SazParser.cs` / `SazParser` | Sparse `raw/<id>_*` discovery, per-session orchestration, metadata/timers, WebSocket association, MAPI handoff, and chronological ordering. |
+| `SazViewer.Core\HttpMessageParser.cs` | HTTP start line, ordered headers, CRLF body boundary, charset-safe preview, and hex rendering. |
+| `SazViewer.Core\HttpBodyDecoder.cs` | Transfer/content coding removal, decompression validation, retained-byte ownership, and decoding warnings. |
+| `SazViewer.Core\BodyFormatter.cs` | Server-side JSON/XML/text format detection and bounded pretty formatting used by parity tests and fallbacks. |
+| `SazViewer.Core\SafeHtmlPreview.cs` / `SafeHtmlPreviewBuilder` | Conservative HTML recognition and inert WebView document construction. |
+| `SazViewer.Core\WebSocketParser.cs` | Fiddler `_w.txt` record parsing and bounded RFC 6455 frame extraction. |
+| `SazViewer.Core\WebSocketMessageAssembler.cs` | Fragment/control-frame handling and frame-to-logical-message reassembly. |
+| `SazViewer.Core\HtmlReportGenerator.cs` | Static HTML/CSS/JavaScript shell, CSP, browser-side list, inspector, tabs, search, copy, theme, popup, and split-view behavior. |
+| `SazViewer.Core\HtmlReportGenerator.Payloads.cs` | Session-list markup plus versioned compressed HTTP, MAPI, and WebSocket payload construction. |
+| `SazViewer.Tests` | Unit, integration, generator/envelope, encryption, CLI, and real Edge coverage. |
+| `docs\mapi-parity.json` | Machine-readable MAPI protocol coverage inventory. |
+
+### MAPI files
+
+| Path / principal type | Responsibility |
+|---|---|
+| `Mapi\MapiModels.cs` | Public MAPI tree/report models, `MapiCaptureContext` transactional state, and shared parse limits. |
+| `Mapi\MapiCaptureParser.cs` | Detects MAPI/HTTP sessions, owns capture-local state, and correlates request/response parsing. |
+| `Mapi\MapiHttpMessageParser.cs` | Parses MAPI/HTTP request types and response envelopes before protocol dispatch. |
+| `Mapi\MapiReader.cs` | Offset-aware bounded primitive reader, parse exception, and shared `MapiNodeBudget`. |
+| `Mapi\AuxiliaryPayloadParser.cs` | Parses MAPI auxiliary blocks and performance/session metadata. |
+| `Mapi\ExtendedBufferParser.cs` | Validates and unwraps compressed/XOR extended buffers before ROP parsing. |
+| `Mapi\RopBufferParser.cs` | Splits ROP buffers, validates handle tables, and coordinates semantic operation parsing. |
+| `Mapi\RopSemanticParser.cs` | Central fixed-schema ROP catalog and operation dispatcher. |
+| `Mapi\RopVariableDispatcher.cs` | Routes variable-shape ROPs to family-specific decoders. |
+| `Mapi\RopFolderTableDecoders.cs` | Folder, hierarchy, contents-table, row, and related table operations. |
+| `Mapi\RopMessageRulesDecoders.cs` | Message, attachment, recipient, stream, rules, synchronization, and import operations. |
+| `Mapi\RopPropertyStoreDecoders.cs` | Property, named-property, notification, and store/logon operations. |
+| `Mapi\RopFastTransferDecoders.cs` | FastTransfer/ICS ROP semantics and capture-local stream/state transitions. |
+| `Mapi\FastTransferStreamLexer.cs` | Incremental MS-OXCFXICS token/value decoding with split-value continuation. |
+| `Mapi\FastTransferGrammar.cs` | Validates root-specific FastTransfer production order and completion. |
+| `Mapi\FastTransferStreamState.cs` | Immutable lexer/grammar state, hard limits, and capture-local multi-buffer assembler. |
+| `Mapi\NspiPropertyParser.cs` | NSPI property rows/values with wire-width context. |
+| `Mapi\NspiRestrictionParser.cs` | Bounded recursive NSPI restriction parsing. |
+| `Mapi\MapiEntryIdParser.cs` | Store, folder, message, address-book, and one-off EntryID structures. |
+| `Mapi\MapiServerIdParser.cs` | ServerId and folder/message identifier variants. |
+| `Mapi\RuleActionParser.cs` | Rule action blocks, action-specific payloads, and embedded restrictions. |
+| `Mapi\MapiPropertyNames.Generated.cs` | Generated property-tag-to-symbol lookup used for readable trees. |
 
 ## Core data model
 
@@ -63,4 +95,3 @@ MAPI output is a bounded immutable `MapiNode` tree. Browser code never reparses 
 4. **Captured content is data, never application code.** The outer report uses text nodes/encoding; WebView is a separate deny-all sandbox.
 5. **The report is portable and offline.** CSS, JavaScript, models, and compressed payloads are embedded; no network dependency exists.
 6. **Expensive views are lazy.** The list metadata is immediately available, while per-session envelopes, trees, images, and frames hydrate only when selected.
-

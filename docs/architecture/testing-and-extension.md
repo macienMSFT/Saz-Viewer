@@ -42,6 +42,17 @@ During development, run the narrowest relevant filter first, then the full suite
 6. Add teardown for Blob URLs, iframes, promises, or reveal state.
 7. Test single/split, desktop/narrow, popup, keyboard/ARIA, both themes, malformed envelopes, and zero console/network errors.
 
+## Add an HTTP body decoder
+
+Transfer and content codings are removed in reverse declaration order by `HttpBodyDecoder`; `chunked` is a transfer coding, while compression codings can appear in either header. To add a coding:
+
+1. Extend `TryDecodeCompression` with the normalized lower-case token produced by `ParseCodings`. Do not silently alias an undocumented token.
+2. Decode from the supplied byte array into a fresh bounded result. Route stream-based formats through the shared bounded read helpers or apply the same `OutputLimit` rule: no more than 4 MiB and no more than 100× the encoded length, with the existing 1 MiB floor.
+3. Validate framing, checksums, trailers, and end-of-stream semantics offered by the format. A partial or ambiguous decode must return an explicit error; never expose partial decoded bytes as success.
+4. Preserve wire provenance: `CapturedBytes` remains the pre-decoding prefix, `DecodedBytes` is the bounded final representation, `RemovedEncodings` records the actual removal order, and `NormalizedBytes` is retained only for an eligible complete MAPI body.
+5. Keep failure behavior data-preserving: add a session warning and return the bounded captured hex representation rather than dropping the body.
+6. Add tests for content and transfer headers, multiple coding layers/order, valid smallest and boundary payloads, corrupt/truncated framing, expansion-limit rejection, and retained-byte ownership. Include a synthetic SAZ conversion and report-envelope parity case.
+
 ## Add a MAPI operation
 
 1. Confirm whether the operation has a fixed schema or needs a family decoder.
@@ -76,4 +87,3 @@ When a change affects report storage or rendering:
 4. verify lazy views do not duplicate body/header models;
 5. use a backing-buffer or allocation assertion when the optimization is about memory ownership;
 6. keep report and parser limits unchanged unless the requirement explicitly changes them.
-

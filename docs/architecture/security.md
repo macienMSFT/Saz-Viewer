@@ -28,6 +28,34 @@ Each layer enforces limits independently. Important examples include archive byt
 
 XML readers prohibit DTDs and external resolution. Decompression is bounded and transactional. Unknown protocol shapes are represented as bounded raw bytes rather than interpreted speculatively.
 
+### Limits and budgets
+
+These are the principal hard limits enforced by the current implementation. A smaller context-dependent limit may apply in addition.
+
+| Boundary | Limit | Source |
+|---|---:|---|
+| ZIP entries | 100,000 | `SazArchiveFactory.MaxEntries` |
+| Encrypted entry / encrypted total | 256 MiB / 1 GiB | `SazArchiveFactory` |
+| Buffered non-seekable archive | 512 MiB | `SazArchiveFactory` |
+| Encrypted compression ratio | 1,000:1 | `SazArchiveFactory` |
+| Password | 1,024 characters; at most 3 interactive attempts | `SazPasswordLimits`, `SazArchiveFactory` |
+| Metadata XML | 1 MiB | `SazParser.MaxMetadataBytes` |
+| HTTP entry read window | 4 MiB + 128 KiB | `HttpMessageParser.MaxEntryRead` |
+| HTTP decoded body | 4 MiB and at most 100× encoded size, with a 1 MiB floor | `HttpBodyDecoder.OutputLimit` |
+| HTTP coding chain / gzip members | 8 / 128 | `HttpBodyDecoder` |
+| Body display / captured-byte retention / HexView | 64 KiB / 16 KiB / 1 KiB | HTTP parser/decoder and report generator |
+| Formatted JSON/XML/text | 256 KiB, depth 64, at most 8× source | `BodyFormatter` |
+| WebSocket entry / records | 256 MiB / 10,000 | `WebSocketParser` |
+| Retained WebSocket payload per entry / logical message | 16 MiB / 1 MiB | parser and assembler |
+| MAPI payload / nodes / depth | 4 MiB / 25,000 / 64 | `MapiParseLimits` |
+| MAPI collection / string / raw fallback | 100,000 / 1 MiB / 16 KiB | `MapiParseLimits` |
+| FastTransfer elements / nesting / tracked streams | 20,000 / 64 / 4,096 | `FastTransferLimits` |
+| HTTP, protocol, or WebSocket decoded envelope | 32 MiB each | `HtmlReportGenerator` |
+| MAPI tree decoded envelope | 8 MiB | `HtmlReportGenerator.TreePayloadMaxDecodedBytes` |
+| Browser tree | 4,000 nodes, depth 40, 300 children per node | `HtmlReportGenerator` |
+| Hydrated text / copy text | 256 KiB / 1 MiB | `HtmlReportGenerator` |
+| WebSocket messages embedded per session | 5,000 within a 28 MiB content budget | `HtmlReportGenerator` |
+
 ## Outer report
 
 The report's CSP blocks all default loads, connections, workers, objects, forms, media, and fonts. Inline CSS/JavaScript is allowed because the application itself is embedded in the single file; captured values never become executable JavaScript or CSS.

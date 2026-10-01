@@ -54,6 +54,32 @@ Single view shows Request or Response tabs. The compact layout icon beside Previ
 
 Dynamic resources are tied to the current render generation. Navigation invalidates stale asynchronous work. Image Blob URLs are revoked, WebView iframes are removed, interrupted tree batches stop, and Auth reveal state is discarded.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Selected: select row
+    Selected --> Hydrating: validate and decompress envelope
+    Hydrating --> Ready: build request and response panes
+    Hydrating --> PanelError: invalid envelope or decompression failure
+    Ready --> Single: saved/default single layout
+    Ready --> Split: saved split layout
+    Single --> Split: layout toggle
+    Split --> Single: layout toggle
+    Single --> RenderingView: choose enabled secondary tab
+    Split --> RenderingView: choose tab in either pane
+    RenderingView --> Single: view ready in single layout
+    RenderingView --> Split: view ready in split layout
+    Single --> Single: search, copy, reveal, or primary-side change
+    Split --> Split: independent search, copy, reveal, or divider resize
+    Single --> Teardown: previous, next, close, or new row
+    Split --> Teardown: previous, next, close, or new row
+    PanelError --> Teardown: close or new row
+    Teardown --> Idle: cancel work and release resources
+    Teardown --> Selected: navigate to another session
+```
+
+`Selected` identifies the session but does not imply any expensive view exists. `Hydrating` runs once per selected session; both split panes share that validated model without double decompression. `RenderingView` represents generation-bound asynchronous tree, image, or WebView work. Any transition through `Teardown` invalidates its generation before releasing resources, so late work cannot update the next session.
+
 ## Secondary views
 
 | View | Source |
@@ -77,4 +103,3 @@ Only two non-sensitive preferences use safely wrapped `localStorage`:
 - `saz-viewer.http-layout.v1`: `single` or `split`.
 
 No capture identity, URL, header, body, search query, Auth reveal state, or navigation position is persisted. Storage failure degrades to current-tab behavior.
-
