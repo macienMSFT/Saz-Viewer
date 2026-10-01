@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="SazViewer.Tests" />
+    <InternalsVisibleTo Include="SazViewer.App.Tests" />
   </ItemGroup>
 
 </Project>
