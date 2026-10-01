@@ -32,9 +32,9 @@ sequenceDiagram
     CLI->>Disk: UTF-8 without BOM
 ```
 
-## Desktop app to WebView2
+## Desktop app
 
-The desktop app reuses the same pipeline and generated HTML. It keeps each tab's report in memory and serves it to that tab's WebView2 from a synthetic origin, so there is no temp file and no `NavigateToString` size limit.
+The desktop app reuses the same parse (and optional scrub) pipeline but renders the `SazReport` model in native WPF views. Per-session work happens only when a session is selected; see [lazy loading](desktop-app.md#lazy-loading). The report HTML is generated only on Export.
 
 ```mermaid
 sequenceDiagram
@@ -42,10 +42,9 @@ sequenceDiagram
     participant Win as MainWindow
     participant Tabs as CaptureTabCollection
     participant Builder as ReportBuilder
-    participant Core as Parser + Generator
+    participant Core as Parser (+ AuthScrubber)
     participant Tab as CaptureTab
-    participant Session as SecureReportSession
-    participant View as WebView2 report
+    participant VM as CaptureViewModel
     participant Disk as Exported HTML
 
     User->>Win: File › Open, drop, recent file, argument, or forwarded path
@@ -59,31 +58,29 @@ sequenceDiagram
             Core->>Win: Request password (DialogPasswordProvider, max 3)
             Win->>User: Modal masked password dialog
         end
-        Builder->>Core: Parse then Generate
-        Core-->>Builder: SazReport and HTML
-        Builder-->>Win: ReportDocument (HTML + UTF-8 bytes)
+        Builder->>Core: Parse
+        Core-->>Builder: SazReport
+        Builder-->>Win: ReportDocument (model only)
         Win->>Tabs: Add(new CaptureTab), make active
-        Win->>Tab: Activate
-        Tab->>Session: First activation: create WebView2 on the shared environment, set document, navigate
+        Tab->>VM: Build session rows, show the grid
     end
-    View->>Session: GET https://saz-viewer.invalid/report.html
-    Session-->>View: 200 bytes from memory
-    View->>Session: Any other request or navigation
-    Session-->>View: 403 or cancelled
-    opt Open in new tab
-        View->>Session: NewWindowRequested (report URL + fragment)
-        Session->>Tab: Create ReportPopupWindow with its own SecureReportSession
+    User->>VM: Select a session
+    VM->>VM: Build the inspector panes and the selected tab's content on demand
+    opt View scrubbed
+        User->>Win: File › View scrubbed
+        Win->>Builder: Build(path, scrub: true)
+        Builder->>Core: Parse, AuthScrubber.Scrub
+        Win->>Tab: Replace document, show the scrub banner
     end
     User->>Win: Export HTML or Export scrubbed HTML (active tab)
-    alt plain export
-        Win->>Disk: Active tab's HTML, UTF-8 without BOM
-    else scrubbed export
-        Win->>Builder: Build(path, scrub: true)
-        Builder->>Core: Parse, AuthScrubber.Scrub, Generate
-        Win->>Disk: Scrubbed HTML, UTF-8 without BOM
+    alt export matches the tab's scrub state
+        Win->>Builder: Generate HTML from the tab's document (first use)
+    else scrub state differs
+        Win->>Builder: Build(path, scrub), then Generate
     end
+    Win->>Disk: UTF-8 without BOM, identical to the CLI (with or without --scrub-auth)
     User->>Win: Close tab (✕, middle-click, Ctrl+W)
-    Win->>Tab: Dispose: popups, watcher, WebView2, report bytes
+    Win->>Tab: Dispose: pop-out windows, watcher, view-models, report
 ```
 
 ### Tab lifecycle, file changes, and reload
@@ -96,9 +93,9 @@ stateDiagram-v2
     Parsing --> [*]: parse failed / password cancelled (no tab)
     Parsing --> Loaded: tab added + activated
     state Loaded {
-        [*] --> Lazy
-        Lazy --> Live: first activation creates WebView2
-        Live --> Live: activate / deactivate (Visibility)
+        [*] --> Grid
+        Grid --> Inspecting: select a session
+        Inspecting --> Grid: Esc / Close
     }
     Loaded --> Changed: watcher fingerprint != baseline
     Loaded --> Deleted: file missing
@@ -106,7 +103,7 @@ stateDiagram-v2
     Deleted --> Loaded: Dismiss / file reappears unchanged
     Deleted --> Changed: file reappears with new content
     Changed --> Reloading: Reload (user click)
-    Reloading --> Loaded: success: replace document, close popups, new baseline
+    Reloading --> Loaded: success: replace document, close pop-outs, new baseline
     Reloading --> ReloadFailed: parse error / wrong password
     ReloadFailed --> Reloading: Reload again
     ReloadFailed --> Loaded: Dismiss (old report kept)
@@ -114,7 +111,7 @@ stateDiagram-v2
     Changed --> Closed: close tab
     Deleted --> Closed: close tab
     ReloadFailed --> Closed: close tab
-    Closed --> [*]: dispose WebView2, report, watcher, popups
+    Closed --> [*]: dispose view-models, report, watcher, pop-outs
 ```
 
 ### Single-instance hand-off
