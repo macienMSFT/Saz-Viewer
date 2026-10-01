@@ -1040,7 +1040,12 @@ public sealed class HtmlReportBrowserTests
 
             var toggle = page.Locator(".http-layout-toggle");
             Assert.Equal("false", await toggle.GetAttributeAsync("aria-pressed"));
-            Assert.Equal("Switch to split view", await toggle.GetAttributeAsync("aria-label"));
+            Assert.Equal("Split view", await toggle.GetAttributeAsync("aria-label"));
+            Assert.Equal("Split view", await toggle.GetAttributeAsync("title"));
+            Assert.True(await toggle.Locator(".layout-icon-split")
+                .EvaluateAsync<bool>("icon=>getComputedStyle(icon).display!=='none'"));
+            Assert.False(await toggle.Locator(".layout-icon-single")
+                .EvaluateAsync<bool>("icon=>getComputedStyle(icon).display!=='none'"));
             Assert.Equal("inspector-nav", await toggle.Locator("xpath=..").GetAttributeAsync("class"));
             var toggleBox = await toggle.BoundingBoxAsync();
             Assert.NotNull(toggleBox);
@@ -1053,7 +1058,12 @@ public sealed class HtmlReportBrowserTests
             await toggle.ClickAsync();
             Assert.True(await page.Locator("#inspectorBody").EvaluateAsync<bool>("body=>body.classList.contains('http-split')"));
             Assert.Equal("true", await toggle.GetAttributeAsync("aria-pressed"));
-            Assert.Equal("Switch to single-side view", await toggle.GetAttributeAsync("title"));
+            Assert.Equal("Single view", await toggle.GetAttributeAsync("aria-label"));
+            Assert.Equal("Single view", await toggle.GetAttributeAsync("title"));
+            Assert.False(await toggle.Locator(".layout-icon-split")
+                .EvaluateAsync<bool>("icon=>getComputedStyle(icon).display!=='none'"));
+            Assert.True(await toggle.Locator(".layout-icon-single")
+                .EvaluateAsync<bool>("icon=>getComputedStyle(icon).display!=='none'"));
             Assert.False(await page.Locator(".primary-view-bar").IsVisibleAsync());
             Assert.False(await page.Locator(".primary-tab-strip").IsVisibleAsync());
             Assert.Equal("request-pane-heading", await page.Locator("#primary-panel-request").GetAttributeAsync("aria-labelledby"));

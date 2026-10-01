@@ -1050,7 +1050,11 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("const bar=httpElement('div','primary-view-bar')", html, StringComparison.Ordinal);
         Assert.Contains("id=\"inspectorLayoutToggle\" class=\"http-layout-toggle hidden\"", html, StringComparison.Ordinal);
         Assert.Contains("aria-controls=\"inspectorBody\"", html, StringComparison.Ordinal);
+        Assert.Contains("<g class=\"layout-icon-split\">", html, StringComparison.Ordinal);
         Assert.Contains("<rect x=\"3.5\" y=\"4\" width=\"7\" height=\"16\" rx=\"1\"/>", html, StringComparison.Ordinal);
+        Assert.Contains("<g class=\"layout-icon-single\"><rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"1\"/></g>", html, StringComparison.Ordinal);
+        Assert.Contains(".http-layout-toggle[aria-pressed=true] .layout-icon-split{display:none}", html, StringComparison.Ordinal);
+        Assert.Contains(".http-layout-toggle[aria-pressed=true] .layout-icon-single{display:block}", html, StringComparison.Ordinal);
         Assert.Contains("bar.append(tabs);", html, StringComparison.Ordinal);
         Assert.DoesNotContain("httpElement('button','http-layout-toggle'", html, StringComparison.Ordinal);
         Assert.Contains("const splitter=httpElement('div','http-splitter hidden')", html, StringComparison.Ordinal);
@@ -1066,7 +1070,7 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("splitter.setAttribute('aria-valuenow',String(now));splitter.setAttribute('aria-valuetext'", html, StringComparison.Ordinal);
         Assert.Contains("function applyHttpLayout(root,mode,persist,hydrate)", html, StringComparison.Ordinal);
         Assert.Contains("bar.classList.toggle('hidden',split);", html, StringComparison.Ordinal);
-        Assert.Contains("const label=split?'Switch to single-side view':'Switch to split view';", html, StringComparison.Ordinal);
+        Assert.Contains("const label=split?'Single view':'Split view';", html, StringComparison.Ordinal);
         Assert.Contains("request.setAttribute('aria-labelledby',split?'request-pane-heading':'primary-tab-request');", html, StringComparison.Ordinal);
         Assert.Contains("inspectorLayoutToggle.addEventListener('click'", html, StringComparison.Ordinal);
         Assert.Contains("const targets=split?[...primaryPanels.querySelectorAll(':scope>.primary-panel')]:[null];", html, StringComparison.Ordinal);
