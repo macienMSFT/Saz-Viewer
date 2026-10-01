@@ -1498,7 +1498,7 @@ window.addEventListener('storage',event=>{
         // Without a DTD/schema, XmlReader cannot tell whether inter-element whitespace is
         // significant, so pretty-printed indentation is reported as (Significant)Whitespace.
         // Skip whitespace-only text so it doesn't flood the tree with indentation noise;
-        // Pretty Text remains available for exact formatting fidelity.
+        // Formatted Text remains available for exact formatting fidelity.
         XmlNodeType.Text or XmlNodeType.SignificantWhitespace or XmlNodeType.Whitespace => !string.IsNullOrWhiteSpace(reader.Value),
         _ => false
     };

@@ -67,7 +67,7 @@ public sealed class HtmlReportGeneratorTests
         Assert.Equal("json", ExtractHttpMessage(html, "request").GetProperty("format").GetString());
         Assert.Equal("xml", ExtractHttpMessage(html, "response").GetProperty("format").GetString());
 
-        // Syntax highlighting hooks exist for Pretty Text only; safe DOM construction throughout.
+        // Syntax highlighting hooks exist for Formatted Text only; safe DOM construction throughout.
         Assert.Contains("syn-key", html, StringComparison.Ordinal);
         Assert.Contains("syn-tag", html, StringComparison.Ordinal);
         Assert.Contains("document.createElement('span')", html, StringComparison.Ordinal);
@@ -1107,6 +1107,10 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("toggle.setAttribute('role','group')", html, StringComparison.Ordinal);
         Assert.Contains("treeButton.setAttribute('aria-pressed','true')", html, StringComparison.Ordinal);
         Assert.Contains("prettyButton.setAttribute('aria-pressed','false')", html, StringComparison.Ordinal);
+        Assert.Contains("httpElement('button','', 'Formatted Text')", html, StringComparison.Ordinal);
+        Assert.Contains("wsElement('button','','Formatted Text')", html, StringComparison.Ordinal);
+        Assert.Contains("Copy WebSocket JSON formatted text", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("Pretty Text", html, StringComparison.Ordinal);
         Assert.Contains("function addTreeActions(toolbar,treeId)", html, StringComparison.Ordinal);
         Assert.Contains("toolbar.insertBefore(expand,copy);toolbar.insertBefore(collapse,copy);", html, StringComparison.Ordinal);
         Assert.Contains("expand.setAttribute('aria-controls',treeId)", html, StringComparison.Ordinal);
@@ -1412,7 +1416,7 @@ public sealed class HtmlReportGeneratorTests
         // This must stay comfortably under JsonSerializerOptions.MaxDepth or the payload silently
         // fails to serialize, disabling the Tree toggle even though the document is exactly the
         // kind of over-deep-but-otherwise-valid input the depth budget exists to still show,
-        // truncated, in the tree (falling back to Pretty Text only is the wrong outcome here).
+        // truncated, in the tree (falling back to Formatted Text only is the wrong outcome here).
         string DeepJson(int depth) => depth <= 0 ? $"\"{new string('x', 4000)}\"" : $$"""{"n":{{DeepJson(depth - 1)}}}""";
         var deepBody = DeepJson(50); // Above TreeMaxDepth(40), below BodyFormatter's safe depth(64).
 

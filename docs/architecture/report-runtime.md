@@ -93,7 +93,7 @@ stateDiagram-v2
 | Headers | Start line and ordered captured headers |
 | Raw | Captured headers plus decoded/body representation and byte provenance |
 
-Copy text and active-search text are built from the active model on demand. Search never indexes unrevealed Auth values. JSON/XML/MAPI trees render in animation-frame batches with node/depth/child budgets.
+Copy text and active-search text are built from the active model on demand. Search never indexes unrevealed Auth values. JSON and XML expose Tree and Formatted Text subviews; JSON/XML/MAPI trees render in animation-frame batches with node/depth/child budgets.
 
 ## Browser state
 

@@ -764,7 +764,7 @@ function buildTree(host,rootNode,kind,generation){
   const queue=[];
   if(rootNode.kind==='document'){
     (rootNode.children||[]).forEach(child=>queue.push({node:child,parent:tree,depth:0}));
-    if(rootNode.omitted>0)queue.push({status:true,parent:tree,text:`+${rootNode.omitted} more not shown here \u2014 use Pretty Text to view the full content.`});
+    if(rootNode.omitted>0)queue.push({status:true,parent:tree,text:`+${rootNode.omitted} more not shown here \u2014 use Formatted Text to view the full content.`});
   }else{
     queue.push({node:rootNode,parent:tree,depth:0});
   }
@@ -777,8 +777,8 @@ function buildTree(host,rootNode,kind,generation){
     // Status entries are queued (not appended immediately) so they always land after their real
     // sibling nodes in the DOM, even though those siblings are themselves appended later, in a
     // future batch.
-    if(node.omitted>0)queue.push({status:true,parent:group,text:`+${node.omitted} more not shown here \u2014 use Pretty Text to view the full content.`});
-    if(node.depthLimited)queue.push({status:true,parent:group,text:'Maximum nesting depth reached; deeper content is not shown here \u2014 use Pretty Text to view the full content.'});
+    if(node.omitted>0)queue.push({status:true,parent:group,text:`+${node.omitted} more not shown here \u2014 use Formatted Text to view the full content.`});
+    if(node.depthLimited)queue.push({status:true,parent:group,text:'Maximum nesting depth reached; deeper content is not shown here \u2014 use Formatted Text to view the full content.'});
   }
   function appendStatusEntry(parent,text){
     const status=appendStatus(parent,text);
@@ -852,7 +852,7 @@ function buildTree(host,rootNode,kind,generation){
       }
     }catch{
       queue.length=0;
-      host.textContent='Tree view could not be rendered because its decoded structure is invalid. Use Pretty Text or regenerate the report with the current SAZ Viewer.';
+      host.textContent='Tree view could not be rendered because its decoded structure is invalid. Use Formatted Text or regenerate the report with the current SAZ Viewer.';
       host.className='tree-subview warning';
       host._treeBuildToken=null;
       host._treeRendered=true;
@@ -897,7 +897,7 @@ async function renderValueTree(host,generation){
     buildTree(host,payload,kind,generation);
     controls.forEach(control=>control.disabled=false);
   }catch(error){
-    host.textContent=payloadFailureText(error,'Tree view',' Use Pretty Text or regenerate the report with the current SAZ Viewer.');
+    host.textContent=payloadFailureText(error,'Tree view',' Use Formatted Text or regenerate the report with the current SAZ Viewer.');
     host.className='tree-subview warning';
     host._treeRendered=true;
   }finally{
@@ -1600,13 +1600,13 @@ function renderWebSocketMessageDetail(container,message,generation){
   const panels=wsElement('div','tab-panels');
   const jsonPanel=wsPanel('json',suffix);
   if(hasJson){
-    const copyToolbar=wsCopyToolbar('Copy WebSocket JSON pretty text','WebSocket JSON pretty text',message.jsonPretty);
+    const copyToolbar=wsCopyToolbar('Copy WebSocket JSON formatted text','WebSocket JSON formatted text',message.jsonPretty);
     jsonPanel.append(copyToolbar);
     const structured=wsElement('div','structured-body');
     const toolbar=wsElement('div','tree-toolbar');
     const toggle=wsElement('div','view-toggle');toggle.setAttribute('role','group');toggle.setAttribute('aria-label','JSON view');
     const treeButton=wsElement('button','','Tree');treeButton.type='button';treeButton.dataset.view='tree';treeButton.setAttribute('aria-pressed','true');
-    const prettyButton=wsElement('button','','Pretty Text');prettyButton.type='button';prettyButton.dataset.view='pretty';prettyButton.setAttribute('aria-pressed','false');
+    const prettyButton=wsElement('button','','Formatted Text');prettyButton.type='button';prettyButton.dataset.view='pretty';prettyButton.setAttribute('aria-pressed','false');
     toggle.append(treeButton,prettyButton);
     toolbar.append(toggle);
     const tree=wsElement('div','tree-subview');tree.id=`ws-json-tree-${suffix}`;tree._payloadType='json-tree';
@@ -2604,7 +2604,7 @@ function createStructuredBody(model,format,side){
   const toolbar=httpElement('div','tree-toolbar'),toggle=httpElement('div','view-toggle');
   toggle.setAttribute('role','group');toggle.setAttribute('aria-label',`${format.toUpperCase()} view mode`);
   const treeButton=httpElement('button','', 'Tree');treeButton.type='button';treeButton.dataset.view='tree';treeButton.setAttribute('aria-pressed','true');
-  const prettyButton=httpElement('button','', 'Pretty Text');prettyButton.type='button';prettyButton.dataset.view='pretty';prettyButton.setAttribute('aria-pressed','false');
+  const prettyButton=httpElement('button','', 'Formatted Text');prettyButton.type='button';prettyButton.dataset.view='pretty';prettyButton.setAttribute('aria-pressed','false');
   toggle.append(treeButton,prettyButton);
   toolbar.append(toggle);container.append(toolbar);
   const tree=httpElement('div','tree-subview','Tree loads when this session is selected.');tree.id=`${side}-${format}-tree`;
@@ -2694,7 +2694,7 @@ function createMessagePanel(side,title,model,protocolSource){
   Object.entries(labels).forEach(([key,label])=>strip.append(httpTabButton(side,key,label,flags[key],initial===key)));panel.append(strip);
   const panels=httpElement('div','tab-panels');
   const descriptions={
-    json:[`Copy ${lower} JSON pretty text`,`${lower} JSON pretty text`],xml:[`Copy ${lower} XML pretty text`,`${lower} XML pretty text`],
+    json:[`Copy ${lower} JSON formatted text`,`${lower} JSON formatted text`],xml:[`Copy ${lower} XML formatted text`,`${lower} XML formatted text`],
     mapi:[`Copy ${lower} MAPI protocol tree`,`${lower} MAPI protocol tree`],image:[`Copy ${lower} image metadata`,`${lower} image metadata`],
     webview:[`Copy ${lower} HTML source`,`${lower} HTML source`],hex:[`Copy ${lower} hex view`,`${lower} hex view`],
     auth:[`Copy redacted ${lower} authentication headers`,`redacted ${lower} authentication headers`],

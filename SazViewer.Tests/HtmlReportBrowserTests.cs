@@ -1246,9 +1246,15 @@ public sealed class HtmlReportBrowserTests
     {
         var toolbar = page.Locator($"{panelSelector}>.copy-toolbar");
         await toolbar.WaitForAsync();
+        await Assertions.Expect(page.Locator($"{panelSelector} [data-view='pretty']"))
+            .ToHaveTextAsync("Formatted Text");
         Assert.Equal(
             ["Expand all", "Collapse all", "Copy"],
             await toolbar.Locator("button").AllTextContentsAsync());
+        Assert.Contains(
+            "formatted text",
+            await toolbar.Locator(".copy-button").GetAttributeAsync("aria-label") ?? string.Empty,
+            StringComparison.Ordinal);
         var treeId = await page.Locator($"{panelSelector} .tree-subview").GetAttributeAsync("id");
         Assert.False(string.IsNullOrEmpty(treeId));
         Assert.Equal(treeId, await toolbar.Locator(".tree-expand-all").GetAttributeAsync("aria-controls"));
@@ -1717,7 +1723,7 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal(ExpectedJson(), await CopyAndReadAsync(page, "request-panel-json"));
             var jsonCopyButton = page.Locator("#request-panel-json .copy-button");
             Assert.Equal("Copied", await jsonCopyButton.InnerTextAsync());
-            Assert.Contains("Copied request JSON pretty text", await page.Locator("#request-panel-json .copy-status").InnerTextAsync());
+            Assert.Contains("Copied request JSON formatted text", await page.Locator("#request-panel-json .copy-status").InnerTextAsync());
             await page.WaitForTimeoutAsync(1600);
             Assert.Equal("Copy", await jsonCopyButton.InnerTextAsync());
 
