@@ -558,7 +558,7 @@ public sealed class HtmlReportGeneratorTests
         var order = new[]
         {
             "request-tab-json", "request-tab-xml", "request-tab-mapi", "request-tab-image",
-            "request-tab-hex", "request-tab-auth",
+            "request-tab-webview", "request-tab-hex", "request-tab-auth",
             "request-tab-headers", "request-tab-raw"
         }.Select(id => generated.IndexOf($"id=\"{id}\"", StringComparison.Ordinal)).ToArray();
 
@@ -566,11 +566,12 @@ public sealed class HtmlReportGeneratorTests
         Assert.True(order.SequenceEqual(order.Order()));
         Assert.Contains("id=\"request-tab-hex\" aria-controls=\"request-panel-hex\" aria-selected=\"false\" data-tab=\"hex\" tabindex=\"-1\">HexView</button>", generated, StringComparison.Ordinal);
         Assert.Contains("id=\"request-tab-auth\" aria-controls=\"request-panel-auth\" aria-selected=\"false\" data-tab=\"auth\" tabindex=\"-1\">Auth</button>", generated, StringComparison.Ordinal);
-        Assert.DoesNotContain("data-tab=\"webview\"", generated, StringComparison.Ordinal);
-        Assert.DoesNotContain("webview-frame", generated, StringComparison.Ordinal);
+        Assert.Contains("id=\"request-tab-webview\" aria-controls=\"request-panel-webview\" aria-selected=\"false\" data-tab=\"webview\" tabindex=\"-1\">WebView</button>", generated, StringComparison.Ordinal);
+        Assert.Contains("class=\"webview-frame-host\"", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("<iframe", generated, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("innerHTML", generated, StringComparison.Ordinal);
         Assert.Contains("img-src blob:", generated, StringComparison.Ordinal);
-        Assert.DoesNotContain("frame-src", generated, StringComparison.Ordinal);
+        Assert.Contains("frame-src 'none'", generated, StringComparison.Ordinal);
         Assert.Contains("data-copy-kind=\"hex\"", PanelCopyButton(generated, "request-panel-hex"));
         Assert.Contains("data-copy-key=\"auth\"", PanelCopyButton(generated, "request-panel-auth"));
         Assert.Contains(".copy-button[data-copy-kind=\"image\"],.copy-button[data-copy-kind=\"hex\"]", generated, StringComparison.Ordinal);
@@ -588,6 +589,15 @@ public sealed class HtmlReportGeneratorTests
             "Authorization: [redacted]\nProxy-Authorization: Basic [redacted]\n",
             root.GetProperty("auth").GetString());
         Assert.Equal(Convert.ToBase64String(bytes), root.GetProperty("capturedBytes").GetString());
+        Assert.Equal(htmlBody, root.GetProperty("webview").GetString());
+        var inertDocument = root.GetProperty("webViewDocument").GetString()!;
+        Assert.StartsWith("<!doctype html><html data-theme=\"system\"><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\"", inertDocument, StringComparison.Ordinal);
+        var inertPrefix = inertDocument[..inertDocument.IndexOf("<style>", StringComparison.Ordinal)];
+        Assert.Contains($"const WEBVIEW_DOCUMENT_PREFIX=`{inertPrefix}`;", generated, StringComparison.Ordinal);
+        Assert.Contains("<span>[image omitted]</span>Needle", inertDocument, StringComparison.Ordinal);
+        Assert.DoesNotContain("blocked.invalid", inertDocument, StringComparison.Ordinal);
+        Assert.DoesNotContain("<script", inertDocument, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("http-equiv=\"refresh\"", inertDocument, StringComparison.OrdinalIgnoreCase);
         var secretBytes = int.Parse(root.GetProperty("authSecretBytes").GetString()!, CultureInfo.InvariantCulture);
         var secret = DecompressText(root.GetProperty("authSecret").GetString()!);
         Assert.Equal(secretBytes, Encoding.UTF8.GetByteCount(secret));

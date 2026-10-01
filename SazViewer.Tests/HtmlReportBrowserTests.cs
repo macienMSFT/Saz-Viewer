@@ -99,7 +99,7 @@ public sealed class HtmlReportBrowserTests
 
                 await page.Locator("#httpTable tbody tr").First.ClickAsync();
                 Assert.Equal(
-                    ["JSON", "XML", "MAPI", "Image", "HexView", "Auth", "Headers", "Raw"],
+                    ["JSON", "XML", "MAPI", "Image", "WebView", "HexView", "Auth", "Headers", "Raw"],
                     await page.Locator("#primary-panel-request>.message-panel>.tab-strip>[role=tab]").AllTextContentsAsync());
                 await page.Locator("#request-tab-hex").ClickAsync();
                 await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("1F 8B 08 00");
@@ -203,6 +203,148 @@ public sealed class HtmlReportBrowserTests
                 if (Directory.Exists(tempDirectory))
                 {
                     Directory.Delete(tempDirectory, recursive: true);
+                }
+            }
+        }
+
+        [WindowsEdgeFact]
+        public async Task WebViewIsInertOfflineLazySearchableAndTornDownAcrossNavigation()
+            {
+                var tempDirectory = Path.Combine(Path.GetTempPath(), $"saz viewer webview {Guid.NewGuid():N}");
+                var reportPath = Path.Combine(tempDirectory, "webview.html");
+                try
+                {
+                    Directory.CreateDirectory(tempDirectory);
+                    var report = CreateWebViewReport();
+                    await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(report));
+
+                    using var playwright = await Playwright.CreateAsync();
+                    await using var browser = await playwright.Chromium.LaunchAsync(new()
+                    {
+                        Channel = "msedge",
+                        Headless = true
+                    });
+                    await using var context = await browser.NewContextAsync(new()
+                    {
+                        ViewportSize = new ViewportSize { Width = 1100, Height = 760 }
+                    });
+                    var page = await context.NewPageAsync();
+                    var errors = new List<string>();
+                    var externalRequests = new List<string>();
+                    var unexpectedPopups = 0;
+                    var unexpectedDownloads = 0;
+                    CaptureErrors(page, errors);
+                    await InstallClipboardTestHookAsync(page);
+                    page.Request += (_, request) =>
+                    {
+                        if (request.Url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                            || request.Url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                            || request.Url.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)
+                            || request.Url.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
+                        {
+                            externalRequests.Add(request.Url);
+                        }
+                    };
+                    page.Popup += (_, _) => unexpectedPopups++;
+                    page.Download += (_, _) => unexpectedDownloads++;
+
+                    await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+                    await page.Locator("#httpTable tbody tr").First.ClickAsync();
+                    Assert.Equal(
+                        ["JSON", "XML", "MAPI", "Image", "WebView", "HexView", "Auth", "Headers", "Raw"],
+                        await page.Locator("#primary-panel-request>.message-panel>.tab-strip>[role=tab]").AllTextContentsAsync());
+                    await Assertions.Expect(page.Locator("#request-panel-webview iframe")).ToHaveCountAsync(0);
+
+                    await page.Locator("#request-tab-webview").ClickAsync();
+                    var frameElement = page.Locator("#request-panel-webview iframe");
+                    await page.WaitForTimeoutAsync(250);
+                    Assert.True(
+                        await frameElement.CountAsync() == 1,
+                        $"WebView frame was not created. Status: {await page.Locator("#request-panel-webview .webview-status").InnerTextAsync()} Errors: {string.Join(" | ", errors)}");
+                    Assert.Equal("", await frameElement.GetAttributeAsync("sandbox"));
+                    Assert.Equal("no-referrer", await frameElement.GetAttributeAsync("referrerpolicy"));
+                    Assert.Null(await frameElement.GetAttributeAsync("allow"));
+                    await Assertions.Expect(page.Locator("#request-panel-webview .webview-status"))
+                        .ToContainTextAsync("Scripts, forms, navigation, storage, and subresources are blocked");
+                    var child = page.Frames.Single(frame => frame != page.MainFrame);
+                    await Assertions.Expect(child.Locator("h1")).ToHaveTextAsync("Safe captured layout");
+                    await Assertions.Expect(child.Locator("a")).ToHaveTextAsync("Inert captured link");
+                    await Assertions.Expect(child.Locator("img,script,form,iframe,object,svg,math,video,a[href]"))
+                        .ToHaveCountAsync(0);
+                    await Assertions.Expect(child.Locator("style")).ToHaveCountAsync(1);
+                    Assert.DoesNotContain("invalid", await child.Locator("style").InnerTextAsync(), StringComparison.OrdinalIgnoreCase);
+                    Assert.True(child.Url is "" or "about:srcdoc", $"Unexpected child-frame URL: {child.Url}");
+                    Assert.Null(await page.EvaluateAsync<object?>("globalThis.__webviewPwned"));
+                    Assert.Empty(externalRequests);
+                    Assert.Equal(0, unexpectedPopups);
+                    Assert.Equal(0, unexpectedDownloads);
+                    Assert.Equal(new Uri(reportPath).AbsoluteUri, page.Url);
+
+                    var search = page.Locator(".http-view-search-input");
+                    await search.FillAsync("script.invalid");
+                    await Assertions.Expect(page.Locator("#request-panel-webview .webview-source")).ToBeVisibleAsync();
+                    await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+                    Assert.Contains("https://script.invalid/", await page.Locator("#request-panel-webview .webview-source").InnerTextAsync(), StringComparison.Ordinal);
+                    Assert.Equal(WebViewSource(), await CopyAndReadAsync(page, "request-panel-webview"));
+
+                    await page.Locator("#request-panel-webview [data-webview-mode=rendered]").ClickAsync();
+                    await Assertions.Expect(frameElement).ToHaveCountAsync(1);
+                    var explicitTheme = await page.EvaluateAsync<string>(
+                        "()=>{const value=document.documentElement.dataset.theme;const current=value==='light'||value==='dark'?value:(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');return current==='dark'?'light':'dark'}");
+                    await page.Locator("dialog .theme-toggle").ClickAsync();
+                    await Assertions.Expect(frameElement).ToHaveCountAsync(1);
+                    child = page.Frames.Single(frame => frame != page.MainFrame);
+                    Assert.Equal(explicitTheme, await child.Locator("html").GetAttributeAsync("data-theme"));
+
+                    await page.Locator("#request-tab-raw").ClickAsync();
+                    await Assertions.Expect(frameElement).ToHaveCountAsync(0);
+                    await page.Locator("#request-tab-webview").ClickAsync();
+                    await Assertions.Expect(frameElement).ToHaveCountAsync(1);
+                    await page.Locator("#primary-tab-response").ClickAsync();
+                    await Assertions.Expect(frameElement).ToHaveCountAsync(0);
+                    await page.Locator("#response-tab-webview").ClickAsync();
+                    await Assertions.Expect(page.Locator("#response-panel-webview iframe")).ToHaveCountAsync(1);
+
+                    await page.SetViewportSizeAsync(420, 760);
+                    Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>(
+                        "dialog=>dialog.scrollWidth<=dialog.clientWidth"));
+
+                    await page.Locator("#inspectorClose").ClickAsync();
+                    await Assertions.Expect(page.Locator("#httpInspector iframe")).ToHaveCountAsync(0);
+                    await page.Locator("#httpTable tbody tr").First.ClickAsync();
+                    await page.EvaluateAsync("""
+                        () => {
+                          document.querySelector('#request-tab-webview').click();
+                          document.querySelector('#request-tab-raw').click();
+                        }
+                        """);
+                    await page.WaitForTimeoutAsync(100);
+                    await Assertions.Expect(page.Locator("#request-panel-webview iframe")).ToHaveCountAsync(0);
+
+                    var popupTask = page.WaitForPopupAsync();
+                    await page.Locator("#inspectorOpenTab").ClickAsync();
+                    var popup = await popupTask;
+                    try
+                    {
+                        await popup.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+                        await popup.Locator("#request-tab-webview").ClickAsync();
+                        await Assertions.Expect(popup.Locator("#request-panel-webview iframe")).ToHaveCountAsync(1);
+                        Assert.Empty(externalRequests);
+                    }
+                    finally
+                    {
+                        await popup.CloseAsync();
+                    }
+
+                    Assert.Empty(errors);
+                    Assert.Empty(externalRequests);
+                    Assert.Equal(0, unexpectedDownloads);
+                }
+                finally
+                {
+                    if (Directory.Exists(tempDirectory))
+                    {
+                        Directory.Delete(tempDirectory, recursive: true);
                 }
             }
         }
@@ -2061,6 +2203,46 @@ public sealed class HtmlReportBrowserTests
         "Format: XML\n" +
         "Status: Parsed as XML from Content-Type and body content.\n" +
         ResponseBody;
+
+    private static string WebViewSource() =>
+        """
+        <!doctype html><html><head>
+        <base href="https://base.invalid/">
+        <meta http-equiv="refresh" content="0;url=https://refresh.invalid/">
+        <link rel="stylesheet" href="https://css.invalid/site.css">
+        <style>@import "https://import.invalid/site.css";body{background:url(https://style.invalid/bg.png)}</style>
+        <script>globalThis.__webviewPwned=true;parent.__webviewPwned=true;fetch("https://script.invalid/");localStorage.setItem("pwned","1")</script>
+        </head><body onload="globalThis.__webviewPwned=true">
+        <h1>Safe captured layout</h1>
+        <a href="https://link.invalid/" ping="https://ping.invalid/" target="_top">Inert captured link</a>
+        <img src="https://image.invalid/x.png" srcset="https://image2.invalid/x.png 2x" onerror="parent.__webviewPwned=true">
+        <form action="https://form.invalid/" target="_top"><button formaction="https://button.invalid/">Submit</button></form>
+        <iframe src="https://frame.invalid/" srcdoc="<script>parent.__webviewPwned=true</script>"></iframe>
+        <object data="https://object.invalid/"></object><embed src="https://embed.invalid/">
+        <video poster="https://poster.invalid/"><source src="https://media.invalid/"></video>
+        <svg><script>parent.__webviewPwned=true</script><a href="https://svg.invalid/">SVG</a></svg>
+        <math><a href="https://math.invalid/">Math</a></math>
+        <p>Searchable safe text</p>
+        </body></html>
+        """;
+
+    private static SazReport CreateWebViewReport()
+    {
+        var source = WebViewSource();
+        var bytes = Encoding.UTF8.GetBytes(source);
+        var report = new SazReport { SourceName = "webview.saz" };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "POST",
+            Url = "https://example.test/webview",
+            StatusCode = 200,
+            Request = ByteMessage("POST /webview HTTP/1.1", "text/html; charset=utf-8", bytes, bytes),
+            Response = ByteMessage("HTTP/1.1 200 OK", "text/html; charset=utf-8", bytes, bytes)
+        });
+        return report;
+    }
 
     private static SazReport CreateContentTabReport()
     {

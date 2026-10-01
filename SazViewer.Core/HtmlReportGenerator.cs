@@ -130,7 +130,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .tab-strip [role=tab]:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;z-index:1}
 .tab-panels{flex:1;min-height:0;overflow:auto;border:1px solid var(--line);border-top:none;background:var(--panel);padding:10px 12px}
 .tab-panel.hidden{display:none!important}.tab-panel-mapi{height:100%;min-height:340px;display:flex;flex-direction:column;overflow:hidden}.tab-panel-mapi>.copy-toolbar,.tab-panel-mapi>.protocol-meta,.tab-panel-mapi>.warning{flex:none}.tab-panel-mapi>.protocol-block{flex:1}.tab-empty{color:var(--muted);padding:14px 4px}
-.tab-panel-image,.tab-panel-hex,.tab-panel-auth{min-height:340px}.image-view,.hex-view,.auth-view{height:calc(100% - 34px);min-height:300px;display:flex;flex-direction:column;gap:7px}.image-meta{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--muted)}.image-stage{flex:1;min-height:220px;overflow:auto;display:flex;align-items:center;justify-content:center;border:1px solid var(--line);background-color:var(--panel2);background-image:linear-gradient(45deg,var(--line) 25%,transparent 25%),linear-gradient(-45deg,var(--line) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--line) 75%),linear-gradient(-45deg,transparent 75%,var(--line) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}.image-stage img{display:block;max-width:100%;max-height:100%;object-fit:contain}.image-load-status{color:var(--muted);min-height:1.4em}.hex-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.hex-toolbar label{display:flex;align-items:center;gap:6px}.hex-toolbar select{padding:4px 24px 4px 7px}.hex-dump{flex:1;min-height:240px;margin:0;white-space:pre;word-break:normal;font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}.auth-reveal{align-self:flex-start}.auth-headers{flex:1;min-height:220px;margin:0}.auth-status{color:var(--muted)}
+.tab-panel-image,.tab-panel-webview,.tab-panel-hex,.tab-panel-auth{min-height:340px}.image-view,.webview,.hex-view,.auth-view{height:calc(100% - 34px);min-height:300px;display:flex;flex-direction:column;gap:7px}.image-meta{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--muted)}.image-stage{flex:1;min-height:220px;overflow:auto;display:flex;align-items:center;justify-content:center;border:1px solid var(--line);background-color:var(--panel2);background-image:linear-gradient(45deg,var(--line) 25%,transparent 25%),linear-gradient(-45deg,var(--line) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--line) 75%),linear-gradient(-45deg,transparent 75%,var(--line) 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}.image-stage img{display:block;max-width:100%;max-height:100%;object-fit:contain}.image-load-status{color:var(--muted);min-height:1.4em}.webview-toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.webview-mode{display:flex;gap:2px}.webview-mode button[aria-pressed=true]{border-color:var(--accent);color:var(--text)}.webview-status{color:var(--muted);min-height:1.4em}.webview-frame-host{flex:1;min-height:240px;border:1px solid var(--line);background:var(--panel2);overflow:hidden}.webview-frame{display:block;width:100%;height:100%;min-height:240px;border:0;background:var(--bg)}.webview-source{flex:1;min-height:240px;margin:0;white-space:pre-wrap;overflow:auto}.hex-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.hex-toolbar label{display:flex;align-items:center;gap:6px}.hex-toolbar select{padding:4px 24px 4px 7px}.hex-dump{flex:1;min-height:240px;margin:0;white-space:pre;word-break:normal;font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}.auth-reveal{align-self:flex-start}.auth-headers{flex:1;min-height:220px;margin:0}.auth-status{color:var(--muted)}
 .format-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 6px}.format-meta .format-status{flex:1;min-width:180px}
 .captured-bytes{margin-top:8px}.captured-bytes summary{cursor:pointer;color:var(--accent)}
 .body-view{margin:6px 0}.decode-status{margin:6px 0;padding:6px 8px;border-left:3px solid var(--accent);background:var(--info-bg)}.session-meta pre{max-height:180px}
@@ -218,13 +218,14 @@ function applyTheme(value,persist){
   const theme=THEME_VALUES.has(value)?value:'system';
   document.documentElement.dataset.theme=theme;
   syncThemeButtons();
+  refreshWebViewThemes();
   if(persist&&THEME_VALUES.has(theme)){try{localStorage.setItem(THEME_STORAGE_KEY,theme)}catch{}}
 }
 applyTheme(document.documentElement.dataset.theme,false);
 themeButtons.forEach(button=>button.addEventListener('click',()=>{
   applyTheme(effectiveTheme()==='dark'?'light':'dark',true);
 }));
-systemTheme.addEventListener?.('change',()=>{if(document.documentElement.dataset.theme==='system')syncThemeButtons()});
+systemTheme.addEventListener?.('change',()=>{if(document.documentElement.dataset.theme==='system'){syncThemeButtons();refreshWebViewThemes()}});
 window.addEventListener('storage',event=>{
   if(event.key===THEME_STORAGE_KEY||event.key===null)applyTheme(event.key===null?null:event.newValue,false);
 });
@@ -1075,6 +1076,14 @@ function setupHttpViewSearch(root,generation){
         if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
         return{roots:[...panel.querySelectorAll('.image-meta,.format-status,.warning,.image-load-status')]};
       }
+      if(tab.dataset.tab==='webview'){
+        const view=panel.querySelector('.webview');
+        if(!view)return null;
+        setWebViewMode(view,'source',false);
+        await messageViewModel(view);
+        if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
+        return{roots:[...panel.querySelectorAll('.webview-source,.webview-status,.format-status,.warning')]};
+      }
       if(tab.dataset.tab==='hex'){
         const view=panel.querySelector('.hex-view');
         if(view)await renderHexView(view,generation);
@@ -1307,6 +1316,81 @@ async function renderImageView(view,generation){
     view._rendered=true;
   }finally{view._loading=false}
 }
+const WEBVIEW_DOCUMENT_PREFIX=`<!doctype html><html data-theme="system"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'"><meta name="referrer" content="no-referrer">`;
+function deactivateWebView(view){
+  view._webViewToken=(view._webViewToken||0)+1;
+  view._webViewLoading=false;
+  const frame=view._webViewFrame||view.querySelector('iframe');
+  if(frame)frame.remove();
+  view._webViewFrame=null;
+}
+function webViewDocument(model){
+  const documentText=model?.webViewDocument;
+  if(typeof documentText!=='string'||documentText.length>MAX_COPY_CHARACTERS||!documentText.startsWith(WEBVIEW_DOCUMENT_PREFIX))
+    throw new Error('the inert HTML document is invalid or oversized');
+  return documentText.replace('<html data-theme="system">',`<html data-theme="${effectiveTheme()}">`);
+}
+async function renderWebView(view,generation){
+  if(view._webViewFrame||view._webViewLoading||view.dataset.mode==='source')return;
+  view._webViewLoading=true;
+  const token=(view._webViewToken||0)+1;
+  view._webViewToken=token;
+  const current=()=>view._webViewToken===token&&generation===renderGeneration&&view.isConnected
+    &&!view.closest('.tab-panel.hidden')&&!view.closest('.primary-panel.hidden')&&view.dataset.mode!=='source';
+  const status=view.querySelector('.webview-status'),host=view.querySelector('.webview-frame-host');
+  try{
+    const model=await messageViewModel(view);
+    if(!current())return;
+    const frame=document.createElement('iframe');
+    frame.className='webview-frame';
+    frame.title='Inert locally rendered captured HTML';
+    frame.setAttribute('sandbox','');
+    frame.setAttribute('referrerpolicy','no-referrer');
+    frame.setAttribute('loading','lazy');
+    let loads=0;
+    frame.addEventListener('load',()=>{
+      if(!current()||view._webViewFrame!==frame)return;
+      loads++;
+      if(loads>1){
+        deactivateWebView(view);
+        status.textContent='The inert preview attempted an unexpected navigation and was closed.';
+        status.classList.add('warning');
+        return;
+      }
+      status.textContent='Inert preview rendered locally. Scripts, forms, navigation, storage, and subresources are blocked.';
+      status.classList.remove('warning');
+    });
+    frame.srcdoc=webViewDocument(model);
+    view._webViewFrame=frame;
+    host.replaceChildren(frame);
+  }catch(error){
+    if(!current())return;
+    status.textContent=`WebView could not be loaded: ${error.message}`;
+    status.classList.add('warning');
+  }finally{
+    if(view._webViewToken===token)view._webViewLoading=false;
+  }
+}
+function setWebViewMode(view,mode,notify){
+  const sourceMode=mode==='source';
+  view.dataset.mode=sourceMode?'source':'rendered';
+  view.querySelector('.webview-source').classList.toggle('hidden',!sourceMode);
+  view.querySelector('.webview-frame-host').classList.toggle('hidden',sourceMode);
+  view.querySelectorAll('.webview-mode button').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.webviewMode===view.dataset.mode)));
+  if(sourceMode){
+    deactivateWebView(view);
+    view.querySelector('.webview-status').textContent='Source view is active. Search and Copy use the original decoded captured source.';
+  }else{
+    renderWebView(view,renderGeneration);
+  }
+  if(notify)view.dispatchEvent(new CustomEvent('saz-view-change',{bubbles:true}));
+}
+function refreshWebViewThemes(){
+  document.querySelectorAll('.webview[data-mode="rendered"]').forEach(view=>{
+    if(view.closest('.tab-panel.hidden')||view.closest('.primary-panel.hidden'))return;
+    deactivateWebView(view);renderWebView(view,renderGeneration);
+  });
+}
 function formatHexDump(bytes,source,total,retained,removed){
   const lines=[`${source} body bytes`,`${total.toLocaleString()} total; ${retained.toLocaleString()} retained${retained<total?' (truncated)':''}`];
   if(removed)lines.push(`Removed encodings: ${removed}`);
@@ -1396,6 +1480,9 @@ async function toggleAuthView(view){
   }finally{if(isCurrent())button.disabled=false}
 }
 function setupDynamicViewControls(root,generation){
+  root.querySelectorAll('.webview').forEach(view=>{
+    view.querySelectorAll('.webview-mode button').forEach(button=>button.addEventListener('click',()=>setWebViewMode(view,button.dataset.webviewMode,true)));
+  });
   root.querySelectorAll('.hex-view').forEach(view=>{
     view.querySelector('.hex-source')?.addEventListener('change',()=>{view._rendered=false;renderHexView(view,generation);view.dispatchEvent(new CustomEvent('saz-view-change',{bubbles:true}))});
   });
@@ -1410,11 +1497,13 @@ function deactivateDynamicViews(root){
     view._rendered=false;
   });
   root.querySelectorAll('.auth-view').forEach(view=>resetAuthView(view,false));
+  root.querySelectorAll('.webview').forEach(deactivateWebView);
 }
 function hydrateViewPayloads(root,generation){
   if(root.classList?.contains('hidden')||root.closest?.('.primary-panel.hidden'))return;
   root.querySelectorAll('.websocket-inspector').forEach(host=>renderWebSocketInspector(host,generation));
   root.querySelectorAll('.image-view').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderImageView(view,generation)});
+  root.querySelectorAll('.webview').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderWebView(view,generation)});
   root.querySelectorAll('.hex-view').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderHexView(view,generation)});
   root.querySelectorAll('.protocol-block').forEach(host=>{
     if((host.dataset.compressedPayload||host._payloadData!==undefined)&&!host.closest('.tab-panel.hidden'))renderProtocolTree(host,generation);
@@ -2931,6 +3020,8 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         var mapiEnabled = protocol is not null;
         var image = message is null ? null : DetectImageView(message);
         var imageEnabled = image is not null;
+        var webView = message is null ? null : SafeHtmlPreviewBuilder.TryCreate(message);
+        var webViewEnabled = webView is not null;
         var hexEnabled = message is not null && !message.Body.CapturedBytes.IsEmpty;
         var decodedHexEnabled = hexEnabled
             && message!.Body.WasDecoded
@@ -2940,7 +3031,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         var authEnabled = auth is not null;
         var headersEnabled = message is not null && message.Headers.Count > 0;
         var rawEnabled = message is not null;
-        var anyEnabled = jsonEnabled || xmlEnabled || mapiEnabled || imageEnabled
+        var anyEnabled = jsonEnabled || xmlEnabled || mapiEnabled || imageEnabled || webViewEnabled
             || hexEnabled || authEnabled || headersEnabled || rawEnabled;
         var jsonCopy = CopyText(
             $"Copy {lowerTitle} JSON pretty text",
@@ -2960,6 +3051,10 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             $"{lowerTitle} image metadata",
             null,
             imageEnabled ? "image" : null);
+        var webViewCopy = CopyText(
+            $"Copy {lowerTitle} HTML source",
+            $"{lowerTitle} HTML source",
+            webView?.Source);
         var hexCopy = new CopySource(
             $"Copy {lowerTitle} hex view",
             $"{lowerTitle} hex view",
@@ -2982,6 +3077,8 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             html,
             jsonCopy,
             xmlCopy,
+            webViewCopy,
+            webView,
             authCopy,
             auth?.Full,
             headersCopy,
@@ -3010,6 +3107,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             xmlEnabled,
             mapiEnabled,
             imageEnabled,
+            webViewEnabled,
             hexEnabled,
             authEnabled,
             headersEnabled,
@@ -3033,6 +3131,10 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             html, side, "image", false, imageEnabled, imageCopy,
             $"Image view is not available: the {lowerTitle} body is not a complete retained PNG, JPEG, GIF, WebP, BMP, or ICO image.",
             imageEnabled ? inner => AppendImageView(inner, image!, message!.Body) : null);
+        AppendAuxiliaryTabPanel(
+            html, side, "webview", false, webViewEnabled, webViewCopy,
+            $"WebView is not available: the {lowerTitle} body is not complete retained HTML or XHTML.",
+            webViewEnabled ? inner => AppendWebView(inner, webView!) : null);
         AppendAuxiliaryTabPanel(
             html, side, "hex", false, hexEnabled, hexCopy,
             $"HexView is not available: no captured {lowerTitle} body bytes were retained.",
@@ -3066,6 +3168,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         bool xmlEnabled,
         bool mapiEnabled,
         bool imageEnabled,
+        bool webViewEnabled,
         bool hexEnabled,
         bool authEnabled,
         bool headersEnabled,
@@ -3078,6 +3181,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         AppendTabButton(html, side, "xml", "XML", xmlEnabled, initial == "xml");
         AppendTabButton(html, side, "mapi", "MAPI", mapiEnabled, initial == "mapi");
         AppendTabButton(html, side, "image", "Image", imageEnabled, false);
+        AppendTabButton(html, side, "webview", "WebView", webViewEnabled, false);
         AppendTabButton(html, side, "hex", "HexView", hexEnabled, false);
         AppendTabButton(html, side, "auth", "Auth", authEnabled, false);
         AppendTabButton(html, side, "headers", "Headers", headersEnabled, initial == "headers");
@@ -3196,6 +3300,8 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         StringBuilder html,
         CopySource json,
         CopySource xml,
+        CopySource webView,
+        SafeHtmlPreview? webViewData,
         CopySource auth,
         string? authFull,
         CopySource headers,
@@ -3206,9 +3312,14 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         var model = new Dictionary<string, string>(StringComparer.Ordinal);
         Add("json", json);
         Add("xml", xml);
+        Add("webview", webView);
         Add("auth", auth);
         Add("headers", headers);
         Add("raw", raw);
+        if (webViewData is not null)
+        {
+            model.Add("webViewDocument", webViewData.Document);
+        }
         if (authFull is not null)
         {
             var secret = CreateCompressedPayload(
@@ -3634,6 +3745,20 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         }
         html.Append("<div class=\"image-stage\"><img alt=\"Captured HTTP image\" decoding=\"async\" referrerpolicy=\"no-referrer\" draggable=\"false\"></div>")
             .Append("<div class=\"image-load-status\" role=\"status\" aria-live=\"polite\">Image loads when this tab is selected.</div></div>");
+    }
+
+    private static void AppendWebView(StringBuilder html, SafeHtmlPreview preview)
+    {
+        html.Append("<div class=\"webview\" data-mode=\"rendered\"><div class=\"webview-toolbar\">")
+            .Append("<div class=\"webview-mode\" role=\"group\" aria-label=\"WebView display mode\">")
+            .Append("<button type=\"button\" data-webview-mode=\"rendered\" aria-pressed=\"true\">Rendered</button>")
+            .Append("<button type=\"button\" data-webview-mode=\"source\" aria-pressed=\"false\">Source</button></div>")
+            .Append("<span class=\"format-status\">");
+        Text(html, preview.Detection);
+        html.Append("</span></div>")
+            .Append("<div class=\"webview-status\" role=\"status\" aria-live=\"polite\">Inert preview loads only when this tab is selected.</div>")
+            .Append("<div class=\"webview-frame-host\"></div>")
+            .Append("<pre class=\"webview-source hidden\" tabindex=\"0\" aria-label=\"Original decoded captured HTML source\" data-copy-field=\"webview\"></pre></div>");
     }
 
     private static void AppendHexView(
