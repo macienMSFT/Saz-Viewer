@@ -163,11 +163,10 @@ public sealed class HtmlReportPayloadCompressionTests(ITestOutputHelper output)
         Assert.DoesNotContain("data-json-tree=", html, StringComparison.Ordinal);
         Assert.DoesNotContain("data-xml-tree=", html, StringComparison.Ordinal);
         Assert.All(envelopes, envelope => Assert.Equal("1", envelope.Version));
-        Assert.Contains(envelopes, envelope => envelope.Type == "copy-model");
+        Assert.Single(envelopes.Where(envelope => envelope.Type == "http-session"));
         Assert.Contains(envelopes, envelope => envelope.Type == "mapi-protocol");
-        Assert.Contains(envelopes, envelope => envelope.Type == "json-tree");
-        Assert.Contains(envelopes, envelope => envelope.Type == "xml-tree");
         Assert.Contains(envelopes, envelope => envelope.Type == "websocket-session");
+        Assert.DoesNotContain(envelopes, envelope => envelope.Type is "copy-model" or "json-tree" or "xml-tree");
 
         var protocolEnvelope = Assert.Single(envelopes.Where(envelope => envelope.Type == "mapi-protocol"));
         using (var protocolJson = JsonDocument.Parse(protocolEnvelope.DecodedJson))
@@ -175,31 +174,28 @@ public sealed class HtmlReportPayloadCompressionTests(ITestOutputHelper output)
             var first = protocolJson.RootElement.GetProperty("root").GetProperty("children")[0];
             Assert.Equal($"{hostile}:alpha-alpha-alpha-alpha", first.GetProperty("value").GetString());
         }
-        var jsonEnvelope = Assert.Single(envelopes.Where(envelope => envelope.Type == "json-tree"));
-        using (var jsonTree = JsonDocument.Parse(jsonEnvelope.DecodedJson))
+        var sessionEnvelope = Assert.Single(envelopes.Where(envelope => envelope.Type == "http-session"));
+        using (var sessionJson = JsonDocument.Parse(sessionEnvelope.DecodedJson))
         {
-            var firstName = jsonTree.RootElement
-                .GetProperty("children")[0]
-                .GetProperty("children")[0]
-                .GetProperty("children")[1]
-                .GetProperty("value")
-                .GetString();
-            Assert.Equal(hostile, firstName);
-        }
-        var xmlEnvelope = Assert.Single(envelopes.Where(envelope => envelope.Type == "xml-tree"));
-        using (var xmlTree = JsonDocument.Parse(xmlEnvelope.DecodedJson))
-        {
-            var firstText = xmlTree.RootElement
-                .GetProperty("children")[0]
-                .GetProperty("children")[0]
-                .GetProperty("children")[0]
-                .GetProperty("value")
-                .GetString();
-            Assert.Equal(hostile, firstText);
+            Assert.Equal(1, sessionJson.RootElement.GetProperty("schema").GetInt32());
+            var request = sessionJson.RootElement.GetProperty("request");
+            var response = sessionJson.RootElement.GetProperty("response");
+            var requestBody = request.GetProperty("body");
+            var responseBody = response.GetProperty("body");
+            Assert.Equal(
+                jsonBody[..Math.Min(jsonBody.Length, 65536)],
+                requestBody.GetProperty("fallbackText").GetString());
+            Assert.Equal(
+                xmlBody[..Math.Min(xmlBody.Length, 65536)],
+                responseBody.GetProperty("fallbackText").GetString());
+            Assert.Equal(jsonBody.Length > 65536, requestBody.GetProperty("isTruncated").GetBoolean());
+            Assert.Equal(xmlBody.Length > 65536, responseBody.GetProperty("isTruncated").GetBoolean());
+            Assert.Equal("json", request.GetProperty("format").GetString());
+            Assert.Equal("xml", response.GetProperty("format").GetString());
         }
 
         var structural = envelopes
-            .Where(envelope => envelope.Type is "mapi-protocol" or "json-tree" or "xml-tree")
+            .Where(envelope => envelope.Type is "http-session" or "mapi-protocol")
             .ToArray();
         var encodedCharacters = structural.Sum(envelope => envelope.EncodedCharacters);
         var decodedBytes = structural.Sum(envelope => envelope.DecodedBytes);

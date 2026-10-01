@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.IO.Compression;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -66,32 +67,134 @@ public sealed class HtmlReportBrowserTests
         }
     }
 
-    private static async Task VerifyHttpSessionTableLayoutAsync(IBrowser browser, string tempDirectory)
+    [WindowsEdgeFact]
+    public async Task OptionalCorpusReportMeetsLazyInspectorPerformanceBudget()
+    {
+        var reportPath = Environment.GetEnvironmentVariable("SAZ_VIEWER_PERF_REPORT");
+        if (string.IsNullOrWhiteSpace(reportPath) || !File.Exists(reportPath))
         {
-            var reportPath = Path.Combine(tempDirectory, "http-table-layout.html");
-            await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(CreateHttpSessionTableReport()));
-            var errors = new List<string>();
-            var page = await browser.NewPageAsync(new()
-            {
-                ViewportSize = new ViewportSize { Width = 1280, Height = 800 },
-            });
-            CaptureErrors(page, errors);
-            try
-            {
-                await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
-                Assert.Equal(
-                    ["Time", "ID", "Result", "Method", "URL", "Elapsed Time", "Req", "Resp"],
-                    await page.Locator("#httpTable thead th").AllInnerTextsAsync());
-                Assert.Equal("200", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-result").InnerTextAsync());
-                Assert.Equal("HTTP 200 OK", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-result").GetAttributeAsync("title"));
-                Assert.Equal("1,234 ms", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-elapsed").InnerTextAsync());
-                Assert.Equal("\u2014", await page.Locator("#httpTable tbody tr").Nth(3).Locator(".http-result").InnerTextAsync());
-                Assert.Equal("Aborted by client", await page.Locator("#httpTable tbody tr").Nth(3).Locator(".http-result").GetAttributeAsync("title"));
-                Assert.Equal("\u2014", await page.Locator("#httpTable tbody tr").Nth(3).Locator(".http-elapsed").InnerTextAsync());
-                Assert.Equal(0, await page.Locator("#httpTable .http-protocol").CountAsync());
+            return;
+        }
 
-                var layoutError = await page.Locator("#httpTable").EvaluateAsync<string>(
-                    """
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new()
+        {
+            Channel = "msedge",
+            Headless = true,
+        });
+        var page = await browser.NewPageAsync();
+        var timer = Stopwatch.StartNew();
+        await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+        await page.Locator("#httpTable tbody tr").First.WaitForAsync();
+        timer.Stop();
+
+        var timings = await page.EvaluateAsync<JsonElement>(
+            """
+                async()=>{
+                  const inflate=async host=>{
+                    const binary=atob(host.dataset.compressedPayload);
+                    const bytes=Uint8Array.from(binary,character=>character.charCodeAt(0));
+                    const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+                    return JSON.parse(await new Response(stream).text());
+                  };
+                  let json=null,hex=null;
+                  for(const template of document.querySelectorAll('template[id^="http-detail-"]')){
+                    const host=template.content.querySelector('[data-payload-type="http-session"]');
+                    if(!host)continue;
+                    const store=await inflate(host);
+                    for(const side of ['request','response']){
+                      const model=store[side];if(!model)continue;
+                      const retained=(model.body.decoded||model.body.captured||'').length;
+                      const candidate={detail:template.id,side,size:retained};
+                      if(model.format==='json'&&model.canToggle&&(!json||retained>json.size))json=candidate;
+                      if(model.body.captured&&(!hex||model.body.captured.length>hex.size))hex=candidate;
+                    }
+                  }
+                  const waitFor=predicate=>new Promise((resolve,reject)=>{
+                    const started=performance.now();
+                    const poll=()=>{
+                      if(predicate())return resolve();
+                      if(performance.now()-started>5000)return reject(new Error('performance view did not become ready'));
+                      requestAnimationFrame(poll);
+                    };
+                    poll();
+                  });
+                  const measure=async(candidate,key,ready)=>{
+                    if(!candidate)return null;
+                    const row=document.querySelector(`#httpTable tbody tr[data-detail="${candidate.detail}"]`);
+                    const started=performance.now();row.click();
+                    await waitFor(()=>document.querySelector('.primary-tab-strip'));
+                    const shellMs=performance.now()-started;
+                    if(candidate.side==='response')document.getElementById('primary-tab-response').click();
+                    document.getElementById(`${candidate.side}-tab-${key}`).click();
+                    await waitFor(()=>ready(document.getElementById(`${candidate.side}-panel-${key}`)));
+                    const totalMs=performance.now()-started;
+                    document.getElementById('inspectorClose').click();
+                    return{totalMs,viewMs:totalMs-shellMs,shellMs};
+                  };
+                  await new Promise(resolve=>setTimeout(resolve,1000));
+                  const jsonMs=await measure(json,'json',panel=>(panel?.querySelector('.formatted-view')?.textContent||'').length>0);
+                  await new Promise(resolve=>setTimeout(resolve,250));
+                  const hexMs=await measure(hex,'hex',panel=>(panel?.querySelector('.hex-dump')?.textContent||'').length>0);
+                  return{jsonMs,hexMs,jsonBytes:json?.size||0,hexBytes:hex?.size||0};
+                }
+                """);
+
+        var jsonTiming = timings.GetProperty("jsonMs");
+        var hexTiming = timings.GetProperty("hexMs");
+        var jsonMs = jsonTiming.ValueKind == JsonValueKind.Null
+            ? (double?)null
+            : jsonTiming.GetProperty("viewMs").GetDouble();
+        var hexMs = hexTiming.ValueKind == JsonValueKind.Null
+            ? (double?)null
+            : hexTiming.GetProperty("viewMs").GetDouble();
+        var jsonDescription = jsonMs is null
+            ? "largest JSON view: unavailable"
+            : $"largest JSON view: {jsonMs:F1} ms after a {jsonTiming.GetProperty("shellMs").GetDouble():F1} ms inspector shell " +
+              $"({timings.GetProperty("jsonBytes").GetInt32():N0} base64 chars)";
+        var hexDescription = hexMs is null
+            ? "largest HexView: unavailable"
+            : $"largest HexView: {hexMs:F1} ms after a {hexTiming.GetProperty("shellMs").GetDouble():F1} ms inspector shell " +
+              $"({timings.GetProperty("hexBytes").GetInt32():N0} base64 chars)";
+        Console.WriteLine(
+            $"Corpus initial load: {timer.Elapsed.TotalMilliseconds:F1} ms; " +
+            $"{jsonDescription}; {hexDescription}.");
+        if (jsonMs is not null)
+        {
+            Assert.True(jsonMs < 50, $"Largest retained JSON first open took {jsonMs:F1} ms.");
+        }
+        if (hexMs is not null)
+        {
+            Assert.True(hexMs < 50, $"Largest retained HexView first open took {hexMs:F1} ms.");
+        }
+    }
+
+    private static async Task VerifyHttpSessionTableLayoutAsync(IBrowser browser, string tempDirectory)
+    {
+        var reportPath = Path.Combine(tempDirectory, "http-table-layout.html");
+        await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(CreateHttpSessionTableReport()));
+        var errors = new List<string>();
+        var page = await browser.NewPageAsync(new()
+        {
+            ViewportSize = new ViewportSize { Width = 1280, Height = 800 },
+        });
+        CaptureErrors(page, errors);
+        try
+        {
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            Assert.Equal(
+                ["Time", "ID", "Result", "Method", "URL", "Elapsed Time", "Req", "Resp"],
+                await page.Locator("#httpTable thead th").AllInnerTextsAsync());
+            Assert.Equal("200", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-result").InnerTextAsync());
+            Assert.Equal("HTTP 200 OK", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-result").GetAttributeAsync("title"));
+            Assert.Equal("1,234 ms", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-elapsed").InnerTextAsync());
+            Assert.Equal("\u2014", await page.Locator("#httpTable tbody tr").Nth(3).Locator(".http-result").InnerTextAsync());
+            Assert.Equal("Aborted by client", await page.Locator("#httpTable tbody tr").Nth(3).Locator(".http-result").GetAttributeAsync("title"));
+            Assert.Equal("\u2014", await page.Locator("#httpTable tbody tr").Nth(3).Locator(".http-elapsed").InnerTextAsync());
+            Assert.Equal(0, await page.Locator("#httpTable .http-protocol").CountAsync());
+
+            var layoutError = await page.Locator("#httpTable").EvaluateAsync<string>(
+                """
                     table=>{
                       const header=[...table.tHead.rows[0].cells],rows=[...table.tBodies[0].rows];
                       if(header.length!==8||rows.length!==4)return'wrong table shape';
@@ -122,77 +225,77 @@ public sealed class HtmlReportBrowserTests
                       return'';
                     }
                     """);
-                Assert.Equal("", layoutError);
+            Assert.Equal("", layoutError);
 
-                var widthsBeforeFilter = await page.Locator("#httpTable thead th").EvaluateAllAsync<float[]>(
-                    "cells=>cells.map(cell=>cell.getBoundingClientRect().width)");
-                var search = page.Locator("#httpSearch");
-                var hideConnect = page.Locator("#hideConnect");
-                await hideConnect.CheckAsync();
-                Assert.Equal(3, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
-                await search.FillAsync("connect-only");
-                Assert.Equal(0, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
-                await search.FillAsync("");
-                await page.Locator("#httpTable tbody tr:not(.hidden)").First.ClickAsync();
-                Assert.Equal("1 of 3", await page.Locator("#inspectorPosition").InnerTextAsync());
-                await page.Locator("#inspectorNext").ClickAsync();
-                Assert.Equal("2 of 3", await page.Locator("#inspectorPosition").InnerTextAsync());
-                Assert.Contains("long-session-id", await page.Locator("#inspectorTitle").InnerTextAsync());
-                await page.Locator("#inspectorClose").ClickAsync();
-                await search.FillAsync("1,234 ms");
-                Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
-                await search.FillAsync("aborted by client");
-                Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
-                var widthsAfterFilter = await page.Locator("#httpTable thead th").EvaluateAllAsync<float[]>(
-                    "cells=>cells.map(cell=>cell.getBoundingClientRect().width)");
-                Assert.Equal(widthsBeforeFilter.Length, widthsAfterFilter.Length);
-                for (var index = 0; index < widthsBeforeFilter.Length; index++)
-                {
-                    Assert.InRange(Math.Abs(widthsBeforeFilter[index] - widthsAfterFilter[index]), 0, .75);
-                }
-                await search.FillAsync("");
-                await page.Locator("#httpFilter").SelectOptionAsync("2");
-                Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
-                await page.Locator("#httpFilter").SelectOptionAsync("0");
-                Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
-                await page.Locator("#httpFilter").SelectOptionAsync("");
-                await search.FillAsync("connect-only");
-                Assert.Equal(0, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
-                await hideConnect.UncheckAsync();
-                Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
-                Assert.Empty(errors);
-            }
-            finally
+            var widthsBeforeFilter = await page.Locator("#httpTable thead th").EvaluateAllAsync<float[]>(
+                "cells=>cells.map(cell=>cell.getBoundingClientRect().width)");
+            var search = page.Locator("#httpSearch");
+            var hideConnect = page.Locator("#hideConnect");
+            await hideConnect.CheckAsync();
+            Assert.Equal(3, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            await search.FillAsync("connect-only");
+            Assert.Equal(0, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            await search.FillAsync("");
+            await page.Locator("#httpTable tbody tr:not(.hidden)").First.ClickAsync();
+            Assert.Equal("1 of 3", await page.Locator("#inspectorPosition").InnerTextAsync());
+            await page.Locator("#inspectorNext").ClickAsync();
+            Assert.Equal("2 of 3", await page.Locator("#inspectorPosition").InnerTextAsync());
+            Assert.Contains("long-session-id", await page.Locator("#inspectorTitle").InnerTextAsync());
+            await page.Locator("#inspectorClose").ClickAsync();
+            await search.FillAsync("1,234 ms");
+            Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            await search.FillAsync("aborted by client");
+            Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            var widthsAfterFilter = await page.Locator("#httpTable thead th").EvaluateAllAsync<float[]>(
+                "cells=>cells.map(cell=>cell.getBoundingClientRect().width)");
+            Assert.Equal(widthsBeforeFilter.Length, widthsAfterFilter.Length);
+            for (var index = 0; index < widthsBeforeFilter.Length; index++)
             {
-                await page.CloseAsync();
+                Assert.InRange(Math.Abs(widthsBeforeFilter[index] - widthsAfterFilter[index]), 0, .75);
+            }
+            await search.FillAsync("");
+            await page.Locator("#httpFilter").SelectOptionAsync("2");
+            Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            await page.Locator("#httpFilter").SelectOptionAsync("0");
+            Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            await page.Locator("#httpFilter").SelectOptionAsync("");
+            await search.FillAsync("connect-only");
+            Assert.Equal(0, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            await hideConnect.UncheckAsync();
+            Assert.Equal(1, await page.Locator("#httpTable tbody tr:not(.hidden)").CountAsync());
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            await page.CloseAsync();
         }
     }
 
     [WindowsEdgeFact]
     public async Task ImageHexAndAuthViewsAreSafeExactAndResetAcrossNavigation()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), $"saz viewer content tabs {Guid.NewGuid():N}");
+        var reportPath = Path.Combine(tempDirectory, "content-tabs.html");
+        try
         {
-            var tempDirectory = Path.Combine(Path.GetTempPath(), $"saz viewer content tabs {Guid.NewGuid():N}");
-            var reportPath = Path.Combine(tempDirectory, "content-tabs.html");
-            try
-            {
-                Directory.CreateDirectory(tempDirectory);
-                await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(CreateContentTabReport()));
+            Directory.CreateDirectory(tempDirectory);
+            await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(CreateContentTabReport()));
 
-                using var playwright = await Playwright.CreateAsync();
-                await using var browser = await playwright.Chromium.LaunchAsync(new()
-                {
-                    Channel = "msedge",
-                    Headless = true
-                });
-                await using var context = await browser.NewContextAsync(new()
-                {
-                    ViewportSize = new ViewportSize { Width = 1100, Height = 760 }
-                });
-                var page = await context.NewPageAsync();
-                var errors = new List<string>();
-                CaptureErrors(page, errors);
-                await InstallClipboardTestHookAsync(page);
-                await page.AddInitScriptAsync("""
+            using var playwright = await Playwright.CreateAsync();
+            await using var browser = await playwright.Chromium.LaunchAsync(new()
+            {
+                Channel = "msedge",
+                Headless = true
+            });
+            await using var context = await browser.NewContextAsync(new()
+            {
+                ViewportSize = new ViewportSize { Width = 1100, Height = 760 }
+            });
+            var page = await context.NewPageAsync();
+            var errors = new List<string>();
+            CaptureErrors(page, errors);
+            await InstallClipboardTestHookAsync(page);
+            await page.AddInitScriptAsync("""
                     globalThis.__createdObjectUrls=[];
                     globalThis.__revokedObjectUrls=[];
                     const nativeCreateObjectURL=URL.createObjectURL.bind(URL);
@@ -200,348 +303,349 @@ public sealed class HtmlReportBrowserTests
                     URL.createObjectURL=value=>{const url=nativeCreateObjectURL(value);globalThis.__createdObjectUrls.push(url);return url};
                     URL.revokeObjectURL=url=>{globalThis.__revokedObjectUrls.push(url);nativeRevokeObjectURL(url)};
                     """);
-                await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
 
-                await page.Locator("#httpTable tbody tr").First.ClickAsync();
-                Assert.Equal(
-                    ["JSON", "XML", "MAPI", "Image", "WebView", "HexView", "Auth", "Headers", "Raw"],
-                    await page.Locator("#primary-panel-request>.message-panel>.tab-strip>[role=tab]").AllTextContentsAsync());
-                await page.Locator("#request-tab-hex").ClickAsync();
-                await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("1F 8B 08 00");
-                await Assertions.Expect(page.Locator("#request-panel-hex .hex-status")).ToHaveTextAsync("Showing all 8 bytes.");
-                await page.Locator("#request-panel-hex .hex-source").SelectOptionAsync("decoded");
-                await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("00 01 02 03 04 05 06 07");
-                await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("F8 F9 FA FB FC FD FE FF");
-                await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("| !\"#$%&'()*+,-./|");
-                var decodedHex = await page.Locator("#request-panel-hex .hex-dump").InnerTextAsync();
-                Assert.Equal(decodedHex, await CopyAndReadAsync(page, "request-panel-hex"));
-                var search = page.Locator(".http-view-search-input");
-                await search.FillAsync("00 01 02");
-                await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 2 matches");
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            Assert.Equal(
+                ["JSON", "XML", "MAPI", "Image", "WebView", "HexView", "Auth", "Headers", "Raw"],
+                await page.Locator("#primary-panel-request>.message-panel>.tab-strip>[role=tab]").AllTextContentsAsync());
+            await page.Locator("#request-tab-hex").ClickAsync();
+            await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("1F 8B 08 00");
+            await Assertions.Expect(page.Locator("#request-panel-hex .hex-status")).ToHaveTextAsync("Showing all 8 bytes.");
+            await page.Locator("#request-panel-hex .hex-source").SelectOptionAsync("decoded");
+            await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("00 01 02 03 04 05 06 07");
+            await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("F8 F9 FA FB FC FD FE FF");
+            await Assertions.Expect(page.Locator("#request-panel-hex .hex-dump")).ToContainTextAsync("| !\"#$%&'()*+,-./|");
+            var decodedHex = await page.Locator("#request-panel-hex .hex-dump").InnerTextAsync();
+            Assert.Equal(decodedHex, await CopyAndReadAsync(page, "request-panel-hex"));
+            var search = page.Locator(".http-view-search-input");
+            await search.FillAsync("00 01 02");
+            await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 2 matches");
 
-                await page.Locator("#request-tab-auth").ClickAsync();
-                Assert.Equal("", await search.InputValueAsync());
-                var authPanel = page.Locator("#request-panel-auth");
-                await Assertions.Expect(authPanel).ToContainTextAsync("Authorization: Bearer [redacted]");
-                await Assertions.Expect(authPanel).ToContainTextAsync("Proxy-Authorization: [redacted]");
-                Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
-                Assert.Equal(
-                    "Authorization: Bearer [redacted]\nProxy-Authorization: [redacted]\n",
-                    await CopyAndReadAsync(page, "request-panel-auth"));
-                await search.FillAsync("request-secret-token");
-                await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("0 matches");
+            await page.Locator("#request-tab-auth").ClickAsync();
+            Assert.Equal("", await search.InputValueAsync());
+            var authPanel = page.Locator("#request-panel-auth");
+            await Assertions.Expect(authPanel).ToContainTextAsync("Authorization: Bearer [redacted]");
+            await Assertions.Expect(authPanel).ToContainTextAsync("Proxy-Authorization: [redacted]");
+            Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
+            Assert.Equal(
+                "Authorization: Bearer [redacted]\nProxy-Authorization: [redacted]\n",
+                await CopyAndReadAsync(page, "request-panel-auth"));
+            await search.FillAsync("request-secret-token");
+            await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("0 matches");
 
-                await page.EvaluateAsync("""
+            await page.EvaluateAsync("""
                     () => {
                       document.querySelector('#request-panel-auth .auth-reveal').click();
                       document.querySelector('#request-tab-hex').click();
                     }
                     """);
-                await page.Locator("#request-tab-auth").ClickAsync();
-                await page.WaitForTimeoutAsync(100);
-                Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
-                await Assertions.Expect(authPanel.Locator(".auth-reveal")).ToHaveAttributeAsync("aria-pressed", "false");
+            await page.Locator("#request-tab-auth").ClickAsync();
+            await page.WaitForTimeoutAsync(100);
+            Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
+            await Assertions.Expect(authPanel.Locator(".auth-reveal")).ToHaveAttributeAsync("aria-pressed", "false");
 
-                await authPanel.Locator(".auth-reveal").ClickAsync();
-                await Assertions.Expect(search).ToHaveValueAsync("");
-                await Assertions.Expect(authPanel).ToContainTextAsync("request-secret-token");
-                await search.FillAsync("request-secret-token");
-                await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
-                var revealed = await CopyAndReadAsync(page, "request-panel-auth");
-                Assert.Contains("request-secret-token", revealed, StringComparison.Ordinal);
-                await page.Locator("#request-tab-hex").ClickAsync();
-                await page.Locator("#request-tab-auth").ClickAsync();
-                Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
-                await Assertions.Expect(authPanel.Locator(".auth-reveal")).ToHaveAttributeAsync("aria-pressed", "false");
+            await authPanel.Locator(".auth-reveal").ClickAsync();
+            await Assertions.Expect(search).ToHaveValueAsync("");
+            await Assertions.Expect(authPanel).ToContainTextAsync("request-secret-token");
+            await search.FillAsync("request-secret-token");
+            await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+            var revealed = await CopyAndReadAsync(page, "request-panel-auth");
+            Assert.Contains("request-secret-token", revealed, StringComparison.Ordinal);
+            await page.Locator("#request-tab-hex").ClickAsync();
+            await page.Locator("#request-tab-auth").ClickAsync();
+            Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
+            await Assertions.Expect(authPanel.Locator(".auth-reveal")).ToHaveAttributeAsync("aria-pressed", "false");
 
-                await page.Locator("#primary-tab-response").ClickAsync();
-                await page.Locator("#response-tab-auth").ClickAsync();
-                await Assertions.Expect(page.Locator("#response-panel-auth")).ToContainTextAsync("WWW-Authenticate: Digest realm=[redacted], nonce=[redacted]");
-                await page.Locator("#primary-tab-request").ClickAsync();
-                await page.Locator("#request-tab-auth").ClickAsync();
-                Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
+            await page.Locator("#primary-tab-response").ClickAsync();
+            await page.Locator("#response-tab-auth").ClickAsync();
+            await Assertions.Expect(page.Locator("#response-panel-auth")).ToContainTextAsync("WWW-Authenticate: Digest realm=[redacted], nonce=[redacted]");
+            await page.Locator("#primary-tab-request").ClickAsync();
+            await page.Locator("#request-tab-auth").ClickAsync();
+            Assert.DoesNotContain("request-secret-token", await authPanel.InnerTextAsync(), StringComparison.Ordinal);
 
-                await page.Locator("#inspectorClose").ClickAsync();
-                await page.Locator("#httpTable tbody tr").Nth(1).ClickAsync();
-                await page.Locator("#request-tab-image").ClickAsync();
-                await Assertions.Expect(page.Locator("#request-panel-image .image-load-status"))
-                    .ToContainTextAsync("decoded locally");
-                Assert.True(await page.Locator("#request-panel-image img").EvaluateAsync<bool>("image=>image.naturalWidth===1&&image.naturalHeight===1"));
-                Assert.Equal(1, await page.EvaluateAsync<int>("globalThis.__createdObjectUrls.length"));
-                Assert.Equal(1, await page.EvaluateAsync<int>("globalThis.__revokedObjectUrls.length"));
-                Assert.NotEqual(
-                    "none",
-                    await page.Locator("#request-panel-image .image-stage").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundImage"));
-                await page.Locator("#primary-tab-response").ClickAsync();
-                await page.Locator("#response-tab-image").ClickAsync();
-                await Assertions.Expect(page.Locator("#response-panel-image .warning"))
-                    .ToContainTextAsync("does not match the retained bytes");
-                await Assertions.Expect(page.Locator("#response-panel-image .image-load-status"))
-                    .ToContainTextAsync("decoded locally");
+            await page.Locator("#inspectorClose").ClickAsync();
+            await page.Locator("#httpTable tbody tr").Nth(1).ClickAsync();
+            await page.Locator("#request-tab-image").ClickAsync();
+            await Assertions.Expect(page.Locator("#request-panel-image .image-load-status"))
+                .ToContainTextAsync("decoded locally");
+            Assert.True(await page.Locator("#request-panel-image img").EvaluateAsync<bool>("image=>image.naturalWidth===1&&image.naturalHeight===1"));
+            Assert.Equal(1, await page.EvaluateAsync<int>("globalThis.__createdObjectUrls.length"));
+            Assert.Equal(1, await page.EvaluateAsync<int>("globalThis.__revokedObjectUrls.length"));
+            Assert.NotEqual(
+                "none",
+                await page.Locator("#request-panel-image .image-stage").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundImage"));
+            await page.Locator("#primary-tab-response").ClickAsync();
+            await page.Locator("#response-tab-image").ClickAsync();
+            await Assertions.Expect(page.Locator("#response-panel-image .warning"))
+                .ToContainTextAsync("does not match the retained bytes");
+            await Assertions.Expect(page.Locator("#response-panel-image .image-load-status"))
+                .ToContainTextAsync("decoded locally");
 
-                await page.SetViewportSizeAsync(420, 760);
-                Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>(
-                    "dialog=>dialog.scrollWidth<=dialog.clientWidth"));
+            await page.SetViewportSizeAsync(420, 760);
+            Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>(
+                "dialog=>dialog.scrollWidth<=dialog.clientWidth"));
 
-                await page.Locator("#inspectorClose").ClickAsync();
-                await page.Locator("#httpTable tbody tr").First.ClickAsync();
-                await page.Locator("#request-tab-auth").ClickAsync();
-                await page.Locator("#request-panel-auth .auth-reveal").ClickAsync();
-                var popupTask = page.WaitForPopupAsync();
-                await page.Locator("#inspectorOpenTab").ClickAsync();
-                var popup = await popupTask;
-                try
-                {
-                    await popup.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
-                    await popup.Locator("#request-tab-auth").ClickAsync();
-                    Assert.DoesNotContain("request-secret-token", await popup.Locator("#request-panel-auth").InnerTextAsync(), StringComparison.Ordinal);
-                    Assert.Null(await popup.EvaluateAsync<object?>("window.opener"));
-                }
-                finally
-                {
-                    await popup.CloseAsync();
-                }
-                Assert.Empty(errors);
+            await page.Locator("#inspectorClose").ClickAsync();
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            await page.Locator("#request-tab-auth").ClickAsync();
+            await page.Locator("#request-panel-auth .auth-reveal").ClickAsync();
+            var popupTask = page.WaitForPopupAsync();
+            await page.Locator("#inspectorOpenTab").ClickAsync();
+            var popup = await popupTask;
+            try
+            {
+                await popup.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+                await popup.Locator("#request-tab-auth").ClickAsync();
+                Assert.DoesNotContain("request-secret-token", await popup.Locator("#request-panel-auth").InnerTextAsync(), StringComparison.Ordinal);
+                Assert.Null(await popup.EvaluateAsync<object?>("window.opener"));
             }
             finally
             {
-                if (Directory.Exists(tempDirectory))
-                {
-                    Directory.Delete(tempDirectory, recursive: true);
-                }
+                await popup.CloseAsync();
+            }
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
             }
         }
+    }
 
-        [WindowsEdgeFact]
-        public async Task WebViewIsInertOfflineLazySearchableAndTornDownAcrossNavigation()
+    [WindowsEdgeFact]
+    public async Task WebViewIsInertOfflineLazySearchableAndTornDownAcrossNavigation()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), $"saz viewer webview {Guid.NewGuid():N}");
+        var reportPath = Path.Combine(tempDirectory, "webview.html");
+        try
+        {
+            Directory.CreateDirectory(tempDirectory);
+            var report = CreateWebViewReport();
+            await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(report));
+
+            using var playwright = await Playwright.CreateAsync();
+            await using var browser = await playwright.Chromium.LaunchAsync(new()
             {
-                var tempDirectory = Path.Combine(Path.GetTempPath(), $"saz viewer webview {Guid.NewGuid():N}");
-                var reportPath = Path.Combine(tempDirectory, "webview.html");
-                try
+                Channel = "msedge",
+                Headless = true
+            });
+            await using var context = await browser.NewContextAsync(new()
+            {
+                ViewportSize = new ViewportSize { Width = 1100, Height = 760 }
+            });
+            var page = await context.NewPageAsync();
+            var errors = new List<string>();
+            var externalRequests = new List<string>();
+            var unexpectedPopups = 0;
+            var unexpectedDownloads = 0;
+            CaptureErrors(page, errors);
+            await InstallClipboardTestHookAsync(page);
+            page.Request += (_, request) =>
+            {
+                if (request.Url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                    || request.Url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                    || request.Url.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)
+                    || request.Url.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
                 {
-                    Directory.CreateDirectory(tempDirectory);
-                    var report = CreateWebViewReport();
-                    await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(report));
+                    externalRequests.Add(request.Url);
+                }
+            };
+            page.Popup += (_, _) => unexpectedPopups++;
+            page.Download += (_, _) => unexpectedDownloads++;
 
-                    using var playwright = await Playwright.CreateAsync();
-                    await using var browser = await playwright.Chromium.LaunchAsync(new()
-                    {
-                        Channel = "msedge",
-                        Headless = true
-                    });
-                    await using var context = await browser.NewContextAsync(new()
-                    {
-                        ViewportSize = new ViewportSize { Width = 1100, Height = 760 }
-                    });
-                    var page = await context.NewPageAsync();
-                    var errors = new List<string>();
-                    var externalRequests = new List<string>();
-                    var unexpectedPopups = 0;
-                    var unexpectedDownloads = 0;
-                    CaptureErrors(page, errors);
-                    await InstallClipboardTestHookAsync(page);
-                    page.Request += (_, request) =>
-                    {
-                        if (request.Url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                            || request.Url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                            || request.Url.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)
-                            || request.Url.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
-                        {
-                            externalRequests.Add(request.Url);
-                        }
-                    };
-                    page.Popup += (_, _) => unexpectedPopups++;
-                    page.Download += (_, _) => unexpectedDownloads++;
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            Assert.Equal(
+                ["JSON", "XML", "MAPI", "Image", "WebView", "HexView", "Auth", "Headers", "Raw"],
+                await page.Locator("#primary-panel-request>.message-panel>.tab-strip>[role=tab]").AllTextContentsAsync());
+            await Assertions.Expect(page.Locator("#request-panel-webview iframe")).ToHaveCountAsync(0);
 
-                    await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
-                    await page.Locator("#httpTable tbody tr").First.ClickAsync();
-                    Assert.Equal(
-                        ["JSON", "XML", "MAPI", "Image", "WebView", "HexView", "Auth", "Headers", "Raw"],
-                        await page.Locator("#primary-panel-request>.message-panel>.tab-strip>[role=tab]").AllTextContentsAsync());
-                    await Assertions.Expect(page.Locator("#request-panel-webview iframe")).ToHaveCountAsync(0);
+            await page.Locator("#request-tab-webview").ClickAsync();
+            var frameElement = page.Locator("#request-panel-webview iframe");
+            await page.WaitForTimeoutAsync(250);
+            Assert.True(
+                await frameElement.CountAsync() == 1,
+                $"WebView frame was not created. Status: {await page.Locator("#request-panel-webview .webview-status").InnerTextAsync()} Errors: {string.Join(" | ", errors)}");
+            Assert.Equal("", await frameElement.GetAttributeAsync("sandbox"));
+            Assert.Equal("no-referrer", await frameElement.GetAttributeAsync("referrerpolicy"));
+            Assert.Null(await frameElement.GetAttributeAsync("allow"));
+            await Assertions.Expect(page.Locator("#request-panel-webview .webview-status"))
+                .ToContainTextAsync("Scripts, forms, navigation, storage, and subresources are blocked");
+            var child = page.Frames.Single(frame => frame != page.MainFrame);
+            await Assertions.Expect(child.Locator("h1")).ToHaveTextAsync("Safe captured layout");
+            await Assertions.Expect(child.Locator("a")).ToHaveTextAsync("Inert captured link");
+            await Assertions.Expect(child.Locator("img,script,form,iframe,object,svg,math,video,a[href]"))
+                .ToHaveCountAsync(0);
+            await Assertions.Expect(child.Locator("style")).ToHaveCountAsync(1);
+            Assert.DoesNotContain("invalid", await child.Locator("style").InnerTextAsync(), StringComparison.OrdinalIgnoreCase);
+            Assert.True(child.Url is "" or "about:srcdoc", $"Unexpected child-frame URL: {child.Url}");
+            Assert.Null(await page.EvaluateAsync<object?>("globalThis.__webviewPwned"));
+            Assert.Empty(externalRequests);
+            Assert.Equal(0, unexpectedPopups);
+            Assert.Equal(0, unexpectedDownloads);
+            Assert.Equal(new Uri(reportPath).AbsoluteUri, page.Url);
 
-                    await page.Locator("#request-tab-webview").ClickAsync();
-                    var frameElement = page.Locator("#request-panel-webview iframe");
-                    await page.WaitForTimeoutAsync(250);
-                    Assert.True(
-                        await frameElement.CountAsync() == 1,
-                        $"WebView frame was not created. Status: {await page.Locator("#request-panel-webview .webview-status").InnerTextAsync()} Errors: {string.Join(" | ", errors)}");
-                    Assert.Equal("", await frameElement.GetAttributeAsync("sandbox"));
-                    Assert.Equal("no-referrer", await frameElement.GetAttributeAsync("referrerpolicy"));
-                    Assert.Null(await frameElement.GetAttributeAsync("allow"));
-                    await Assertions.Expect(page.Locator("#request-panel-webview .webview-status"))
-                        .ToContainTextAsync("Scripts, forms, navigation, storage, and subresources are blocked");
-                    var child = page.Frames.Single(frame => frame != page.MainFrame);
-                    await Assertions.Expect(child.Locator("h1")).ToHaveTextAsync("Safe captured layout");
-                    await Assertions.Expect(child.Locator("a")).ToHaveTextAsync("Inert captured link");
-                    await Assertions.Expect(child.Locator("img,script,form,iframe,object,svg,math,video,a[href]"))
-                        .ToHaveCountAsync(0);
-                    await Assertions.Expect(child.Locator("style")).ToHaveCountAsync(1);
-                    Assert.DoesNotContain("invalid", await child.Locator("style").InnerTextAsync(), StringComparison.OrdinalIgnoreCase);
-                    Assert.True(child.Url is "" or "about:srcdoc", $"Unexpected child-frame URL: {child.Url}");
-                    Assert.Null(await page.EvaluateAsync<object?>("globalThis.__webviewPwned"));
-                    Assert.Empty(externalRequests);
-                    Assert.Equal(0, unexpectedPopups);
-                    Assert.Equal(0, unexpectedDownloads);
-                    Assert.Equal(new Uri(reportPath).AbsoluteUri, page.Url);
+            var search = page.Locator(".http-view-search-input");
+            await search.FillAsync("script.invalid");
+            await Assertions.Expect(page.Locator("#request-panel-webview .webview-source")).ToBeVisibleAsync();
+            await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+            Assert.Contains("https://script.invalid/", await page.Locator("#request-panel-webview .webview-source").InnerTextAsync(), StringComparison.Ordinal);
+            Assert.Equal(WebViewSource(), await CopyAndReadAsync(page, "request-panel-webview"));
 
-                    var search = page.Locator(".http-view-search-input");
-                    await search.FillAsync("script.invalid");
-                    await Assertions.Expect(page.Locator("#request-panel-webview .webview-source")).ToBeVisibleAsync();
-                    await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
-                    Assert.Contains("https://script.invalid/", await page.Locator("#request-panel-webview .webview-source").InnerTextAsync(), StringComparison.Ordinal);
-                    Assert.Equal(WebViewSource(), await CopyAndReadAsync(page, "request-panel-webview"));
+            await page.Locator("#request-panel-webview [data-webview-mode=rendered]").ClickAsync();
+            await Assertions.Expect(frameElement).ToHaveCountAsync(1);
+            var explicitTheme = await page.EvaluateAsync<string>(
+                "()=>{const value=document.documentElement.dataset.theme;const current=value==='light'||value==='dark'?value:(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');return current==='dark'?'light':'dark'}");
+            await page.Locator("dialog .theme-toggle").ClickAsync();
+            await Assertions.Expect(frameElement).ToHaveCountAsync(1);
+            child = page.Frames.Single(frame => frame != page.MainFrame);
+            Assert.Equal(explicitTheme, await child.Locator("html").GetAttributeAsync("data-theme"));
 
-                    await page.Locator("#request-panel-webview [data-webview-mode=rendered]").ClickAsync();
-                    await Assertions.Expect(frameElement).ToHaveCountAsync(1);
-                    var explicitTheme = await page.EvaluateAsync<string>(
-                        "()=>{const value=document.documentElement.dataset.theme;const current=value==='light'||value==='dark'?value:(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');return current==='dark'?'light':'dark'}");
-                    await page.Locator("dialog .theme-toggle").ClickAsync();
-                    await Assertions.Expect(frameElement).ToHaveCountAsync(1);
-                    child = page.Frames.Single(frame => frame != page.MainFrame);
-                    Assert.Equal(explicitTheme, await child.Locator("html").GetAttributeAsync("data-theme"));
+            await page.Locator("#request-tab-raw").ClickAsync();
+            await Assertions.Expect(frameElement).ToHaveCountAsync(0);
+            await page.Locator("#request-tab-webview").ClickAsync();
+            await Assertions.Expect(frameElement).ToHaveCountAsync(1);
+            await page.Locator("#primary-tab-response").ClickAsync();
+            await Assertions.Expect(frameElement).ToHaveCountAsync(0);
+            await page.Locator("#response-tab-webview").ClickAsync();
+            await Assertions.Expect(page.Locator("#response-panel-webview iframe")).ToHaveCountAsync(1);
 
-                    await page.Locator("#request-tab-raw").ClickAsync();
-                    await Assertions.Expect(frameElement).ToHaveCountAsync(0);
-                    await page.Locator("#request-tab-webview").ClickAsync();
-                    await Assertions.Expect(frameElement).ToHaveCountAsync(1);
-                    await page.Locator("#primary-tab-response").ClickAsync();
-                    await Assertions.Expect(frameElement).ToHaveCountAsync(0);
-                    await page.Locator("#response-tab-webview").ClickAsync();
-                    await Assertions.Expect(page.Locator("#response-panel-webview iframe")).ToHaveCountAsync(1);
+            await page.SetViewportSizeAsync(420, 760);
+            Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>(
+                "dialog=>dialog.scrollWidth<=dialog.clientWidth"));
 
-                    await page.SetViewportSizeAsync(420, 760);
-                    Assert.True(await page.Locator("#httpInspector").EvaluateAsync<bool>(
-                        "dialog=>dialog.scrollWidth<=dialog.clientWidth"));
-
-                    await page.Locator("#inspectorClose").ClickAsync();
-                    await Assertions.Expect(page.Locator("#httpInspector iframe")).ToHaveCountAsync(0);
-                    await page.Locator("#httpTable tbody tr").First.ClickAsync();
-                    await page.EvaluateAsync("""
+            await page.Locator("#inspectorClose").ClickAsync();
+            await Assertions.Expect(page.Locator("#httpInspector iframe")).ToHaveCountAsync(0);
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            await page.Locator("#request-tab-webview").WaitForAsync();
+            await page.EvaluateAsync("""
                         () => {
                           document.querySelector('#request-tab-webview').click();
                           document.querySelector('#request-tab-raw').click();
                         }
                         """);
-                    await page.WaitForTimeoutAsync(100);
-                    await Assertions.Expect(page.Locator("#request-panel-webview iframe")).ToHaveCountAsync(0);
+            await page.WaitForTimeoutAsync(100);
+            await Assertions.Expect(page.Locator("#request-panel-webview iframe")).ToHaveCountAsync(0);
 
-                    var popupTask = page.WaitForPopupAsync();
-                    await page.Locator("#inspectorOpenTab").ClickAsync();
-                    var popup = await popupTask;
-                    try
-                    {
-                        await popup.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
-                        await popup.Locator("#request-tab-webview").ClickAsync();
-                        await Assertions.Expect(popup.Locator("#request-panel-webview iframe")).ToHaveCountAsync(1);
-                        Assert.Empty(externalRequests);
-                    }
-                    finally
-                    {
-                        await popup.CloseAsync();
-                    }
-
-                    Assert.Empty(errors);
-                    Assert.Empty(externalRequests);
-                    Assert.Equal(0, unexpectedDownloads);
-                }
-                finally
-                {
-                    if (Directory.Exists(tempDirectory))
-                    {
-                        Directory.Delete(tempDirectory, recursive: true);
-                }
-            }
-        }
-    private static async Task VerifyLargeMapiTreeAsync(IBrowser browser, string tempDirectory)
-    {
-            const int leafCount = MapiParseLimits.MaxNodes - 1;
-            var leaves = Enumerable.Range(0, leafCount)
-                .Select(index => MapiNode.Leaf(
-                    $"Field[{index}]",
-                    MapiNodeKind.Field,
-                    index * 4L,
-                    4,
-                    index == leafCount - 1 ? "LargeTreeNeedle" : index.ToString()))
-                .ToImmutableArray();
-            var root = new MapiNode("LargeRoot", MapiNodeKind.Array, 0, leafCount * 4L, null, leaves);
-            var protocol = new MapiMessageParse(
-                MapiDirection.Request,
-                root,
-                ImmutableArray<string>.Empty,
-                true,
-                leafCount * 4L,
-                leafCount * 4L);
-            var session = new HttpSession
-            {
-                Id = "large",
-                ArchiveOrder = 0,
-                Method = "POST",
-                Url = "https://example.test/mapi-large",
-                StatusCode = 200,
-                Request = Message("POST /mapi-large HTTP/1.1", "application/mapi-http", "binary")
-            };
-            session.Mapi = new MapiSession(
-                "large",
-                0,
-                MapiEndpoint.Mailbox,
-                "Execute",
-                "0",
-                false,
-                protocol,
-                null,
-                ImmutableArray<string>.Empty);
-            var report = new SazReport { SourceName = "large-mapi.saz" };
-            report.Sessions.Add(session);
-            var path = Path.Combine(tempDirectory, "large-mapi.html");
-            var html = new HtmlReportGenerator().Generate(report);
-            Assert.Contains("data-payload-type=\"mapi-protocol\"", html, StringComparison.Ordinal);
-            Assert.InRange(Encoding.UTF8.GetByteCount(html), 1, 8 * 1024 * 1024);
-            await File.WriteAllTextAsync(path, html);
-
-            var errors = new List<string>();
-            var page = await browser.NewPageAsync(new()
-            {
-                ViewportSize = new ViewportSize { Width = 1280, Height = 800 }
-            });
-            CaptureErrors(page, errors);
+            var popupTask = page.WaitForPopupAsync();
+            await page.Locator("#inspectorOpenTab").ClickAsync();
+            var popup = await popupTask;
             try
             {
-                await page.AddInitScriptAsync(
-                    "const nativeFrame=requestAnimationFrame.bind(globalThis);globalThis.requestAnimationFrame=callback=>setTimeout(()=>nativeFrame(callback),50)");
-                await page.GotoAsync(new Uri(path).AbsoluteUri);
-                await page.Locator("#httpTable tbody tr").ClickAsync();
-                await Assertions.Expect(page.Locator(".protocol-load-status")).ToContainTextAsync("Loading");
-                await page.Locator("#inspectorClose").ClickAsync();
-                await page.WaitForTimeoutAsync(200);
-                var abandonedCount = await page.Locator("#request-panel-mapi .tree-item").CountAsync();
-                await page.WaitForTimeoutAsync(200);
-                Assert.Equal(abandonedCount, await page.Locator("#request-panel-mapi .tree-item").CountAsync());
-
-                var started = DateTime.UtcNow;
-                await page.Locator("#httpTable tbody tr").ClickAsync();
-                await Assertions.Expect(page.Locator(".protocol-load-status")).ToHaveTextAsync(
-                    "25,000 nodes",
-                    new() { Timeout = 25_000 });
-                Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(25));
-                Assert.Equal(MapiParseLimits.MaxNodes, await page.Locator("#request-panel-mapi .tree-item").CountAsync());
-                Assert.Equal("true", await page.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
-
-                var search = page.Locator(".http-view-search-input");
-                await page.Locator("#request-panel-mapi")
-                    .GetByRole(AriaRole.Button, new() { Name = "Collapse all" })
-                    .ClickAsync();
-                await search.FillAsync("LargeTreeNeedle");
-                await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
-                Assert.Equal("true", await page.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
-                await search.FillAsync("");
-                Assert.Equal("false", await page.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
-                Assert.Empty(errors);
+                await popup.WaitForLoadStateAsync(LoadState.DOMContentLoaded);
+                await popup.Locator("#request-tab-webview").ClickAsync();
+                await Assertions.Expect(popup.Locator("#request-panel-webview iframe")).ToHaveCountAsync(1);
+                Assert.Empty(externalRequests);
             }
             finally
             {
-                await page.CloseAsync();
+                await popup.CloseAsync();
             }
+
+            Assert.Empty(errors);
+            Assert.Empty(externalRequests);
+            Assert.Equal(0, unexpectedDownloads);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+    private static async Task VerifyLargeMapiTreeAsync(IBrowser browser, string tempDirectory)
+    {
+        const int leafCount = MapiParseLimits.MaxNodes - 1;
+        var leaves = Enumerable.Range(0, leafCount)
+            .Select(index => MapiNode.Leaf(
+                $"Field[{index}]",
+                MapiNodeKind.Field,
+                index * 4L,
+                4,
+                index == leafCount - 1 ? "LargeTreeNeedle" : index.ToString()))
+            .ToImmutableArray();
+        var root = new MapiNode("LargeRoot", MapiNodeKind.Array, 0, leafCount * 4L, null, leaves);
+        var protocol = new MapiMessageParse(
+            MapiDirection.Request,
+            root,
+            ImmutableArray<string>.Empty,
+            true,
+            leafCount * 4L,
+            leafCount * 4L);
+        var session = new HttpSession
+        {
+            Id = "large",
+            ArchiveOrder = 0,
+            Method = "POST",
+            Url = "https://example.test/mapi-large",
+            StatusCode = 200,
+            Request = Message("POST /mapi-large HTTP/1.1", "application/mapi-http", "binary")
+        };
+        session.Mapi = new MapiSession(
+            "large",
+            0,
+            MapiEndpoint.Mailbox,
+            "Execute",
+            "0",
+            false,
+            protocol,
+            null,
+            ImmutableArray<string>.Empty);
+        var report = new SazReport { SourceName = "large-mapi.saz" };
+        report.Sessions.Add(session);
+        var path = Path.Combine(tempDirectory, "large-mapi.html");
+        var html = new HtmlReportGenerator().Generate(report);
+        Assert.Contains("data-payload-type=\"mapi-protocol\"", html, StringComparison.Ordinal);
+        Assert.InRange(Encoding.UTF8.GetByteCount(html), 1, 8 * 1024 * 1024);
+        await File.WriteAllTextAsync(path, html);
+
+        var errors = new List<string>();
+        var page = await browser.NewPageAsync(new()
+        {
+            ViewportSize = new ViewportSize { Width = 1280, Height = 800 }
+        });
+        CaptureErrors(page, errors);
+        try
+        {
+            await page.AddInitScriptAsync(
+                "const nativeFrame=requestAnimationFrame.bind(globalThis);globalThis.requestAnimationFrame=callback=>setTimeout(()=>nativeFrame(callback),50)");
+            await page.GotoAsync(new Uri(path).AbsoluteUri);
+            await page.Locator("#httpTable tbody tr").ClickAsync();
+            await Assertions.Expect(page.Locator(".protocol-load-status")).ToContainTextAsync("Loading");
+            await page.Locator("#inspectorClose").ClickAsync();
+            await page.WaitForTimeoutAsync(200);
+            var abandonedCount = await page.Locator("#request-panel-mapi .tree-item").CountAsync();
+            await page.WaitForTimeoutAsync(200);
+            Assert.Equal(abandonedCount, await page.Locator("#request-panel-mapi .tree-item").CountAsync());
+
+            var started = DateTime.UtcNow;
+            await page.Locator("#httpTable tbody tr").ClickAsync();
+            await Assertions.Expect(page.Locator(".protocol-load-status")).ToHaveTextAsync(
+                "25,000 nodes",
+                new() { Timeout = 25_000 });
+            Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(25));
+            Assert.Equal(MapiParseLimits.MaxNodes, await page.Locator("#request-panel-mapi .tree-item").CountAsync());
+            Assert.Equal("true", await page.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
+
+            var search = page.Locator(".http-view-search-input");
+            await page.Locator("#request-panel-mapi")
+                .GetByRole(AriaRole.Button, new() { Name = "Collapse all" })
+                .ClickAsync();
+            await search.FillAsync("LargeTreeNeedle");
+            await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+            Assert.Equal("true", await page.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
+            await search.FillAsync("");
+            Assert.Equal("false", await page.Locator("#request-panel-mapi .protocol-tree>.tree-item").GetAttributeAsync("aria-expanded"));
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            await page.CloseAsync();
+        }
     }
 
     private static async Task VerifyThemePersistenceAsync(IBrowser browser, string reportPath)
@@ -1330,7 +1434,7 @@ public sealed class HtmlReportBrowserTests
             await page.Locator("#request-panel-json .tree-item").First.WaitForAsync();
             Assert.Null(await page.Locator("#request-panel-json .tree-subview")
                 .GetAttributeAsync("data-compressed-payload"));
-            Assert.NotNull(await page.Locator("#response-panel-xml .tree-subview")
+            Assert.Null(await page.Locator("#response-panel-xml .tree-subview")
                 .GetAttributeAsync("data-compressed-payload"));
             Assert.Equal(0, await page.Locator("#response-panel-xml .tree-item").CountAsync());
 
@@ -1822,6 +1926,9 @@ public sealed class HtmlReportBrowserTests
             await page.Locator(".ws-detail-pane .tree-collapse-all").ClickAsync();
             var treeRoot = page.Locator(".ws-detail-pane .tree-view>.tree-item[aria-expanded]").First;
             Assert.Equal("false", await treeRoot.GetAttributeAsync("aria-expanded"));
+            Assert.Contains(
+                "NeedleBeyondPreview",
+                await page.Locator(".ws-detail-pane .tree-subview").TextContentAsync());
             await viewSearch.FillAsync("needlebeyondpreview");
             await Assertions.Expect(viewSearchStatus).ToHaveTextAsync("1 of 1 matches");
             Assert.Equal(1, await page.Locator(".ws-search-match").CountAsync());
@@ -1954,6 +2061,7 @@ public sealed class HtmlReportBrowserTests
 
             await search.FillAsync("shared");
             await page.Locator("#inspectorPrev").ClickAsync();
+            await page.Locator(".primary-tab-strip").WaitForAsync();
             Assert.True(await page.Locator(".primary-tab-strip").IsVisibleAsync());
             Assert.Equal("true", await page.Locator("#primary-tab-request").GetAttributeAsync("aria-selected"));
             await page.Locator("#primary-tab-request").FocusAsync();
@@ -2000,6 +2108,7 @@ public sealed class HtmlReportBrowserTests
             await popup.Locator(".ws-view-search-input").FillAsync("needlebeyondpreview");
             await Assertions.Expect(popup.Locator(".ws-view-search-status")).ToHaveTextAsync("1 of 1 matches");
             await popup.Locator("#inspectorPrev").ClickAsync();
+            await popup.Locator(".primary-tab-strip").WaitForAsync();
             Assert.True(await popup.Locator(".primary-tab-strip").IsVisibleAsync());
             await popup.Locator("#inspectorNext").ClickAsync();
             await popup.Locator(".ws-message-row").First.WaitForAsync();
@@ -2032,7 +2141,8 @@ public sealed class HtmlReportBrowserTests
             await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
             await page.Locator("#httpSearch").FillAsync("example.test");
             await page.Locator("#httpFilter").SelectOptionAsync("2");
-            await page.Locator("#httpTable tbody tr:not(.hidden)").First.ClickAsync();
+            await page.Locator("#httpTable tbody tr:not(.hidden)").First.FocusAsync();
+            await page.Keyboard.PressAsync("Enter");
             await page.EvaluateAsync("window.open=()=>null");
 
             await page.Locator("#inspectorOpenTab").ClickAsync();
@@ -2135,7 +2245,7 @@ public sealed class HtmlReportBrowserTests
             await oversizedPage.GotoAsync(new Uri(oversizedPath).AbsoluteUri);
             await oversizedPage.Locator("#httpTable tbody tr").ClickAsync();
             await Assertions.Expect(oversizedPage.Locator("#request-panel-raw .body-view"))
-                .ToContainTextAsync("[Body display truncated at the 256 KiB rendering limit.]");
+                .ToContainTextAsync("[Body preview truncated; the complete body is not retained in this report.]");
             await Assertions.Expect(oversizedPage.Locator("#request-panel-raw .headers"))
                 .ToContainTextAsync("[Header display truncated at the 256 KiB rendering limit.]");
             var copy = oversizedPage.Locator("#request-panel-raw .copy-button");
@@ -2160,16 +2270,9 @@ public sealed class HtmlReportBrowserTests
             var standardPath = Path.Combine(tempDirectory, "capture report.html");
             await unsupportedPage.GotoAsync(new Uri(standardPath).AbsoluteUri);
             await unsupportedPage.Locator("#httpTable tbody tr").First.ClickAsync();
-            await Assertions.Expect(unsupportedPage.Locator("#request-panel-json .tree-subview"))
+            await Assertions.Expect(unsupportedPage.Locator(".http-session-source .warning"))
                 .ToContainTextAsync("Open the report in a current Microsoft Edge or Google Chrome release.");
-            await unsupportedPage.Locator("#request-tab-raw").ClickAsync();
-            await Assertions.Expect(unsupportedPage.Locator("#request-panel-raw .body-view"))
-                .ToContainTextAsync("Content could not be displayed because this browser could not read the compressed local report data.");
-            var copy = unsupportedPage.Locator("#request-panel-raw .copy-button");
-            await Assertions.Expect(copy).ToBeEnabledAsync();
-            await copy.ClickAsync();
-            await Assertions.Expect(unsupportedPage.Locator("#request-panel-raw .copy-status"))
-                .ToContainTextAsync("Copy data could not be prepared.");
+            Assert.Equal(0, await unsupportedPage.Locator(".message-panel").CountAsync());
             Assert.Empty(errors);
         }
         finally
@@ -2181,8 +2284,8 @@ public sealed class HtmlReportBrowserTests
     private static async Task VerifyStructuralPayloadFailureStatesAsync(IBrowser browser, string reportPath)
     {
         var invalidJsonPayload = GzipBase64("not-json");
-        const string invalidTreeSchema = """{"kind":"object","children":[null]}""";
-        var invalidTreePayload = GzipBase64(invalidTreeSchema);
+        const string invalidSessionSchema = """{"schema":2}""";
+        var invalidSessionPayload = GzipBase64(invalidSessionSchema);
         var expansionPayload = GzipBase64(new string('x', 1024));
         var truncatedPayload = expansionPayload[..^4];
         var cases = new[]
@@ -2191,7 +2294,7 @@ public sealed class HtmlReportBrowserTests
             new PayloadMutation("corrupt gzip", "gzip", null, null),
             new PayloadMutation("truncated gzip", "truncated", truncatedPayload, 1024),
             new PayloadMutation("invalid JSON", "json", invalidJsonPayload, 8),
-            new PayloadMutation("invalid tree schema", "schema", invalidTreePayload, Encoding.UTF8.GetByteCount(invalidTreeSchema)),
+            new PayloadMutation("invalid session schema", "schema", invalidSessionPayload, Encoding.UTF8.GetByteCount(invalidSessionSchema)),
             new PayloadMutation("declared expansion limit", "expansion", expansionPayload, 8),
             new PayloadMutation("unsupported version", "version", null, null),
             new PayloadMutation("unsupported type", "type", null, null),
@@ -2209,7 +2312,7 @@ public sealed class HtmlReportBrowserTests
                 await page.EvaluateAsync(
                     """
                     args=>{
-                      const host=document.getElementById('http-detail-0').content.querySelector('[data-payload-type="json-tree"]');
+                      const host=document.getElementById('http-detail-0').content.querySelector('[data-payload-type="http-session"]');
                       if(args.kind==='base64')host.dataset.compressedPayload='@@@@';
                       else if(args.kind==='gzip')host.dataset.compressedPayload='AAAA';
                       else if(args.kind==='truncated'){
@@ -2227,21 +2330,18 @@ public sealed class HtmlReportBrowserTests
                         host.dataset.payloadDecodedBytes=String(args.decodedBytes);
                       }else if(args.kind==='version')host.dataset.payloadVersion='2';
                       else if(args.kind==='type')host.dataset.payloadType='copy-model';
-                      else if(args.kind==='encoded-limit')host.dataset.compressedPayload='A'.repeat((12*1024*1024)+4);
-                      else if(args.kind==='decoded-limit')host.dataset.payloadDecodedBytes=String((8*1024*1024)+1);
+                      else if(args.kind==='encoded-limit')host.dataset.compressedPayload='A'.repeat((48*1024*1024)+4);
+                      else if(args.kind==='decoded-limit')host.dataset.payloadDecodedBytes=String((32*1024*1024)+1);
                     }
                     """,
                     new { kind = testCase.Kind, payload = testCase.Payload, decodedBytes = testCase.DecodedBytes });
                 await page.Locator("#httpTable tbody tr").First.ClickAsync();
-                var tree = page.Locator("#request-panel-json .tree-subview");
-                var expected = testCase.Kind == "schema"
-                    ? "Tree view could not be rendered because its decoded structure is invalid."
-                    : "Tree view could not be loaded because its compressed report payload is corrupt, unsupported, or exceeds safety limits.";
-                await Assertions.Expect(tree).ToContainTextAsync(expected);
+                var warning = page.Locator(".http-session-source .warning");
+                await Assertions.Expect(warning).ToContainTextAsync(
+                    "HTTP session could not be loaded because its compressed report payload is corrupt, unsupported, or exceeds safety limits.");
                 Assert.True(
-                    await tree.EvaluateAsync<bool>("element => element.classList.contains('warning')"),
+                    await warning.EvaluateAsync<bool>("element => element.classList.contains('warning')"),
                     testCase.Name);
-                Assert.Contains("use pretty text", (await tree.InnerTextAsync()).ToLowerInvariant());
                 await page.WaitForTimeoutAsync(50);
                 Assert.Empty(errors);
             }

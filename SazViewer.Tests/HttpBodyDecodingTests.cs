@@ -450,14 +450,19 @@ public sealed class HttpBodyDecodingTests
             ("Content-Encoding", "gzip"),
             ("Content-Type", "application/json"));
 
-        var html = new HtmlReportGenerator().Generate(new SazParser().Parse(saz));
+        var report = new SazParser().Parse(saz);
+        Assert.Equal(
+            "Decoded in wire-removal order: content: gzip.",
+            Assert.Single(report.Sessions).Response!.Body.DecodingStatus);
+        var html = new HtmlReportGenerator().Generate(report);
 
         Assert.DoesNotContain("</script><img src=x onerror=alert(1)>", html, StringComparison.Ordinal);
-        Assert.Contains("data-payload-type=\"copy-model\"", html, StringComparison.Ordinal);
-        Assert.Contains("data-payload-type=\"json-tree\"", html, StringComparison.Ordinal);
-        Assert.Contains("target.textContent=text.slice", html, StringComparison.Ordinal);
+        Assert.Contains("data-payload-type=\"http-session\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-payload-type=\"copy-model\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-payload-type=\"json-tree\"", html, StringComparison.Ordinal);
+        Assert.Contains("span.textContent=text", html, StringComparison.Ordinal);
         Assert.Contains("Decoded body", html, StringComparison.Ordinal);
-        Assert.Contains("Decoded in wire-removal order: content: gzip.", html, StringComparison.Ordinal);
+        Assert.Contains("model.body.decodingStatus", html, StringComparison.Ordinal);
         Assert.Contains("Captured bytes", html, StringComparison.Ordinal);
         Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);
     }

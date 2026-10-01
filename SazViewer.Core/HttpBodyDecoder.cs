@@ -172,7 +172,7 @@ internal static class HttpBodyDecoder
             CapturedBytesPreviewTruncated = original.Length > CapturedBytesPreviewLimit,
             RemovedEncodings = removed,
             DecodingStatus = $"Decoded in wire-removal order: {string.Join(" -> ", removed)}.",
-            CapturedBytes = original.AsMemory(0, Math.Min(original.Length, HexViewBytesLimit)),
+            CapturedBytes = original.AsMemory(0, Math.Min(original.Length, CapturedBytesPreviewLimit)),
             DecodedBytes = current.AsMemory(0, Math.Min(current.Length, DecodedPresentationBytesLimit)),
             NormalizedBytes = retainNormalizedBody ? current : ReadOnlyMemory<byte>.Empty
         };
@@ -195,7 +195,9 @@ internal static class HttpBodyDecoder
             CapturedBytesPreviewTruncated = preview.CapturedBytesPreviewTruncated,
             RemovedEncodings = preview.RemovedEncodings,
             DecodingStatus = preview.DecodingStatus,
-            CapturedBytes = availableBody[..Math.Min(availableBody.Length, HexViewBytesLimit)].ToArray(),
+            CapturedBytes = availableBody[..Math.Min(
+                availableBody.Length,
+                Math.Max(HexViewBytesLimit, CapturedBytesPreviewLimit))].ToArray(),
             DecodedBytes = availableBody[..Math.Min(availableBody.Length, DecodedPresentationBytesLimit)].ToArray(),
             NormalizedBytes = retainNormalizedBody
                 && capturedLength == availableBody.Length
@@ -221,7 +223,7 @@ internal static class HttpBodyDecoder
             IsTruncated = capturedLength > previewLength,
             Preview = HttpMessageParser.HexPreview(availableBody[..previewLength]),
             DecodingStatus = status,
-            CapturedBytes = availableBody[..Math.Min(availableBody.Length, HexViewBytesLimit)].ToArray()
+            CapturedBytes = availableBody[..Math.Min(availableBody.Length, CapturedBytesPreviewLimit)].ToArray()
         };
     }
 

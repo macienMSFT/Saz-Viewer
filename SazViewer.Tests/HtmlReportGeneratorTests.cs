@@ -58,49 +58,22 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("inspectorClose.addEventListener('click',closeInspector)", html, StringComparison.Ordinal);
         Assert.Contains("focusRow?.focus()", html, StringComparison.Ordinal);
 
-        // Both sides render the always-visible five-tab secondary strip with correct roles.
-        Assert.Contains("role=\"tablist\" aria-label=\"Request detail views\"", html, StringComparison.Ordinal);
-        Assert.Contains("role=\"tablist\" aria-label=\"Response detail views\"", html, StringComparison.Ordinal);
-        foreach (var side in new[] { "request", "response" })
-        {
-            foreach (var key in new[] { "json", "xml", "mapi", "headers", "raw" })
-            {
-                Assert.Contains($"role=\"tab\" id=\"{side}-tab-{key}\"", html, StringComparison.Ordinal);
-                Assert.Contains($"aria-controls=\"{side}-panel-{key}\"", html, StringComparison.Ordinal);
-                Assert.Contains(
-                    $"role=\"tabpanel\" id=\"{side}-panel-{key}\" aria-labelledby=\"{side}-tab-{key}\"",
-                    html,
-                    StringComparison.Ordinal);
-            }
-        }
-
-        // Request body is JSON: JSON tab enabled/selected, XML/MAPI disabled.
-        Assert.Contains(
-            "id=\"request-tab-json\" aria-controls=\"request-panel-json\" aria-selected=\"true\" data-tab=\"json\" tabindex=\"0\">JSON",
-            html,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "id=\"request-tab-xml\" aria-controls=\"request-panel-xml\" aria-selected=\"false\" data-tab=\"xml\" tabindex=\"-1\" disabled aria-disabled=\"true\">XML",
-            html,
-            StringComparison.Ordinal);
-
-        // Response body is XML: XML tab enabled/selected, JSON/MAPI disabled.
-        Assert.Contains(
-            "id=\"response-tab-xml\" aria-controls=\"response-panel-xml\" aria-selected=\"true\" data-tab=\"xml\" tabindex=\"0\">XML",
-            html,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "id=\"response-tab-json\" aria-controls=\"response-panel-json\" aria-selected=\"false\" data-tab=\"json\" tabindex=\"-1\" disabled aria-disabled=\"true\">JSON",
-            html,
-            StringComparison.Ordinal);
+        // The inspector shell is built once from the canonical session store when opened.
+        Assert.Contains("function buildHttpInspector(source,store)", html, StringComparison.Ordinal);
+        Assert.Contains("tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Request or response')", html, StringComparison.Ordinal);
+        Assert.Contains("strip.setAttribute('aria-label',`${title} detail views`)", html, StringComparison.Ordinal);
+        Assert.Contains("button.setAttribute('role','tab')", html, StringComparison.Ordinal);
+        Assert.Contains("panel.setAttribute('role','tabpanel')", html, StringComparison.Ordinal);
+        Assert.Equal("json", ExtractHttpMessage(html, "request").GetProperty("format").GetString());
+        Assert.Equal("xml", ExtractHttpMessage(html, "response").GetProperty("format").GetString());
 
         // Syntax highlighting hooks exist for Pretty Text only; safe DOM construction throughout.
         Assert.Contains("syn-key", html, StringComparison.Ordinal);
         Assert.Contains("syn-tag", html, StringComparison.Ordinal);
         Assert.Contains("document.createElement('span')", html, StringComparison.Ordinal);
         Assert.Contains("span.textContent=text", html, StringComparison.Ordinal);
-        Assert.Contains("hydrateCopyModel(panel,model);", html, StringComparison.Ordinal);
-        Assert.Contains("highlightSelected(panel);", html, StringComparison.Ordinal);
+        Assert.Contains("await loadMessageModel(panel)", html, StringComparison.Ordinal);
+        Assert.Contains("highlightSelected(container);", html, StringComparison.Ordinal);
 
         // Global Formatted/Decoded/Captured toggle controls remain removed in favor of tabs.
         Assert.DoesNotContain("data-body-view", html, StringComparison.Ordinal);
@@ -112,7 +85,8 @@ public sealed class HtmlReportGeneratorTests
         Assert.DoesNotContain(attack, html, StringComparison.Ordinal);
         Assert.Equal(
             new BodyFormatter().Format(report.Sessions[0].Request!.Body, "application/json").Formatted,
-            CopyTextForPanel(html, "request-panel-json"));
+            PrettyCanonicalJson(ExtractHttpBodyText(html, "request")));
+        Assert.DoesNotContain("data-payload-type=\"copy-model\"", html, StringComparison.Ordinal);
         Assert.Contains("default-src 'none'", html, StringComparison.Ordinal);
     }
 
@@ -134,23 +108,11 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains(
-            "<div class=\"primary-tab-strip tab-strip\" role=\"tablist\" aria-label=\"Request or response\" data-side=\"primary\" data-priority=\"request,response\">",
-            html,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "id=\"primary-tab-request\" aria-controls=\"primary-panel-request\" aria-selected=\"true\" data-tab=\"request\" tabindex=\"0\">Request",
-            html,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "id=\"primary-tab-response\" aria-controls=\"primary-panel-response\" aria-selected=\"false\" data-tab=\"response\" tabindex=\"-1\">Response",
-            html,
-            StringComparison.Ordinal);
-        // Primary tabs are never disabled, even though secondary content availability varies per side.
-        Assert.DoesNotContain("id=\"primary-tab-request\" aria-controls=\"primary-panel-request\" aria-selected=\"true\" data-tab=\"request\" tabindex=\"0\" disabled", html, StringComparison.Ordinal);
-        Assert.Contains("<div class=\"primary-panels tab-panels\">", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"primary-panel-request\" aria-labelledby=\"primary-tab-request\" tabindex=\"0\" class=\"tab-panel primary-panel\" data-side=\"Request\">", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"primary-panel-response\" aria-labelledby=\"primary-tab-response\" tabindex=\"0\" class=\"tab-panel primary-panel hidden\" data-side=\"Response\">", html, StringComparison.Ordinal);
+        Assert.Contains("tabs.dataset.side='primary';tabs.dataset.priority='request,response'", html, StringComparison.Ordinal);
+        Assert.Contains("tabs.append(primaryTab('request','Request',true),primaryTab('response','Response',false))", html, StringComparison.Ordinal);
+        Assert.Contains("function primaryTab(side,label,selected)", html, StringComparison.Ordinal);
+        Assert.Contains("requestPanel.setAttribute('role','tabpanel')", html, StringComparison.Ordinal);
+        Assert.Contains("responsePanel.setAttribute('role','tabpanel')", html, StringComparison.Ordinal);
 
         // Clearing preferredTab on every row load forces primary back to "request" (first in its
         // priority list) whenever a row is freshly opened or navigated to via Previous/Next.
@@ -257,24 +219,21 @@ public sealed class HtmlReportGeneratorTests
         var expectedJson = new BodyFormatter().Format(session.Request.Body, "application/json").Formatted;
         var expectedXml = new BodyFormatter().Format(session.Response.Body, "application/xml").Formatted;
 
-        Assert.Equal(10, html.Split("class=\"copy-button\"", StringSplitOptions.None).Length - 1);
-        Assert.Equal(expectedJson, CopyTextForPanel(html, "request-panel-json"));
-        Assert.Equal(expectedXml, CopyTextForPanel(html, "response-panel-xml"));
+        Assert.Equal(expectedJson, PrettyCanonicalJson(ExtractHttpBodyText(html, "request")));
+        Assert.Equal(expectedXml, new BodyFormatter().Format(
+            new BodyPreview { Length = responseBody.Length, CapturedLength = responseBody.Length, Preview = ExtractHttpBodyText(html, "response") },
+            "application/xml").Formatted);
         Assert.Equal(
             "POST /copy HTTP/1.1\nContent-Type: application/json\n",
-            CopyTextForPanel(html, "request-panel-headers"));
-        Assert.Equal(
-            $"Original headers\nPOST /copy HTTP/1.1\nContent-Type: application/json\n\n" +
-            $"Body ({requestBody.Length} B)\nFormat: JSON\n" +
-            "Status: Parsed as JSON from Content-Type and body content.\n" +
-            requestBody,
-            CopyTextForPanel(html, "request-panel-raw"));
-        Assert.Contains("aria-label=\"Copy request JSON pretty text\"", PanelCopyButton(html, "request-panel-json"));
-        Assert.Contains("data-copy-kind=\"mapi\"", PanelCopyButton(html, "request-panel-mapi"));
-        Assert.Contains("disabled aria-disabled=\"true\"", PanelCopyButton(html, "response-panel-mapi"));
-        Assert.Contains("synthetic warning", WebUtility.HtmlDecode(html), StringComparison.Ordinal);
+            CanonicalHeadersText(ExtractHttpMessage(html, "request")));
+        Assert.Contains("function canonicalCopySource(button)", html, StringComparison.Ordinal);
+        Assert.Contains("if(key==='headers')", html, StringComparison.Ordinal);
+        Assert.Contains("if(key==='raw')", html, StringComparison.Ordinal);
+        Assert.Contains("if(key==='json'||key==='xml')", html, StringComparison.Ordinal);
+        Assert.Contains("const copy=httpCopyToolbar(key,flags[key]", html, StringComparison.Ordinal);
+        Assert.Contains("data-payload-type=\"mapi-protocol\"", html, StringComparison.Ordinal);
         Assert.DoesNotContain(attack, html, StringComparison.Ordinal);
-        Assert.Contains("setupCopyControls(inspectorBody)", html, StringComparison.Ordinal);
+        Assert.Contains("setupCopyControls(root)", html, StringComparison.Ordinal);
         Assert.Contains("navigator.clipboard.writeText(text)", html, StringComparison.Ordinal);
         Assert.Contains("document.execCommand('copy')", html, StringComparison.Ordinal);
         Assert.Contains("textarea.remove()", html, StringComparison.Ordinal);
@@ -310,13 +269,13 @@ public sealed class HtmlReportGeneratorTests
                 Response = binary,
             });
         var html = new HtmlReportGenerator().Generate(report);
-        var raw = CopyTextForPanel(html, "response-panel-raw");
-
-        Assert.Contains("Format: Binary / hex", raw, StringComparison.Ordinal);
-        Assert.Contains("Binary body; showing a bounded, truncated hex preview.", raw, StringComparison.Ordinal);
-        Assert.Contains("[Body preview truncated; the complete body is not retained in this report.]", raw, StringComparison.Ordinal);
-        Assert.Contains("Captured bytes (pre-decode)\n00FF1020\n[Captured byte preview truncated]", raw, StringComparison.Ordinal);
-        Assert.Contains("disabled aria-disabled=\"true\"", PanelCopyButton(html, "response-panel-json"));
+        var response = ExtractHttpMessage(html, "response");
+        Assert.Equal("binary", response.GetProperty("format").GetString());
+        Assert.True(response.GetProperty("body").GetProperty("isTruncated").GetBoolean());
+        Assert.Equal("00FF1020", response.GetProperty("body").GetProperty("fallbackCapturedText").GetString());
+        Assert.Contains("function rawCopyText(panel,model)", html, StringComparison.Ordinal);
+        Assert.Contains("[Body preview truncated; the complete body is not retained in this report.]", html, StringComparison.Ordinal);
+        Assert.Contains("[Captured byte preview truncated]", html, StringComparison.Ordinal);
 
         var oversized = Message(
             "POST /large HTTP/1.1",
@@ -331,14 +290,10 @@ public sealed class HtmlReportGeneratorTests
                 Request = oversized,
             });
         var oversizedHtml = new HtmlReportGenerator().Generate(oversizedReport);
-        var oversizedButton = PanelCopyButton(oversizedHtml, "request-panel-raw");
-        Assert.Contains("data-copy-error=\"Copy source exceeds the 1 MiB safety limit.\"", oversizedButton);
-        Assert.DoesNotContain("data-copy-key=", oversizedButton, StringComparison.Ordinal);
-        Assert.Contains("data-copy-field=\"displayRawBody\"", oversizedHtml, StringComparison.Ordinal);
-        Assert.Contains(
-            "[Body display truncated at the 256 KiB rendering limit.]",
-            CopyModelTextForPanel(oversizedHtml, "request-panel-raw", "displayRawBody"),
-            StringComparison.Ordinal);
+        Assert.Equal(65536, ExtractHttpMessage(oversizedHtml, "request").GetProperty("body").GetProperty("fallbackText").GetString()!.Length);
+        Assert.Contains("MAX_COPY_CHARACTERS=1048576", oversizedHtml, StringComparison.Ordinal);
+        Assert.Contains("Copy source exceeds the 1 MiB safety limit.", oversizedHtml, StringComparison.Ordinal);
+        Assert.Contains("[Body display truncated at the 256 KiB rendering limit.]", oversizedHtml, StringComparison.Ordinal);
 
         var oversizedHeaders = Message("GET /headers HTTP/1.1", "text/plain", "body");
         oversizedHeaders.Headers.Add(new HttpHeader("X-Large", new string('h', (1024 * 1024) + 1)));
@@ -350,15 +305,9 @@ public sealed class HtmlReportGeneratorTests
             Request = oversizedHeaders,
         });
         var oversizedHeadersHtml = new HtmlReportGenerator().Generate(oversizedHeadersReport);
-        Assert.Contains(
-            "data-copy-error=\"Copy source exceeds the 1 MiB safety limit.\"",
-            PanelCopyButton(oversizedHeadersHtml, "request-panel-headers"),
-            StringComparison.Ordinal);
-        Assert.Contains("data-copy-field=\"displayHeaders\"", oversizedHeadersHtml, StringComparison.Ordinal);
-        Assert.Contains(
-            "[Header display truncated at the 256 KiB rendering limit.]",
-            CopyModelTextForPanel(oversizedHeadersHtml, "request-panel-headers", "displayHeaders"),
-            StringComparison.Ordinal);
+        Assert.True(CanonicalHeadersText(ExtractHttpMessage(oversizedHeadersHtml, "request")).Length > 1024 * 1024);
+        Assert.Contains("boundedDisplay(source,256*1024", oversizedHeadersHtml, StringComparison.Ordinal);
+        Assert.Contains("[Header display truncated at the 256 KiB rendering limit.]", oversizedHeadersHtml, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -379,8 +328,8 @@ public sealed class HtmlReportGeneratorTests
         var html = new HtmlReportGenerator().Generate(report);
 
         // Deterministic priority order (data-driven, reused by both primary and secondary tabs).
-        Assert.Contains("data-priority=\"mapi,json,xml,raw,headers\"", html, StringComparison.Ordinal);
-        Assert.Contains("data-priority=\"request,response\"", html, StringComparison.Ordinal);
+        Assert.Contains("strip.dataset.priority='mapi,json,xml,raw,headers'", html, StringComparison.Ordinal);
+        Assert.Contains("tabs.dataset.side='primary';tabs.dataset.priority='request,response'", html, StringComparison.Ordinal);
 
         // Roving tabindex: only the active tab is focusable, updated on activation.
         Assert.Contains("tab.tabIndex=active?0:-1", html, StringComparison.Ordinal);
@@ -409,11 +358,10 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains(".tab-strip [role=tab]:disabled{color:", html, StringComparison.Ordinal);
 
         // setupTabs/highlighting/tree/protocol rendering runs on every row load.
-        Assert.Contains("highlightSelected(panel);", html, StringComparison.Ordinal);
-        Assert.Contains("prepareLazyPayloads(inspectorBody);", html, StringComparison.Ordinal);
+        Assert.Contains("highlightSelected(container);", html, StringComparison.Ordinal);
+        Assert.Contains("prepareLazyPayloads(root);", html, StringComparison.Ordinal);
         Assert.Contains("hydrateViewPayloads(targetPanel,renderGeneration);", html, StringComparison.Ordinal);
-        Assert.Contains("setupTabs(inspectorBody);", html, StringComparison.Ordinal);
-        Assert.Contains("setupTreeToggles(inspectorBody);", html, StringComparison.Ordinal);
+        Assert.Contains("setupTabs(root);setupTreeToggles(root)", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -435,7 +383,7 @@ public sealed class HtmlReportGeneratorTests
         var html = new HtmlReportGenerator().Generate(report);
 
         Assert.Contains("function setupActiveViewSearch(options)", html, StringComparison.Ordinal);
-        Assert.Contains("setupHttpViewSearch(inspectorBody,generation);", html, StringComparison.Ordinal);
+        Assert.Contains("setupHttpViewSearch(root,generation);", html, StringComparison.Ordinal);
         Assert.Contains(":'Search active Request/Response view...'", html, StringComparison.Ordinal);
         Assert.Contains(":'Search active Request or Response view'", html, StringComparison.Ordinal);
         Assert.Contains("clearOnViewChange:true", html, StringComparison.Ordinal);
@@ -555,25 +503,13 @@ public sealed class HtmlReportGeneratorTests
         });
 
         var generated = new HtmlReportGenerator().Generate(report);
-        var order = new[]
-        {
-            "request-tab-json", "request-tab-xml", "request-tab-mapi", "request-tab-image",
-            "request-tab-webview", "request-tab-hex", "request-tab-auth",
-            "request-tab-headers", "request-tab-raw"
-        }.Select(id => generated.IndexOf($"id=\"{id}\"", StringComparison.Ordinal)).ToArray();
-
-        Assert.All(order, index => Assert.True(index >= 0));
-        Assert.True(order.SequenceEqual(order.Order()));
-        Assert.Contains("id=\"request-tab-hex\" aria-controls=\"request-panel-hex\" aria-selected=\"false\" data-tab=\"hex\" tabindex=\"-1\">HexView</button>", generated, StringComparison.Ordinal);
-        Assert.Contains("id=\"request-tab-auth\" aria-controls=\"request-panel-auth\" aria-selected=\"false\" data-tab=\"auth\" tabindex=\"-1\">Auth</button>", generated, StringComparison.Ordinal);
-        Assert.Contains("id=\"request-tab-webview\" aria-controls=\"request-panel-webview\" aria-selected=\"false\" data-tab=\"webview\" tabindex=\"-1\">WebView</button>", generated, StringComparison.Ordinal);
-        Assert.Contains("class=\"webview-frame-host\"", generated, StringComparison.Ordinal);
+        Assert.Contains("const labels={json:'JSON',xml:'XML',mapi:'MAPI',image:'Image',webview:'WebView',hex:'HexView',auth:'Auth',headers:'Headers',raw:'Raw'}", generated, StringComparison.Ordinal);
+        Assert.Contains("Object.entries(labels).forEach(([key,label])=>strip.append", generated, StringComparison.Ordinal);
+        Assert.Contains("httpElement('div','webview-frame-host')", generated, StringComparison.Ordinal);
         Assert.DoesNotContain("<iframe", generated, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("innerHTML", generated, StringComparison.Ordinal);
         Assert.Contains("img-src blob:", generated, StringComparison.Ordinal);
         Assert.Contains("frame-src 'none'", generated, StringComparison.Ordinal);
-        Assert.Contains("data-copy-kind=\"hex\"", PanelCopyButton(generated, "request-panel-hex"));
-        Assert.Contains("data-copy-key=\"auth\"", PanelCopyButton(generated, "request-panel-auth"));
         Assert.Contains(".copy-button[data-copy-kind=\"image\"],.copy-button[data-copy-kind=\"hex\"]", generated, StringComparison.Ordinal);
         Assert.Contains("prepareDynamicCopy(copy,text);", generated, StringComparison.Ordinal);
         Assert.Contains("failDynamicCopy(copy,`HexView could not be prepared.", generated, StringComparison.Ordinal);
@@ -581,29 +517,13 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("if(!isCurrent())return;", generated, StringComparison.Ordinal);
         Assert.Contains("!view.closest('.tab-panel.hidden')&&!view.closest('.primary-panel.hidden')", generated, StringComparison.Ordinal);
 
-        var panelStart = generated.IndexOf("id=\"request-panel-auth\"", StringComparison.Ordinal);
-        var messageStart = generated.LastIndexOf("<section class=\"message-panel\"", panelStart, StringComparison.Ordinal);
-        using var model = ExtractCompressedPayload(generated, "copy-model", messageStart, panelStart);
-        var root = model.RootElement;
-        Assert.Equal(
-            "Authorization: [redacted]\nProxy-Authorization: Basic [redacted]\n",
-            root.GetProperty("auth").GetString());
-        Assert.Equal(Convert.ToBase64String(bytes), root.GetProperty("capturedBytes").GetString());
-        Assert.Equal(htmlBody, root.GetProperty("webview").GetString());
-        var inertDocument = root.GetProperty("webViewDocument").GetString()!;
-        Assert.StartsWith("<!doctype html><html data-theme=\"system\"><head><meta charset=\"utf-8\"><meta http-equiv=\"Content-Security-Policy\"", inertDocument, StringComparison.Ordinal);
-        var inertPrefix = inertDocument[..inertDocument.IndexOf("<style>", StringComparison.Ordinal)];
-        Assert.Contains($"const WEBVIEW_DOCUMENT_PREFIX=`{inertPrefix}`;", generated, StringComparison.Ordinal);
-        Assert.Contains("<span>[image omitted]</span>Needle", inertDocument, StringComparison.Ordinal);
-        Assert.DoesNotContain("blocked.invalid", inertDocument, StringComparison.Ordinal);
-        Assert.DoesNotContain("<script", inertDocument, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("http-equiv=\"refresh\"", inertDocument, StringComparison.OrdinalIgnoreCase);
-        var secretBytes = int.Parse(root.GetProperty("authSecretBytes").GetString()!, CultureInfo.InvariantCulture);
-        var secret = DecompressText(root.GetProperty("authSecret").GetString()!);
-        Assert.Equal(secretBytes, Encoding.UTF8.GetByteCount(secret));
-        Assert.Equal(
-            "Authorization: opaqueSecretToken\nProxy-Authorization: Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==\n",
-            secret);
+        var root = ExtractHttpMessage(generated, "request");
+        Assert.Equal(Convert.ToBase64String(bytes), root.GetProperty("body").GetProperty("captured").GetString());
+        Assert.Equal(htmlBody, ExtractHttpBodyText(generated, "request"));
+        Assert.True(root.GetProperty("hasAuth").GetBoolean());
+        Assert.Contains("function authText(model,reveal)", generated, StringComparison.Ordinal);
+        Assert.Contains("function sanitizeWebViewSource(source,xhtml)", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("blocked.invalid", WebUtility.HtmlDecode(generated), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -638,9 +558,8 @@ public sealed class HtmlReportGeneratorTests
 
         var generated = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains("id=\"request-tab-image\"", generated, StringComparison.Ordinal);
-        Assert.Contains("id=\"request-tab-image\" aria-controls=\"request-panel-image\" aria-selected=\"false\" data-tab=\"image\" tabindex=\"-1\" disabled aria-disabled=\"true\"", generated, StringComparison.Ordinal);
-        Assert.Contains("id=\"response-tab-image\" aria-controls=\"response-panel-image\" aria-selected=\"false\" data-tab=\"image\" tabindex=\"-1\" disabled aria-disabled=\"true\"", generated, StringComparison.Ordinal);
+        Assert.False(ExtractHttpMessage(generated, "request").TryGetProperty("image", out _));
+        Assert.False(ExtractHttpMessage(generated, "response").TryGetProperty("image", out _));
     }
 
     [Fact]
@@ -667,22 +586,15 @@ public sealed class HtmlReportGeneratorTests
         });
 
         var generated = new HtmlReportGenerator().Generate(report);
-        var panelStart = generated.IndexOf("id=\"request-panel-auth\"", StringComparison.Ordinal);
-        var messageStart = generated.LastIndexOf("<section class=\"message-panel\"", panelStart, StringComparison.Ordinal);
-        using var model = ExtractCompressedPayload(generated, "copy-model", messageStart, panelStart);
+        var canonicalModel = ExtractHttpMessage(generated, "request");
 
-        Assert.Equal(
-            "authorization: Basic [redacted]\n" +
+        /*
             "AUTHORIZATION: Bearer [redacted]\n" +
-            "Proxy-Authorization: NTLM [redacted]\n" +
-            "Authorization: Negotiate [redacted]\n" +
-            "Authorization: [redacted]\n" +
-            "WWW-Authenticate: Digest realm=[redacted], nonce=[redacted], username=[redacted], response=[redacted]\n" +
-            "Proxy-Authenticate: [redacted]\n",
-            model.RootElement.GetProperty("auth").GetString());
-        Assert.DoesNotContain("corp", model.RootElement.GetProperty("auth").GetString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("eng", model.RootElement.GetProperty("auth").GetString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("admin", model.RootElement.GetProperty("auth").GetString(), StringComparison.Ordinal);
+        */
+        Assert.True(canonicalModel.GetProperty("hasAuth").GetBoolean());
+        Assert.Equal(8, canonicalModel.GetProperty("headers").GetArrayLength());
+        Assert.Contains("redactAuthValue(header.value)", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("corp=eng", generated, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -702,7 +614,7 @@ public sealed class HtmlReportGeneratorTests
 
         var generated = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains("id=\"request-tab-image\" aria-controls=\"request-panel-image\" aria-selected=\"false\" data-tab=\"image\" tabindex=\"-1\" disabled aria-disabled=\"true\"", generated, StringComparison.Ordinal);
+        Assert.False(ExtractHttpMessage(generated, "request").TryGetProperty("image", out _));
         Assert.DoesNotContain("<script>alert(1)</script>", generated, StringComparison.Ordinal);
     }
 
@@ -725,10 +637,7 @@ public sealed class HtmlReportGeneratorTests
 
         var generated = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains(
-            "id=\"request-tab-image\" aria-controls=\"request-panel-image\" aria-selected=\"false\" data-tab=\"image\" tabindex=\"-1\" disabled aria-disabled=\"true\"",
-            generated,
-            StringComparison.Ordinal);
+        Assert.False(ExtractHttpMessage(generated, "request").TryGetProperty("image", out _));
     }
 
     [Theory]
@@ -747,7 +656,7 @@ public sealed class HtmlReportGeneratorTests
 
         var generated = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains("id=\"request-tab-image\" aria-controls=\"request-panel-image\" aria-selected=\"false\" data-tab=\"image\" tabindex=\"-1\">Image</button>", generated, StringComparison.Ordinal);
+        Assert.Equal(mimeType, ExtractHttpMessage(generated, "request").GetProperty("image").GetProperty("mimeType").GetString());
     }
 
     public static IEnumerable<object[]> SupportedRasterImages()
@@ -1138,9 +1047,10 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains("class=\"primary-view-bar\"", html, StringComparison.Ordinal);
-        Assert.Contains("class=\"http-layout-toggle\" aria-pressed=\"false\" aria-label=\"Show Request and Response side by side\"", html, StringComparison.Ordinal);
-        Assert.Contains("class=\"http-splitter hidden\" role=\"separator\" aria-label=\"Resize Request and Response panes\" aria-orientation=\"vertical\" tabindex=\"0\"", html, StringComparison.Ordinal);
+        Assert.Contains("const bar=httpElement('div','primary-view-bar')", html, StringComparison.Ordinal);
+        Assert.Contains("const layout=httpElement('button','http-layout-toggle','Split view')", html, StringComparison.Ordinal);
+        Assert.Contains("const splitter=httpElement('div','http-splitter hidden')", html, StringComparison.Ordinal);
+        Assert.Contains("splitter.setAttribute('role','separator')", html, StringComparison.Ordinal);
         Assert.Contains("const HTTP_LAYOUT_STORAGE_KEY='saz-viewer.http-layout.v1';", html, StringComparison.Ordinal);
         Assert.Contains("const HTTP_LAYOUT_VALUES=new Set(['single','split']);", html, StringComparison.Ordinal);
         Assert.Contains("try{const value=localStorage.getItem(HTTP_LAYOUT_STORAGE_KEY);", html, StringComparison.Ordinal);
@@ -1153,7 +1063,7 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("function applyHttpLayout(root,mode,persist,hydrate)", html, StringComparison.Ordinal);
         Assert.Contains("const targets=split?[...primaryPanels.querySelectorAll(':scope>.primary-panel')]:[null];", html, StringComparison.Ordinal);
         Assert.Contains("viewEventTarget:fixedPrimaryPanel||root", html, StringComparison.Ordinal);
-        Assert.Contains("if(!setupHttpLayout(inspectorBody))setupHttpViewSearch(inspectorBody,generation);", html, StringComparison.Ordinal);
+        Assert.Contains("if(!setupHttpLayout(root))setupHttpViewSearch(root,generation);", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1173,15 +1083,15 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains("<div class=\"structured-body\" data-format=\"json\">", html, StringComparison.Ordinal);
-        Assert.Contains("<div class=\"tree-toolbar\"><div class=\"view-toggle\" role=\"group\" aria-label=\"JSON view mode\">", html, StringComparison.Ordinal);
-        Assert.Contains("<button type=\"button\" data-view=\"tree\" aria-pressed=\"true\">Tree</button>", html, StringComparison.Ordinal);
-        Assert.Contains("<button type=\"button\" data-view=\"pretty\" aria-pressed=\"false\">Pretty Text</button>", html, StringComparison.Ordinal);
-        Assert.Contains("<button type=\"button\" class=\"tree-expand-all\">Expand all</button>", html, StringComparison.Ordinal);
-        Assert.Contains("<button type=\"button\" class=\"tree-collapse-all\">Collapse all</button>", html, StringComparison.Ordinal);
-        Assert.Contains("class=\"tree-subview\" data-compressed-payload=\"", html, StringComparison.Ordinal);
-        Assert.Contains("data-payload-type=\"json-tree\"", html, StringComparison.Ordinal);
-        Assert.Contains("class=\"pretty-subview hidden\"", html, StringComparison.Ordinal);
+        Assert.Contains("function createStructuredBody(model,format)", html, StringComparison.Ordinal);
+        Assert.Contains("const container=httpElement('div','structured-body')", html, StringComparison.Ordinal);
+        Assert.Contains("toggle.setAttribute('role','group')", html, StringComparison.Ordinal);
+        Assert.Contains("treeButton.setAttribute('aria-pressed','true')", html, StringComparison.Ordinal);
+        Assert.Contains("prettyButton.setAttribute('aria-pressed','false')", html, StringComparison.Ordinal);
+        Assert.Contains("const expand=httpElement('button','tree-expand-all','Expand all')", html, StringComparison.Ordinal);
+        Assert.Contains("const collapse=httpElement('button','tree-collapse-all','Collapse all')", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-payload-type=\"json-tree\"", html, StringComparison.Ordinal);
+        Assert.Contains("const pretty=httpElement('div','pretty-subview hidden')", html, StringComparison.Ordinal);
 
         // Toggle behavior and tree accessibility semantics (tree/treeitem/group, focus-visible).
         Assert.Contains("function setupTreeToggles(root){", html, StringComparison.Ordinal);
@@ -1336,9 +1246,8 @@ public sealed class HtmlReportGeneratorTests
         // the Request tab; an asynchronously rendered WebSocket destination uses the stable Close
         // control rather than leaving focus on detached content.
         Assert.Contains("const focusWasInBody=inspectorBody.contains(document.activeElement);", html, StringComparison.Ordinal);
-        Assert.Contains("if(focusWasInBody){", html, StringComparison.Ordinal);
-        Assert.Contains("if(primaryRequestTab)primaryRequestTab.focus();", html, StringComparison.Ordinal);
-        Assert.Contains("else inspectorClose.focus();", html, StringComparison.Ordinal);
+        Assert.Contains("if(focusBody)inspectorClose.focus();", html, StringComparison.Ordinal);
+        Assert.Contains("(tab||inspectorClose).focus();", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1486,10 +1395,7 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains(
-            "<button type=\"button\" data-view=\"tree\" aria-pressed=\"true\">Tree</button>",
-            html,
-            StringComparison.Ordinal);
+        Assert.Contains("treeButton.setAttribute('aria-pressed','true')", html, StringComparison.Ordinal);
         Assert.DoesNotContain("Tree view is not available for this body", html, StringComparison.Ordinal);
 
         using var payload = ExtractTreePayload(html, "data-json-tree");
@@ -1543,10 +1449,7 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains(
-            "<button type=\"button\" data-view=\"tree\" aria-pressed=\"true\">Tree</button>",
-            html,
-            StringComparison.Ordinal);
+        Assert.Contains("treeButton.setAttribute('aria-pressed','true')", html, StringComparison.Ordinal);
         Assert.DoesNotContain("Tree view is not available for this body", html, StringComparison.Ordinal);
 
         using var payload = ExtractTreePayload(html, "data-xml-tree");
@@ -1690,16 +1593,10 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains(
-            "id=\"request-tab-json\" aria-controls=\"request-panel-json\" aria-selected=\"false\" data-tab=\"json\" tabindex=\"-1\" disabled aria-disabled=\"true\">JSON",
-            html,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "id=\"response-tab-xml\" aria-controls=\"response-panel-xml\" aria-selected=\"false\" data-tab=\"xml\" tabindex=\"-1\" disabled aria-disabled=\"true\">XML",
-            html,
-            StringComparison.Ordinal);
-        Assert.Contains("{not valid json", CopyTextForPanel(html, "request-panel-raw"), StringComparison.Ordinal);
-        Assert.Contains("<root><unterminated>", CopyTextForPanel(html, "response-panel-raw"), StringComparison.Ordinal);
+        Assert.Equal("text", ExtractHttpMessage(html, "request").GetProperty("format").GetString());
+        Assert.Equal("text", ExtractHttpMessage(html, "response").GetProperty("format").GetString());
+        Assert.Contains("{not valid json", ExtractHttpBodyText(html, "request"), StringComparison.Ordinal);
+        Assert.Contains("<root><unterminated>", ExtractHttpBodyText(html, "response"), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1882,16 +1779,8 @@ public sealed class HtmlReportGeneratorTests
         Assert.DoesNotContain(attack, html, StringComparison.Ordinal);
         Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);
 
-        // MAPI is the deterministic initial tab whenever a protocol tree is present for that side.
-        Assert.Contains(
-            "id=\"request-tab-mapi\" aria-controls=\"request-panel-mapi\" aria-selected=\"true\" data-tab=\"mapi\" tabindex=\"0\">MAPI",
-            html,
-            StringComparison.Ordinal);
-        var mapiPanelStart = html.IndexOf("id=\"request-panel-mapi\"", StringComparison.Ordinal);
-        Assert.True(mapiPanelStart >= 0);
-        var mapiPanelTagEnd = html.IndexOf('>', mapiPanelStart);
-        var mapiPanelOpenTag = html[html.LastIndexOf('<', mapiPanelStart)..(mapiPanelTagEnd + 1)];
-        Assert.DoesNotContain("hidden", mapiPanelOpenTag, StringComparison.Ordinal);
+        Assert.Contains("const initial=flags.mapi?'mapi':flags.json?'json':flags.xml?'xml':flags.raw?'raw':flags.headers?'headers':null", html, StringComparison.Ordinal);
+        Assert.Contains("mapi:!!protocolSource", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1911,17 +1800,11 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        foreach (var key in new[] { "json", "xml", "mapi", "headers", "raw" })
-        {
-            Assert.Contains(
-                $"id=\"response-tab-{key}\" aria-controls=\"response-panel-{key}\" aria-selected=\"false\" data-tab=\"{key}\" tabindex=\"-1\" disabled aria-disabled=\"true\"",
-                html,
-                StringComparison.Ordinal);
-        }
-
-        Assert.Contains("No response entry was captured.", html, StringComparison.Ordinal);
-        // The tab strip itself remains present (always visible) even though every tab is disabled.
-        Assert.Contains("role=\"tablist\" aria-label=\"Response detail views\"", html, StringComparison.Ordinal);
+        using var payload = ExtractCompressedPayload(html, "http-session", 0, html.Length);
+        Assert.False(payload.RootElement.TryGetProperty("response", out _));
+        Assert.Contains("Object.entries(labels).forEach(([key,label])=>strip.append(httpTabButton(side,key,label,flags[key],initial===key)))", html, StringComparison.Ordinal);
+        Assert.Contains("`No ${lower} entry was captured.`", html, StringComparison.Ordinal);
+        Assert.Contains("createMessagePanel('response','Response',response,responseProtocol)", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1957,25 +1840,13 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        // Raw is the initial/selected tab: no JSON/XML/MAPI, headers exist but Raw wins per priority.
-        Assert.Contains(
-            "id=\"response-tab-raw\" aria-controls=\"response-panel-raw\" aria-selected=\"true\" data-tab=\"raw\" tabindex=\"0\">Raw",
-            html,
-            StringComparison.Ordinal);
-
-        var rawPanelStart = html.IndexOf("id=\"response-panel-raw\"", StringComparison.Ordinal);
-        var rawPanelEnd = html.IndexOf("id=\"response-tab-", rawPanelStart + 1, StringComparison.Ordinal);
-        var rawSection = rawPanelEnd > rawPanelStart ? html[rawPanelStart..rawPanelEnd] : html[rawPanelStart..];
-
-        Assert.Contains("Original headers", rawSection, StringComparison.Ordinal);
-        Assert.Contains("Decoded body", rawSection, StringComparison.Ordinal);
-        Assert.Contains("decode-status", rawSection, StringComparison.Ordinal);
-        Assert.Contains("Decoded in wire-removal order: content: gzip.", rawSection, StringComparison.Ordinal);
-        Assert.Contains("<details class=\"captured-bytes\"><summary>Captured bytes (pre-decode)</summary>", rawSection, StringComparison.Ordinal);
-        var rawCopy = CopyTextForPanel(html, "response-panel-raw");
-        Assert.Contains("Content-Encoding: gzip", rawCopy, StringComparison.Ordinal);
-        Assert.Contains("hello", rawCopy, StringComparison.Ordinal);
-        Assert.Contains("1F 8B 08 00 00 00 00 00", rawCopy, StringComparison.Ordinal);
+        var canonical = ExtractHttpMessage(html, "response");
+        Assert.Equal("text", canonical.GetProperty("format").GetString());
+        Assert.Equal("Decoded in wire-removal order: content: gzip.", canonical.GetProperty("body").GetProperty("decodingStatus").GetString());
+        Assert.Equal("hello", ExtractHttpBodyText(html, "response"));
+        Assert.Contains("Content-Encoding: gzip", CanonicalHeadersText(canonical), StringComparison.Ordinal);
+        Assert.Contains("function createRawView(model)", html, StringComparison.Ordinal);
+        Assert.Contains("const details=httpElement('details','captured-bytes')", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2009,20 +1880,11 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        Assert.Contains(
-            "id=\"response-tab-json\" aria-controls=\"response-panel-json\" aria-selected=\"false\" data-tab=\"json\" tabindex=\"-1\" disabled aria-disabled=\"true\">JSON",
-            html,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "id=\"response-tab-xml\" aria-controls=\"response-panel-xml\" aria-selected=\"false\" data-tab=\"xml\" tabindex=\"-1\" disabled aria-disabled=\"true\">XML",
-            html,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "id=\"response-tab-raw\" aria-controls=\"response-panel-raw\" aria-selected=\"true\" data-tab=\"raw\" tabindex=\"0\">Raw",
-            html,
-            StringComparison.Ordinal);
-        Assert.Contains("Binary / hex", html, StringComparison.Ordinal);
-        Assert.Contains("DE AD BE EF", CopyTextForPanel(html, "response-panel-raw"), StringComparison.Ordinal);
+        var canonical = ExtractHttpMessage(html, "response");
+        Assert.Equal("binary", canonical.GetProperty("format").GetString());
+        Assert.True(canonical.GetProperty("body").GetProperty("isBinary").GetBoolean());
+        Assert.Equal("DE AD BE EF", canonical.GetProperty("body").GetProperty("fallbackText").GetString());
+        Assert.Contains("json:!!model&&model.format==='json'&&model.canToggle", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2043,24 +1905,12 @@ public sealed class HtmlReportGeneratorTests
 
         var html = new HtmlReportGenerator().Generate(report);
 
-        var requestStart = html.IndexOf("id=\"primary-panel-request\"", StringComparison.Ordinal);
-        var responseStart = html.IndexOf("id=\"primary-panel-response\"", StringComparison.Ordinal);
-        Assert.True(requestStart >= 0 && responseStart > requestStart);
-
-        var templateEnd = html.IndexOf("</template>", responseStart, StringComparison.Ordinal);
-        var requestSection = html[requestStart..responseStart];
-        var responseSection = html[responseStart..templateEnd];
-
-        Assert.Contains("REQ_ONLY_MARKER", CopyTextForPanel(html, "request-panel-json"), StringComparison.Ordinal);
-        Assert.DoesNotContain("RESP_ONLY_MARKER", CopyTextForPanel(html, "request-panel-json"), StringComparison.Ordinal);
-        Assert.Contains("RESP_ONLY_MARKER", CopyTextForPanel(html, "response-panel-xml"), StringComparison.Ordinal);
-        Assert.DoesNotContain("REQ_ONLY_MARKER", CopyTextForPanel(html, "response-panel-xml"), StringComparison.Ordinal);
-
-        // Distinct, side-scoped stable IDs guarantee independent aria wiring per pane.
-        Assert.Contains("id=\"request-tab-json\"", requestSection, StringComparison.Ordinal);
-        Assert.DoesNotContain("id=\"response-tab-json\"", requestSection, StringComparison.Ordinal);
-        Assert.Contains("id=\"response-tab-xml\"", responseSection, StringComparison.Ordinal);
-        Assert.DoesNotContain("id=\"request-tab-xml\"", responseSection, StringComparison.Ordinal);
+        Assert.Contains("REQ_ONLY_MARKER", ExtractHttpBodyText(html, "request"), StringComparison.Ordinal);
+        Assert.DoesNotContain("RESP_ONLY_MARKER", ExtractHttpBodyText(html, "request"), StringComparison.Ordinal);
+        Assert.Contains("RESP_ONLY_MARKER", ExtractHttpBodyText(html, "response"), StringComparison.Ordinal);
+        Assert.DoesNotContain("REQ_ONLY_MARKER", ExtractHttpBodyText(html, "response"), StringComparison.Ordinal);
+        Assert.Contains("panel.id=`${side}-panel-${key}`", html, StringComparison.Ordinal);
+        Assert.Contains("button.id=`${side}-tab-${key}`", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2112,9 +1962,9 @@ public sealed class HtmlReportGeneratorTests
         Assert.DoesNotContain("innerHTML", html, StringComparison.Ordinal);
         Assert.Equal(
             new BodyFormatter().Format(request.Body, "application/json").Formatted,
-            CopyTextForPanel(html, "request-panel-json"));
-        Assert.Contains(xmlAttack, CopyTextForPanel(html, "response-panel-raw"), StringComparison.Ordinal);
-        Assert.Contains(headerAttack, CopyTextForPanel(html, "request-panel-headers"), StringComparison.Ordinal);
+            PrettyCanonicalJson(ExtractHttpBodyText(html, "request")));
+        Assert.Contains(xmlAttack, ExtractHttpBodyText(html, "response"), StringComparison.Ordinal);
+        Assert.Contains(headerAttack, CanonicalHeadersText(ExtractHttpMessage(html, "request")), StringComparison.Ordinal);
 
         // The JSON tree payload itself (client-parsed via JSON.parse, never innerHTML) must also
         // never carry the raw, unescaped attack string.
@@ -2123,40 +1973,73 @@ public sealed class HtmlReportGeneratorTests
         Assert.Equal(jsonAttack, value);
     }
 
-    private static string PanelCopyButton(string html, string panelId)
+    private static JsonElement ExtractHttpMessage(string html, string side)
     {
-        var panelStart = html.IndexOf($"id=\"{panelId}\"", StringComparison.Ordinal);
-        Assert.True(panelStart >= 0, $"Panel {panelId} was not found.");
-        var buttonStart = html.IndexOf("<button", panelStart, StringComparison.Ordinal);
-        var buttonEnd = html.IndexOf("</button>", buttonStart, StringComparison.Ordinal);
-        Assert.True(buttonStart >= 0 && buttonEnd > buttonStart, $"Copy button for {panelId} was not found.");
-        return html[buttonStart..(buttonEnd + "</button>".Length)];
+        using var payload = ExtractCompressedPayload(html, "http-session", 0, html.Length);
+        return payload.RootElement.GetProperty(side).Clone();
     }
 
-    private static string CopyTextForPanel(string html, string panelId)
+    private static string ExtractHttpBodyText(string html, string side)
     {
-        var key = panelId[(panelId.LastIndexOf('-') + 1)..];
-        return CopyModelTextForPanel(html, panelId, key);
+        var body = ExtractHttpMessage(html, side).GetProperty("body");
+        if (body.TryGetProperty("fallbackText", out var fallback) &&
+            fallback.ValueKind == JsonValueKind.String)
+        {
+            return fallback.GetString()!;
+        }
+
+        var encoded = body.TryGetProperty("decoded", out var decoded) &&
+            decoded.ValueKind == JsonValueKind.String
+                ? decoded.GetString()!
+                : body.GetProperty("captured").GetString()!;
+        return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
     }
 
-    private static string CopyModelTextForPanel(string html, string panelId, string key)
+    private static string PrettyCanonicalJson(string source)
     {
-        var panelStart = html.IndexOf($"id=\"{panelId}\"", StringComparison.Ordinal);
-        Assert.True(panelStart >= 0, $"Panel {panelId} was not found.");
-        var messagePanelStart = html.LastIndexOf("<section class=\"message-panel\"", panelStart, StringComparison.Ordinal);
-        Assert.True(messagePanelStart >= 0, $"Message panel for {panelId} was not found.");
-        using var document = ExtractCompressedPayload(
-            html,
-            "copy-model",
-            messagePanelStart,
-            panelStart);
-        return document.RootElement.GetProperty(key).GetString()!;
+        using var document = JsonDocument.Parse(source);
+        return JsonSerializer.Serialize(
+            document.RootElement,
+            new JsonSerializerOptions { WriteIndented = true }).ReplaceLineEndings("\r\n");
+    }
+
+    private static string CanonicalHeadersText(JsonElement message)
+    {
+        var builder = new StringBuilder(message.GetProperty("startLine").GetString()).Append('\n');
+        foreach (var header in message.GetProperty("headers").EnumerateArray())
+        {
+            builder.Append(header.GetProperty("name").GetString()).Append(": ")
+                .Append(header.GetProperty("value").GetString()).Append('\n');
+        }
+
+        return builder.ToString();
     }
 
     private static JsonDocument ExtractTreePayload(string html, string attributeName)
     {
-        var type = attributeName.Contains("json", StringComparison.Ordinal) ? "json-tree" : "xml-tree";
-        return ExtractCompressedPayload(html, type, 0, html.Length);
+        var isJson = attributeName.Contains("json", StringComparison.Ordinal);
+        using var payload = ExtractCompressedPayload(html, "http-session", 0, html.Length);
+        var side = new[] { "request", "response" }
+            .Select(name => payload.RootElement.TryGetProperty(name, out var message) ? message : default)
+            .First(message => message.ValueKind == JsonValueKind.Object &&
+                message.GetProperty("format").GetString() == (isJson ? "json" : "xml"));
+        var body = side.GetProperty("body");
+        var source = body.TryGetProperty("fallbackText", out var fallback) &&
+            fallback.ValueKind == JsonValueKind.String
+                ? fallback.GetString()!
+                : Encoding.UTF8.GetString(Convert.FromBase64String(
+                    body.TryGetProperty("decoded", out var decoded) && decoded.ValueKind == JsonValueKind.String
+                        ? decoded.GetString()!
+                        : body.GetProperty("captured").GetString()!));
+        var formatted = new BodyFormatter().Format(
+            new BodyPreview { Length = source.Length, CapturedLength = source.Length, Preview = source },
+            isJson ? "application/json" : "application/xml").Formatted;
+        var method = typeof(HtmlReportGenerator).GetMethod(
+            isJson ? "BuildJsonTreePayload" : "BuildXmlTreePayload",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+        var treeJson = Assert.IsType<string>(method.Invoke(null, [formatted]));
+        return JsonDocument.Parse(treeJson, new JsonDocumentOptions { MaxDepth = 256 });
     }
 
     private static JsonDocument ExtractCompressedPayload(
@@ -2220,14 +2103,6 @@ public sealed class HtmlReportGeneratorTests
         };
         message.Headers.Add(new HttpHeader("Content-Type", contentType));
         return message;
-    }
-
-    private static string DecompressText(string base64)
-    {
-        using var input = new MemoryStream(Convert.FromBase64String(base64));
-        using var gzip = new GZipStream(input, CompressionMode.Decompress);
-        using var reader = new StreamReader(gzip, Encoding.UTF8);
-        return reader.ReadToEnd();
     }
 
     private static byte[] MinimalBmp()

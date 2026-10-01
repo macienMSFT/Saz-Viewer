@@ -21,7 +21,7 @@ public sealed class HtmlReportGenerator
     private const int MaxHydratedDisplayCharacters = 256 * 1024;
     private const int HexViewBytesLimit = 1024;
     private const int PayloadVersion = 1;
-    private const int CopyPayloadMaxDecodedBytes = 32 * 1024 * 1024;
+    private const int HttpSessionPayloadMaxDecodedBytes = 32 * 1024 * 1024;
     private const int ProtocolPayloadMaxDecodedBytes = 32 * 1024 * 1024;
     private const int TreePayloadMaxDecodedBytes = 8 * 1024 * 1024;
     private const int WebSocketPayloadMaxDecodedBytes = 32 * 1024 * 1024;
@@ -49,6 +49,32 @@ public sealed class HtmlReportGenerator
     private sealed record CompressedPayload(string Type, string Base64, int DecodedBytes);
     private sealed record ImageViewInfo(string MimeType, string Detection, string Animation, string? Warning);
     private sealed record AuthViewData(string Redacted, string Full);
+    private sealed record SessionPayload(int Schema, MessagePayload? Request, MessagePayload? Response);
+    private sealed record MessagePayload(
+        string StartLine,
+        HttpHeader[] Headers,
+        BodyPayload Body,
+        string Format,
+        string Label,
+        string Status,
+        bool CanToggle,
+        ImageViewInfo? Image,
+        string? WebViewDetection,
+        bool HasAuth);
+    private sealed record BodyPayload(
+        long Length,
+        long CapturedLength,
+        bool IsBinary,
+        bool IsTruncated,
+        string? Charset,
+        string[] RemovedEncodings,
+        string? DecodingStatus,
+        string Captured,
+        string? Decoded,
+        string? FallbackText,
+        string? FallbackCapturedText,
+        bool? FallbackCapturedTruncated,
+        bool ShowCapturedBytes);
 
     // Each tree level round-trips through two JSON.NET-serializer nesting levels (an object, then
     // its "children" array before the next object), so a TreeMaxDepth-limited document can need
@@ -60,6 +86,11 @@ public sealed class HtmlReportGenerator
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         MaxDepth = (2 * TreeMaxDepth) + 32
+    };
+    private static readonly JsonSerializerOptions SessionPayloadOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
     private static readonly HashSet<string> AuthHeaderNames = new(StringComparer.OrdinalIgnoreCase)
@@ -123,6 +154,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .primary-panel{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;padding:10px 14px;overflow:hidden}.http-pane-heading{display:none;margin:0 0 3px;font-size:13px;color:var(--muted)}
 .inspector-body.http-split .primary-panels{flex-direction:row;gap:6px;padding:8px 10px}.inspector-body.http-split .primary-panel{padding:4px;min-width:320px;border:1px solid var(--line);background:var(--panel);flex:1 1 0}.inspector-body.http-split #primary-panel-request{flex:0 1 var(--http-left,50%)}.inspector-body.http-split .http-pane-heading{display:block}.http-splitter{flex:0 0 8px;align-self:stretch;border-radius:4px;background:var(--line);cursor:col-resize;touch-action:none;position:relative}.http-splitter::after{content:"";position:absolute;inset:0 2px;border-left:1px solid var(--muted);border-right:1px solid var(--muted)}.http-splitter:hover,.http-splitter:focus-visible{background:var(--accent);outline:2px solid var(--accent);outline-offset:1px}.http-resizing{cursor:col-resize!important;user-select:none!important}.inspector-body.http-split .http-view-search{margin:0 0 5px}
 .message-panel{display:flex;flex-direction:column;flex:1;min-height:0}
+.http-session-source{display:flex;flex:1;min-height:0;flex-direction:column}.http-session-loading{padding:20px;color:var(--muted)}
 .headers{white-space:pre-wrap}
 .tab-strip{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin:8px 0 0;flex:0 0 auto}
 .tab-strip [role=tab]{background:transparent;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;padding:6px 12px;color:var(--muted);cursor:pointer;font:inherit}
@@ -245,7 +277,7 @@ window.addEventListener('storage',event=>{
 let currentRow=null,originRow=null,renderGeneration=0,inspectorOnly=false,retainSelectionOnClose=false;
 const PAYLOAD_VERSION='1';
 const PAYLOAD_LIMITS={
-  'copy-model':{encoded:48*1024*1024,decoded:32*1024*1024},
+  'http-session':{encoded:48*1024*1024,decoded:32*1024*1024},
   'mapi-protocol':{encoded:48*1024*1024,decoded:32*1024*1024},
   'json-tree':{encoded:12*1024*1024,decoded:8*1024*1024},
   'xml-tree':{encoded:12*1024*1024,decoded:8*1024*1024},
@@ -318,32 +350,108 @@ function decodeModelBytes(model,key){
   for(let index=0;index<binary.length;index++)bytes[index]=binary.charCodeAt(index);
   return bytes;
 }
-async function decodeEmbeddedUtf8(model){
-  const encoded=model?.authSecret,declared=Number.parseInt(model?.authSecretBytes||'',10);
-  if(typeof encoded!=='string'||encoded.length>2*1024*1024||encoded.length%4!==0||!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)
-    ||!Number.isSafeInteger(declared)||declared<0||declared>MAX_COPY_CHARACTERS)throw new Error('authentication secret payload is invalid or oversized');
-  let binary;try{binary=atob(encoded)}catch{throw new Error('authentication secret payload is not valid base64')}
-  const compressed=new Uint8Array(binary.length);
-  for(let index=0;index<binary.length;index++)compressed[index]=binary.charCodeAt(index);
-  if(typeof DecompressionStream!=='function')throw new Error('local gzip decompression is unavailable');
-  const reader=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
-  const chunks=[];let total=0;
-  try{
-    while(true){
-      const result=await reader.read();if(result.done)break;
-      total+=result.value.byteLength;
-      if(total>declared||total>MAX_COPY_CHARACTERS){await reader.cancel();throw new Error('authentication secret exceeds its safety limit')}
-      chunks.push(result.value);
-    }
-  }catch(error){
-    if(error instanceof Error&&error.message.includes('safety limit'))throw error;
-    throw new Error('authentication secret payload is corrupt');
+function validateMessageModel(message){
+  if(!message||typeof message!=='object'||Array.isArray(message)
+    ||typeof message.startLine!=='string'||message.startLine.length>MAX_COPY_CHARACTERS
+    ||!Array.isArray(message.headers)||message.headers.length>100000
+    ||!message.body||typeof message.body!=='object'||Array.isArray(message.body)
+    ||!['binary','json','xml','text'].includes(message.format)
+    ||typeof message.label!=='string'||message.label.length>256
+    ||typeof message.status!=='string'||message.status.length>2048
+    ||typeof message.canToggle!=='boolean'||typeof message.hasAuth!=='boolean'
+    ||(message.webViewDetection!==null&&message.webViewDetection!==undefined&&(typeof message.webViewDetection!=='string'||message.webViewDetection.length>2048)))
+    throw new Error('session message data has an invalid format');
+  if(message.image!==null&&message.image!==undefined&&(!message.image||typeof message.image!=='object'
+    ||!['image/png','image/jpeg','image/gif','image/webp','image/bmp','image/x-icon'].includes(message.image.mimeType)
+    ||typeof message.image.detection!=='string'||typeof message.image.animation!=='string'
+    ||(message.image.warning!==null&&message.image.warning!==undefined&&typeof message.image.warning!=='string')))
+    throw new Error('session image metadata has an invalid format');
+  let headerCharacters=message.startLine.length;
+  message.headers.forEach(header=>{
+    if(!header||typeof header.name!=='string'||typeof header.value!=='string')throw new Error('session header data has an invalid format');
+    headerCharacters+=header.name.length+header.value.length+3;
+    if(headerCharacters>32*1024*1024)throw new Error('session header data exceeds its safety limit');
+  });
+  const body=message.body;
+  if(!Number.isSafeInteger(body.length)||body.length<0||!Number.isSafeInteger(body.capturedLength)||body.capturedLength<0
+    ||typeof body.isBinary!=='boolean'||typeof body.isTruncated!=='boolean'
+    ||(body.charset!==null&&body.charset!==undefined&&typeof body.charset!=='string')
+    ||!Array.isArray(body.removedEncodings)||body.removedEncodings.some(item=>typeof item!=='string')
+    ||(body.decodingStatus!==null&&body.decodingStatus!==undefined&&typeof body.decodingStatus!=='string')
+    ||typeof body.captured!=='string'||(body.decoded!==null&&body.decoded!==undefined&&typeof body.decoded!=='string')
+    ||(body.fallbackText!==null&&body.fallbackText!==undefined&&(typeof body.fallbackText!=='string'||body.fallbackText.length>65536))
+    ||(body.fallbackCapturedText!==null&&body.fallbackCapturedText!==undefined&&(typeof body.fallbackCapturedText!=='string'||body.fallbackCapturedText.length>256*1024))
+    ||(body.fallbackCapturedTruncated!==null&&body.fallbackCapturedTruncated!==undefined&&typeof body.fallbackCapturedTruncated!=='boolean')
+    ||typeof body.showCapturedBytes!=='boolean')throw new Error('session body data has an invalid format');
+  return message;
+}
+async function loadMessageModel(panel){
+  if(panel._messageModel)return panel._messageModel;
+  if(panel._messageModelError)throw new Error(panel._messageModelError);
+  if(panel._messageModelPromise)return panel._messageModelPromise;
+  panel._messageModelPromise=(async()=>{
+    const host=panel.closest('.http-session-source');
+    if(!host)throw new Error('session payload host is unavailable');
+    if(host.dataset.payloadError)throw new Error(host.dataset.payloadError);
+    const store=await decodeCompressedPayload(host,'http-session');
+    if(!store||store.schema!==1||typeof store!=='object'||Array.isArray(store))throw new Error('session data has an unsupported schema');
+    const side=panel.dataset.messageSide;
+    const message=side==='request'?store.request:side==='response'?store.response:null;
+    if(!message)throw new Error(`${side||'message'} data is unavailable`);
+    panel._messageModel=validateMessageModel(message);
+    return panel._messageModel;
+  })();
+  try{return await panel._messageModelPromise}
+  catch(error){panel._messageModelError=error instanceof Error?error.message:'session data could not be read';throw error}
+  finally{panel._messageModelPromise=null}
+}
+function messageCapturedBytes(model){
+  return decodeModelBytes(model.body,'captured');
+}
+function messageBodyBytes(model){
+  return model.body.decoded===null||model.body.decoded===undefined
+    ?messageCapturedBytes(model)
+    :decodeModelBytes(model.body,'decoded');
+}
+function decodeBodyText(model){
+  const body=model.body;
+  if(typeof body.fallbackText==='string')return body.fallbackText;
+  const bytes=messageBodyBytes(model);
+  if(body.isBinary)return formatRawHexPreview(bytes);
+  const charset=String(body.charset||'utf-8').trim().toLowerCase();
+  if(charset==='iso-8859-1'||charset==='latin1'||charset==='latin-1'){
+    let text='';for(let offset=0;offset<bytes.length;offset+=8192)text+=String.fromCharCode(...bytes.subarray(offset,offset+8192));
+    return text;
   }
-  if(total!==declared)throw new Error('authentication secret length does not match its envelope');
-  const bytes=new Uint8Array(total);let offset=0;
-  chunks.forEach(chunk=>{bytes.set(chunk,offset);offset+=chunk.byteLength});
-  try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes)}
-  catch{throw new Error('authentication secret is not valid UTF-8')}
+  if(charset==='us-ascii'||charset==='ascii'){
+    if(bytes.some(value=>value>127))throw new Error('retained textual body is not valid US-ASCII');
+    return String.fromCharCode(...bytes);
+  }
+  const label=charset==='utf-16'?'utf-16le':charset==='utf-16be'?'utf-16be':charset==='utf8'?'utf-8':charset;
+  if(!['utf-8','utf-16le','utf-16be'].includes(label))throw new Error('retained textual body uses an unsupported charset');
+  let failure;
+  for(let trim=0;trim<=Math.min(body.isTruncated?4:0,bytes.length);trim++){
+    try{return new TextDecoder(label,{fatal:true}).decode(bytes.subarray(0,bytes.length-trim))}
+    catch(error){failure=error}
+  }
+  throw failure||new Error('retained textual body could not be decoded');
+}
+function formatRawHexPreview(bytes){
+  const lines=[];
+  for(let offset=0;offset<bytes.length;offset+=16){
+    const slice=bytes.subarray(offset,Math.min(offset+16,bytes.length));
+    const hex=[...slice].map(value=>value.toString(16).toUpperCase().padStart(2,'0'));
+    const columns=[];for(let index=0;index<16;index++)columns.push(index<hex.length?hex[index]:'  ');
+    const left=columns.slice(0,8).join(' '),right=columns.slice(8).join(' ');
+    const ascii=[...slice].map(value=>value>=32&&value<=126?String.fromCharCode(value):'.').join('');
+    lines.push(`${offset.toString(16).toUpperCase().padStart(8,'0')}  ${left}  ${right} |${ascii}|`);
+  }
+  return lines.length?`${lines.join('\n')}\n`:'';
+}
+function capturedPreviewText(model){
+  return typeof model.body.fallbackCapturedText==='string'
+    ?model.body.fallbackCapturedText
+    :formatRawHexPreview(messageCapturedBytes(model));
 }
 function payloadFailureText(error,subject,alternative){
   if(error instanceof Error&&error.message.includes('not supported by this browser')){
@@ -758,11 +866,11 @@ function setAllExpanded(container,expanded){
 async function renderValueTree(host,generation){
   if(host._treeRendered||host._treeLoading||host._treeBuildToken)return;
   host._treeLoading=true;
-  const kind=(host._payloadType||host.dataset.payloadType)==='json-tree'?'json':'xml';
+  const kind=host.dataset.treeKind||((host._payloadType||host.dataset.payloadType)==='json-tree'?'json':'xml');
   const controls=host.closest('.structured-body')?.querySelectorAll('.tree-expand-all,.tree-collapse-all')||[];
   controls.forEach(control=>control.disabled=true);
   try{
-    const payload=await decodeCompressedPayload(host,`${kind}-tree`);
+    const payload=host._treeData||await decodeCompressedPayload(host,`${kind}-tree`);
     if(generation!==renderGeneration||host.classList.contains('hidden')||host.closest('.tab-panel.hidden'))return;
     buildTree(host,payload,kind,generation);
     controls.forEach(control=>control.disabled=false);
@@ -773,6 +881,215 @@ async function renderValueTree(host,generation){
   }finally{
     host._treeLoading=false;
   }
+}
+const TREE_MAX_NODES=4000,TREE_MAX_DEPTH=40,TREE_MAX_CHILDREN=300,TREE_MAX_SCALAR=300;
+function parseCanonicalJson(source){
+  let index=0;
+  const whitespace=()=>{while(index<source.length&&/\s/.test(source[index]))index++};
+  const stringToken=()=>{
+    const start=index++;
+    while(index<source.length){
+      const character=source[index++];
+      if(character==='"\\'){
+        if(index>=source.length)throw new Error('invalid JSON escape');
+        if(source[index]==='u'){
+          if(!/^[0-9A-Fa-f]{4}$/.test(source.slice(index+1,index+5)))throw new Error('invalid JSON Unicode escape');
+          index+=5;
+        }else index++;
+      }else if(character==='"') {
+        const raw=source.slice(start,index);
+        return{raw,value:JSON.parse(raw)};
+      }else if(character.charCodeAt(0)<32)throw new Error('invalid JSON string');
+    }
+    throw new Error('unterminated JSON string');
+  };
+  const value=depth=>{
+    if(depth>64)throw new Error('JSON nesting exceeds the safe depth');
+    whitespace();
+    if(source[index]==='"'){
+      const token=stringToken();return{kind:'string',raw:token.raw,value:token.value};
+    }
+    if(source[index]==='{'){
+      index++;whitespace();const properties=[];
+      if(source[index]==='}'){index++;return{kind:'object',properties}}
+      while(true){
+        whitespace();if(source[index]!=='"')throw new Error('invalid JSON property');
+        const name=stringToken();whitespace();if(source[index++]!==':')throw new Error('invalid JSON property separator');
+        properties.push({name:name.value,nameRaw:name.raw,node:value(depth+1)});
+        whitespace();
+        if(source[index]==='}'){index++;break}
+        if(source[index++]!==',')throw new Error('invalid JSON object');
+      }
+      return{kind:'object',properties};
+    }
+    if(source[index]==='['){
+      index++;whitespace();const items=[];
+      if(source[index]===']'){index++;return{kind:'array',items}}
+      while(true){
+        items.push(value(depth+1));whitespace();
+        if(source[index]===']'){index++;break}
+        if(source[index++]!==',')throw new Error('invalid JSON array');
+      }
+      return{kind:'array',items};
+    }
+    const rest=source.slice(index);
+    const number=/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(rest)?.[0];
+    if(number){index+=number.length;return{kind:'number',raw:number,value:number}}
+    for(const literal of ['true','false','null']){
+      if(rest.startsWith(literal)){index+=literal.length;return{kind:literal==='null'?'null':'boolean',raw:literal,value:literal}}
+    }
+    throw new Error('invalid JSON value');
+  };
+  const root=value(0);whitespace();
+  if(index!==source.length)throw new Error('JSON has trailing content');
+  return root;
+}
+function dotNetJsonString(value){
+  let result='"';
+  for(let index=0;index<value.length;index++){
+    const character=value[index],code=value.charCodeAt(index);
+    if(character==='"')result+='\\"';
+    else if(character==='\\')result+='\\\\';
+    else if(character==='\b')result+='\\b';
+    else if(character==='\f')result+='\\f';
+    else if(character==='\n')result+='\\n';
+    else if(character==='\r')result+='\\r';
+    else if(character==='\t')result+='\\t';
+    else if(code<32||code>126||character==='<'||character==='>'||character==='&'||character==="'")
+      result+=`\\u${code.toString(16).toUpperCase().padStart(4,'0')}`;
+    else result+=character;
+  }
+  return`${result}"`;
+}
+function prettyCanonicalJson(node,depth=0){
+  const indent='  '.repeat(depth),childIndent='  '.repeat(depth+1);
+  if(node.kind==='object'){
+    if(!node.properties.length)return'{}';
+    return`{\r\n${node.properties.map(property=>`${childIndent}${dotNetJsonString(property.name)}: ${prettyCanonicalJson(property.node,depth+1)}`).join(',\r\n')}\r\n${indent}}`;
+  }
+  if(node.kind==='array'){
+    if(!node.items.length)return'[]';
+    return`[\r\n${node.items.map(item=>`${childIndent}${prettyCanonicalJson(item,depth+1)}`).join(',\r\n')}\r\n${indent}]`;
+  }
+  return node.kind==='string'?dotNetJsonString(node.value):node.raw;
+}
+function scalar(value){
+  const text=String(value??'');
+  return{text:text.slice(0,TREE_MAX_SCALAR),truncated:text.length>TREE_MAX_SCALAR};
+}
+function jsonTreeNode(node,name,isIndex,depth,budget){
+  budget.count++;
+  if(depth>=TREE_MAX_DEPTH&&(node.kind==='object'||node.kind==='array')){
+    return{kind:node.kind,name,isIndex,count:node.kind==='object'?node.properties.length:node.items.length,depthLimited:true};
+  }
+  if(node.kind==='object'){
+    const children=[],properties=node.properties;
+    let omitted=0;
+    for(let index=0;index<properties.length;index++){
+      if(children.length>=TREE_MAX_CHILDREN||budget.count>=TREE_MAX_NODES){omitted=properties.length-children.length;break}
+      const property=properties[index];children.push(jsonTreeNode(property.node,property.name,false,depth+1,budget));
+    }
+    return{kind:'object',name,isIndex,count:properties.length,omitted,children};
+  }
+  if(node.kind==='array'){
+    const children=[];let omitted=0;
+    for(let index=0;index<node.items.length;index++){
+      if(children.length>=TREE_MAX_CHILDREN||budget.count>=TREE_MAX_NODES){omitted=node.items.length-children.length;break}
+      children.push(jsonTreeNode(node.items[index],String(index),true,depth+1,budget));
+    }
+    return{kind:'array',name,isIndex,count:node.items.length,omitted,children};
+  }
+  const bounded=scalar(node.kind==='string'?node.value:node.value);
+  return{kind:node.kind,name,isIndex,value:bounded.text,truncated:bounded.truncated};
+}
+function parseCanonicalXml(source){
+  if(/<!DOCTYPE/i.test(source))throw new Error('XML document types are not allowed');
+  const documentNode=new DOMParser().parseFromString(source,'application/xml');
+  if(documentNode.documentElement?.localName==='parsererror'||documentNode.querySelector('parsererror'))throw new Error('XML parsing failed');
+  return documentNode;
+}
+function escapeXmlText(value){return value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}
+function escapeXmlAttribute(value){return escapeXmlText(value).replaceAll('"','&quot;')}
+function prettyCanonicalXml(documentNode){
+  function render(node,depth){
+    const indent='  '.repeat(depth);
+    if(node.nodeType===Node.COMMENT_NODE)return`${indent}<!--${node.nodeValue||''}-->`;
+    if(node.nodeType===Node.CDATA_SECTION_NODE)return`${indent}<![CDATA[${node.nodeValue||''}]]>`;
+    if(node.nodeType===Node.TEXT_NODE)return`${indent}${escapeXmlText(node.nodeValue||'')}`;
+    if(node.nodeType!==Node.ELEMENT_NODE)return'';
+    const attrs=[...node.attributes].map(attribute=>` ${attribute.name}="${escapeXmlAttribute(attribute.value)}"`).join('');
+    const children=[...node.childNodes];
+    if(!children.length)return`${indent}<${node.tagName}${attrs} />`;
+    const mixed=children.some(child=>child.nodeType===Node.TEXT_NODE&&!/^\s*$/.test(child.nodeValue||''));
+    if(mixed){
+      const inner=children.map(child=>child.nodeType===Node.ELEMENT_NODE
+        ?render(child,0).trim()
+        :child.nodeType===Node.CDATA_SECTION_NODE?`<![CDATA[${child.nodeValue||''}]]>`
+        :child.nodeType===Node.COMMENT_NODE?`<!--${child.nodeValue||''}-->`
+        :escapeXmlText(child.nodeValue||'')).join('');
+      return`${indent}<${node.tagName}${attrs}>${inner}</${node.tagName}>`;
+    }
+    const rendered=children.map(child=>render(child,depth+1)).filter(Boolean);
+    return`${indent}<${node.tagName}${attrs}>\r\n${rendered.join('\r\n')}\r\n${indent}</${node.tagName}>`;
+  }
+  return[...documentNode.childNodes].map(node=>render(node,0)).filter(Boolean).join('\r\n');
+}
+function xmlRenderableChildren(node){
+  return[...node.childNodes].filter(child=>child.nodeType===Node.ELEMENT_NODE||child.nodeType===Node.COMMENT_NODE
+    ||child.nodeType===Node.CDATA_SECTION_NODE||(child.nodeType===Node.TEXT_NODE&&!/^\s*$/.test(child.nodeValue||'')));
+}
+function xmlTreeNode(node,depth,budget){
+  budget.count++;
+  if(node.nodeType===Node.COMMENT_NODE){const bounded=scalar(node.nodeValue||'');return{kind:'comment',value:bounded.text,truncated:bounded.truncated}}
+  if(node.nodeType===Node.CDATA_SECTION_NODE){const bounded=scalar(node.nodeValue||'');return{kind:'cdata',value:bounded.text,truncated:bounded.truncated}}
+  if(node.nodeType===Node.TEXT_NODE){const bounded=scalar(node.nodeValue||'');return{kind:'text',value:bounded.text,truncated:bounded.truncated}}
+  const attrs=[...node.attributes].map(attribute=>{const bounded=scalar(attribute.value);return{kind:'attribute',name:attribute.name,value:bounded.text,truncated:bounded.truncated}});
+  const sourceChildren=xmlRenderableChildren(node);
+  if(depth>=TREE_MAX_DEPTH)return{kind:'element',name:node.tagName,attrs,count:sourceChildren.length,depthLimited:true};
+  const children=[];let omitted=0;
+  for(let index=0;index<sourceChildren.length;index++){
+    if(children.length>=TREE_MAX_CHILDREN||budget.count>=TREE_MAX_NODES){omitted=sourceChildren.length-children.length;break}
+    children.push(xmlTreeNode(sourceChildren[index],depth+1,budget));
+  }
+  return{kind:'element',name:node.tagName,attrs,count:sourceChildren.length,omitted,children};
+}
+function xmlTree(documentNode){
+  const sourceChildren=xmlRenderableChildren(documentNode),budget={count:0},children=[];let omitted=0;
+  for(let index=0;index<sourceChildren.length;index++){
+    if(children.length>=TREE_MAX_CHILDREN||budget.count>=TREE_MAX_NODES){omitted=sourceChildren.length-children.length;break}
+    children.push(xmlTreeNode(sourceChildren[index],0,budget));
+  }
+  return{kind:'document',count:sourceChildren.length,omitted,children};
+}
+async function hydrateStructuredBody(container,generation){
+  if(container._hydrated||container._loading)return;
+  container._loading=true;
+  try{
+    const model=await messageViewModel(container);
+    if(generation!==renderGeneration||!container.isConnected)return;
+    const source=decodeBodyText(model).replace(/^\uFEFF/,'');
+    const format=container.dataset.format;
+    let formatted,tree;
+    if(format==='json'){
+      const parsed=parseCanonicalJson(source);
+      formatted=prettyCanonicalJson(parsed);
+      tree=jsonTreeNode(parsed,null,false,0,{count:0});
+    }else{
+      const parsed=parseCanonicalXml(source);
+      formatted=prettyCanonicalXml(parsed);
+      tree=xmlTree(parsed);
+    }
+    if(formatted.length>256*1024)throw new Error('formatted body exceeds its display safety limit');
+    container.querySelector('.formatted-view').textContent=formatted;
+    const host=container.querySelector('.tree-subview');
+    host.dataset.treeKind=format;host._treeData=tree;
+    container._formattedText=formatted;container._hydrated=true;highlightSelected(container);
+    if(!host.classList.contains('hidden')&&!host.closest('.tab-panel.hidden'))renderValueTree(host,generation);
+  }catch(error){
+    const message=`Structured view could not be prepared: ${error.message}`;
+    container.querySelector('.formatted-view').textContent=message;
+    const host=container.querySelector('.tree-subview');host.textContent=message;host.classList.add('warning');host._treeRendered=true;
+  }finally{container._loading=false}
 }
 function wsElement(tag,className,text){
   const element=document.createElement(tag);
@@ -928,8 +1245,8 @@ function setupHttpSplitter(root,layout,request,response,splitter){
   };
 }
 function applyHttpLayout(root,mode,persist,hydrate){
-  const bar=root.querySelector(':scope>.primary-view-bar');
-  const panels=root.querySelector(':scope>.primary-panels');
+  const bar=root.querySelector('.primary-view-bar');
+  const panels=root.querySelector('.primary-panels');
   if(!bar||!panels)return;
   const tablist=bar.querySelector('.primary-tab-strip'),button=bar.querySelector('.http-layout-toggle');
   const request=panels.querySelector('#primary-panel-request'),response=panels.querySelector('#primary-panel-response');
@@ -961,8 +1278,8 @@ function applyHttpLayout(root,mode,persist,hydrate){
   }
 }
 function setupHttpLayout(root){
-  const bar=root.querySelector(':scope>.primary-view-bar');
-  const panels=root.querySelector(':scope>.primary-panels');
+  const bar=root.querySelector('.primary-view-bar');
+  const panels=root.querySelector('.primary-panels');
   if(!bar||!panels)return false;
   const button=bar.querySelector('.http-layout-toggle'),request=panels.querySelector('#primary-panel-request');
   const response=panels.querySelector('#primary-panel-response'),splitter=panels.querySelector('.http-splitter');
@@ -1092,7 +1409,7 @@ function setupActiveViewSearch(options){
     const token=++runToken;clear();toolbar.dataset.capped='false';
     const query=foldActiveSearchText(input.value.trim()).folded;if(!query)return;
     const target=await options.resolveTarget(token,()=>runToken);
-    if(!target||token!==runToken||options.generation!==renderGeneration||!options.searchRoot.isConnected)return;
+    if(!target||token!==runToken||!options.searchRoot.isConnected)return;
     restoreTarget=target.snapshot?.()||null;
     const result=highlightActiveSearchRoots(target.roots,query,options.matchClass);matches=result.matches;toolbar.dataset.capped=String(result.capped);
     if(matches.length)target.reveal?.(matches);
@@ -1131,14 +1448,15 @@ function setupWebSocketViewSearch(content,generation){
       if(!panel)return null;
       if(tab.dataset.tab==='json'){
         const tree=panel.querySelector('.tree-subview'),pretty=panel.querySelector('.pretty-subview');
-        if(pretty&&!pretty.classList.contains('hidden'))return{roots:[pretty]};
+        const treeSelected=panel.querySelector('.structured-body')?.dataset.viewMode!=='pretty';
+        if(pretty&&!treeSelected)return{roots:[pretty]};
         if(!tree)return null;
         renderValueTree(tree,generation);
         while(!tree._treeRendered){
           await new Promise(resolve=>requestAnimationFrame(resolve));
-          if(token!==currentToken()||generation!==renderGeneration||!content.isConnected)return null;
+          if(token!==currentToken()||!content.isConnected)return null;
         }
-        return{roots:[...tree.querySelectorAll('.tree-label,.tree-truncated')],snapshot:()=>snapshotValueTree(tree),reveal:revealValueTreeMatches};
+        return{roots:[tree],snapshot:()=>snapshotValueTree(tree),reveal:revealValueTreeMatches};
       }
       if(tab.dataset.tab==='text'){
         const target=panel.querySelector('.ws-text-view');return target?{roots:[target]}:null;
@@ -1149,8 +1467,8 @@ function setupWebSocketViewSearch(content,generation){
   content._clearWebSocketViewSearch=controller.reset;
 }
 function setupHttpViewSearch(root,generation){
-  const primaryTabs=root.querySelector(':scope>.primary-view-bar>.primary-tab-strip');
-  const primaryPanels=root.querySelector(':scope>.primary-panels');
+  const primaryTabs=root.querySelector('.primary-view-bar>.primary-tab-strip');
+  const primaryPanels=root.querySelector('.primary-panels');
   if(!primaryTabs||!primaryPanels)return;
   const split=root.classList.contains('http-split');
   const targets=split?[...primaryPanels.querySelectorAll(':scope>.primary-panel')]:[null];
@@ -1163,33 +1481,33 @@ function setupHttpViewSearch(root,generation){
     searchRoot:fixedPrimaryPanel||root,viewEventTarget:fixedPrimaryPanel||root,generation,clearOnViewChange:true,
     insertToolbar:toolbar=>fixedPrimaryPanel
       ?fixedPrimaryPanel.insertBefore(toolbar,fixedPrimaryPanel.querySelector('.message-panel'))
-      :root.insertBefore(toolbar,primaryPanels),
+      :primaryPanels.parentElement.insertBefore(toolbar,primaryPanels),
     resolveTarget:async(token,currentToken)=>{
       const primaryTab=primaryTabs.querySelector('[role="tab"][aria-selected="true"]');
       const primaryPanel=fixedPrimaryPanel||(primaryTab?root.querySelector(`#${CSS.escape(primaryTab.getAttribute('aria-controls'))}`):null);
       const messagePanel=primaryPanel?.querySelector('.message-panel');
       if(!messagePanel)return null;
-      if(messagePanel._copyReadyPromise)await messagePanel._copyReadyPromise;
-      if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
+      if(token!==currentToken()||!root.isConnected)return null;
       const tablist=messagePanel.querySelector(':scope>.tab-strip');
       const tab=tablist?.querySelector('[role="tab"][aria-selected="true"]');
       const panel=tab?messagePanel.querySelector(`#${CSS.escape(tab.getAttribute('aria-controls'))}`):null;
       if(!tab||!panel)return null;
       if(tab.dataset.tab==='json'||tab.dataset.tab==='xml'){
         const tree=panel.querySelector('.tree-subview'),pretty=panel.querySelector('.pretty-subview');
-        if(pretty&&!pretty.classList.contains('hidden'))return{roots:[pretty]};
+        const treeSelected=panel.querySelector('.structured-body')?.dataset.viewMode!=='pretty';
+        if(pretty&&!treeSelected)return{roots:[pretty]};
         if(!tree)return null;
         renderValueTree(tree,generation);
         while(!tree._treeRendered){
           await new Promise(resolve=>requestAnimationFrame(resolve));
-          if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
+          if(token!==currentToken()||!root.isConnected)return null;
         }
-        return{roots:[...tree.querySelectorAll('.tree-label,.tree-truncated')],snapshot:()=>snapshotValueTree(tree),reveal:revealValueTreeMatches};
+        return{roots:[tree],snapshot:()=>snapshotValueTree(tree),reveal:revealValueTreeMatches};
       }
       if(tab.dataset.tab==='mapi'){
         const host=panel.querySelector('.protocol-block');
         if(host&&(host.dataset.compressedPayload||host._payloadData!==undefined))await renderProtocolTree(host,generation);
-        if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
+        if(token!==currentToken()||!root.isConnected)return null;
         const tree=host?.querySelector('.protocol-tree');
         if(!tree)return{roots:[...panel.querySelectorAll('.protocol-meta,.warning')]};
         const roots=[...panel.querySelectorAll('.protocol-meta,.warning'),...tree.querySelectorAll('.tree-row')];
@@ -1203,7 +1521,7 @@ function setupHttpViewSearch(root,generation){
       if(tab.dataset.tab==='image'){
         const view=panel.querySelector('.image-view');
         if(view)await renderImageView(view,generation);
-        if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
+        if(token!==currentToken()||!root.isConnected)return null;
         return{roots:[...panel.querySelectorAll('.image-meta,.format-status,.warning,.image-load-status')]};
       }
       if(tab.dataset.tab==='webview'){
@@ -1211,13 +1529,13 @@ function setupHttpViewSearch(root,generation){
         if(!view)return null;
         setWebViewMode(view,'source',false);
         await messageViewModel(view);
-        if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
+        if(token!==currentToken()||!root.isConnected)return null;
         return{roots:[...panel.querySelectorAll('.webview-source,.webview-status,.format-status,.warning')]};
       }
       if(tab.dataset.tab==='hex'){
         const view=panel.querySelector('.hex-view');
         if(view)await renderHexView(view,generation);
-        if(token!==currentToken()||generation!==renderGeneration||!root.isConnected)return null;
+        if(token!==currentToken()||!root.isConnected)return null;
         return{roots:[...panel.querySelectorAll('.hex-source-label,.decode-status,.hex-dump,.hex-status,.warning')]};
       }
       if(tab.dataset.tab==='auth'){
@@ -1390,9 +1708,7 @@ async function renderWebSocketInspector(host,generation){
 async function messageViewModel(view){
   const panel=view.closest('.message-panel');
   if(!panel)throw new Error('message view is detached');
-  if(panel._copyReadyPromise)await panel._copyReadyPromise;
-  if(panel._copyModelError)throw new Error(panel._copyModelError);
-  return panel._copyModel||{};
+  return loadMessageModel(panel);
 }
 function imageMetadata(view){
   return [...view.querySelectorAll('.image-meta span,.format-status,.warning')]
@@ -1416,7 +1732,7 @@ async function renderImageView(view,generation){
   try{
     const model=await messageViewModel(view);
     if(generation!==renderGeneration||!view.isConnected||view.closest('.tab-panel.hidden'))return;
-    const bytes=decodeModelBytes(model,view.dataset.byteField);
+    const bytes=messageBodyBytes(model);
     const mime=view.dataset.imageMime;
     if(!mime||!['image/png','image/jpeg','image/gif','image/webp','image/bmp','image/x-icon'].includes(mime))throw new Error('image type is unsupported');
     const url=URL.createObjectURL(new Blob([bytes],{type:mime}));
@@ -1447,6 +1763,69 @@ async function renderImageView(view,generation){
   }finally{view._loading=false}
 }
 const WEBVIEW_DOCUMENT_PREFIX=`<!doctype html><html data-theme="system"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'"><meta name="referrer" content="no-referrer">`;
+const WEBVIEW_STYLE=`:root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff}:root[data-theme=light]{color-scheme:light;--bg:#fff;--panel:#f6f8fa;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--accent:#0969da}*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}body{padding:12px}a{color:var(--accent);text-decoration:none;pointer-events:none}table{border-collapse:collapse;max-width:100%}th,td{border:1px solid var(--line);padding:5px 7px;vertical-align:top}pre,code,kbd,samp{font-family:ui-monospace,Consolas,monospace}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel);border:1px solid var(--line);padding:9px}blockquote{border-left:3px solid var(--line);margin-left:0;padding-left:12px;color:var(--muted)}hr{border:0;border-top:1px solid var(--line)}`;
+const WEBVIEW_ALLOWED=new Set(['a','abbr','address','article','aside','b','bdi','bdo','blockquote','br','caption','cite','code','col','colgroup','data','dd','del','details','dfn','div','dl','dt','em','figcaption','figure','footer','h1','h2','h3','h4','h5','h6','header','hgroup','hr','i','ins','kbd','li','main','mark','nav','ol','p','pre','q','s','samp','section','small','span','strong','sub','summary','sup','table','tbody','td','tfoot','th','thead','time','tr','u','ul','var','wbr']);
+const WEBVIEW_VOID=new Set(['br','col','hr','wbr']);
+const WEBVIEW_REMOVED=new Set(['applet','audio','base','embed','fencedframe','frame','frameset','iframe','math','mathml','menu','meta','noscript','object','picture','portal','script','style','svg','template','title','video']);
+const WEBVIEW_REMOVED_VOID=new Set(['area','base','embed','img','input','link','meta','param','source','track']);
+const WEBVIEW_FOREIGN_SELF_CLOSING=new Set(['math','mathml','svg']);
+const WEBVIEW_RAW_REMOVED=new Set(['script','style','title']);
+function escapeHtmlText(value){return value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}
+function sanitizeWebViewSource(source,xhtml){
+  let output='',skipped=null,skippedDepth=0,position=0;
+  function tagEnd(start){
+    let quote='';
+    for(let index=start;index<source.length;index++){
+      const character=source[index];
+      if(quote){if(character===quote)quote='';continue}
+      if(character==='"'||character==="'"){quote=character;continue}
+      if(character==='>')return index;
+    }
+    return-1;
+  }
+  function tag(token){
+    let text=token.trim(),closing=false;
+    if(text.startsWith('/')){closing=true;text=text.slice(1).trimStart()}
+    const match=/^([A-Za-z][A-Za-z0-9:_-]*)/.exec(text);
+    if(!match)return null;
+    return{name:match[1].toLowerCase(),closing,selfClosing:/\/\s*$/.test(text)};
+  }
+  while(position<source.length){
+    const start=source.indexOf('<',position);
+    if(start<0){if(!skipped)output+=source.slice(position);break}
+    if(!skipped&&start>position)output+=source.slice(position,start);
+    if(source.startsWith('<!--',start)){
+      const end=source.indexOf('-->',start+4);position=end<0?source.length:end+3;continue;
+    }
+    const end=tagEnd(start+1);
+    if(end<0){if(!skipped)output+=`&lt;${escapeHtmlText(source.slice(start+1))}`;break}
+    const parsed=tag(source.slice(start+1,end));
+    if(!parsed){position=end+1;continue}
+    const {name,closing,selfClosing}=parsed;
+    if(skipped){
+      if(name===skipped){
+        if(closing){skippedDepth--;if(skippedDepth===0)skipped=null}
+        else if(!selfClosing&&!WEBVIEW_RAW_REMOVED.has(skipped))skippedDepth++;
+      }
+      position=end+1;continue;
+    }
+    if(WEBVIEW_REMOVED_VOID.has(name)){
+      if(name==='img')output+='<span>[image omitted]</span>';
+      position=end+1;continue;
+    }
+    if(WEBVIEW_REMOVED.has(name)){
+      const immediate=selfClosing&&(xhtml||WEBVIEW_FOREIGN_SELF_CLOSING.has(name));
+      if(!closing&&!immediate){skipped=name;skippedDepth=1}
+      position=end+1;continue;
+    }
+    if(WEBVIEW_ALLOWED.has(name)){
+      if(closing){if(!WEBVIEW_VOID.has(name))output+=`</${name}>`}
+      else output+=`<${name}>`;
+    }
+    position=end+1;
+  }
+  return output;
+}
 function deactivateWebView(view){
   view._webViewToken=(view._webViewToken||0)+1;
   view._webViewLoading=false;
@@ -1455,9 +1834,11 @@ function deactivateWebView(view){
   view._webViewFrame=null;
 }
 function webViewDocument(model){
-  const documentText=model?.webViewDocument;
-  if(typeof documentText!=='string'||documentText.length>MAX_COPY_CHARACTERS||!documentText.startsWith(WEBVIEW_DOCUMENT_PREFIX))
-    throw new Error('the inert HTML document is invalid or oversized');
+  const source=decodeBodyText(model);
+  if(source.length>65536)throw new Error('the retained HTML source is oversized');
+  const contentType=(model.headers.find(header=>header.name.toLowerCase()==='content-type')?.value||'').split(';',1)[0].trim().toLowerCase();
+  const sanitized=sanitizeWebViewSource(source,contentType==='application/xhtml+xml');
+  const documentText=`${WEBVIEW_DOCUMENT_PREFIX}<style>${WEBVIEW_STYLE}</style></head><body>${sanitized}</body></html>`;
   return documentText.replace('<html data-theme="system">',`<html data-theme="${effectiveTheme()}">`);
 }
 async function renderWebView(view,generation){
@@ -1491,6 +1872,7 @@ async function renderWebView(view,generation){
       status.classList.remove('warning');
     });
     frame.srcdoc=webViewDocument(model);
+    const source=view.querySelector('.webview-source');if(source)source.textContent=decodeBodyText(model);
     view._webViewFrame=frame;
     host.replaceChildren(frame);
   }catch(error){
@@ -1510,6 +1892,16 @@ function setWebViewMode(view,mode,notify){
   if(sourceMode){
     deactivateWebView(view);
     view.querySelector('.webview-status').textContent='Source view is active. Search and Copy use the original decoded captured source.';
+    messageViewModel(view).then(model=>{
+      if(view.dataset.mode==='source'&&view.isConnected){
+        view.querySelector('.webview-source').textContent=decodeBodyText(model);
+      }
+    }).catch(error=>{
+      if(view.dataset.mode==='source'&&view.isConnected){
+        view.querySelector('.webview-status').textContent=`WebView source could not be loaded: ${error.message}`;
+        view.querySelector('.webview-status').classList.add('warning');
+      }
+    });
   }else{
     renderWebView(view,renderGeneration);
   }
@@ -1543,7 +1935,8 @@ async function renderHexView(view,generation){
     const model=await messageViewModel(view);
     if(generation!==renderGeneration||!view.isConnected||view.closest('.tab-panel.hidden'))return;
     const decoded=selection==='decoded';
-    const bytes=decodeModelBytes(model,decoded?'decodedBytes':'capturedBytes');
+    const sourceBytes=decoded?messageBodyBytes(model):messageCapturedBytes(model);
+    const bytes=sourceBytes.subarray(0,Math.min(sourceBytes.length,1024));
     const total=Number.parseInt(decoded?view.dataset.decodedLength:view.dataset.capturedLength,10);
     const retained=bytes.length,source=decoded?'Decoded':'Captured';
     const removed=decoded?view.querySelector('.decode-status')?.textContent?.replace(/^Removed encodings:\s*/,'')||'':'';
@@ -1565,20 +1958,66 @@ async function renderHexView(view,generation){
 }
 function resetAuthView(view,notify){
   view._authRevealToken=(view._authRevealToken||0)+1;
-  const panel=view.closest('.message-panel'),model=panel?._copyModel||{};
   const pre=view.querySelector('.auth-headers'),button=view.querySelector('.auth-reveal');
   const copy=view.closest('[role="tabpanel"]')?.querySelector('.copy-button');
-  if(typeof model.auth==='string')pre.textContent=model.auth;
+  if(typeof view._authRedactedText==='string')pre.textContent=view._authRedactedText;
   view.dataset.revealed='false';view._authFullText=null;
   button.disabled=false;
   button.textContent='Reveal values';button.setAttribute('aria-pressed','false');button.setAttribute('aria-label','Reveal full authentication header values');
   const status=view.querySelector('.auth-status');
   status.textContent='Values are redacted.';status.classList.remove('warning');
   if(copy){
-    delete copy._copyText;copy.dataset.copyKey='auth';
+    delete copy._copyText;copy.dataset.copyKey='auth';copy.dataset.copyKind='canonical';
     copy.setAttribute('aria-label','Copy redacted authentication headers');copy.dataset.copyDescription='redacted authentication headers';
   }
   if(notify)view.dispatchEvent(new CustomEvent('saz-view-change',{bubbles:true}));
+}
+const AUTH_HEADERS=new Set(['authorization','proxy-authorization','www-authenticate','proxy-authenticate']);
+function digestParameterNames(value){
+  const names=[];let start=0,quoted=false,escaped=false;
+  for(let index=0;index<=value.length;index++){
+    if(index<value.length){
+      const character=value[index];
+      if(quoted){
+        if(escaped)escaped=false;
+        else if(character==='\\')escaped=true;
+        else if(character==='"')quoted=false;
+        continue;
+      }
+      if(character==='"'){quoted=true;continue}
+      if(character!==',')continue;
+    }
+    const segment=value.slice(start,index).trim(),equals=segment.indexOf('='),name=equals>0?segment.slice(0,equals).trim():'';
+    if(name.length>0&&name.length<=64&&/^[A-Za-z][A-Za-z0-9!#$%&'*+\-.^_`|~]*$/.test(name))names.push(name);
+    start=index+1;
+  }
+  return names;
+}
+function redactAuthValue(value){
+  const trimmed=value.trim();
+  if(!trimmed)return'[redacted]';
+  const match=/^[^ \t,]+/.exec(trimmed),candidate=match?.[0]||'';
+  const known={basic:'Basic',bearer:'Bearer',digest:'Digest',ntlm:'NTLM',negotiate:'Negotiate'},scheme=known[candidate.toLowerCase()];
+  if(!scheme)return'[redacted]';
+  if(scheme!=='Digest')return`${scheme} [redacted]`;
+  const parameters=[...new Set(digestParameterNames(trimmed.slice(candidate.length).trim()))].slice(0,32);
+  return parameters.length?`${scheme} ${parameters.map(name=>`${name}=[redacted]`).join(', ')}`:`${scheme} [redacted]`;
+}
+function authText(model,reveal){
+  return model.headers.filter(header=>AUTH_HEADERS.has(header.name.toLowerCase()))
+    .map(header=>`${header.name}: ${reveal?header.value:redactAuthValue(header.value)}\n`).join('');
+}
+async function renderAuthView(view,generation){
+  if(view._authReady)return;
+  try{
+    const model=await messageViewModel(view);
+    if(generation!==renderGeneration||!view.isConnected)return;
+    const text=authText(model,false);
+    view._authRedactedText=text;view.querySelector('.auth-headers').textContent=text;view._authReady=true;
+  }catch(error){
+    const status=view.querySelector('.auth-status');
+    status.textContent=`Authentication headers could not be loaded: ${error.message}`;status.classList.add('warning');
+  }
 }
 async function toggleAuthView(view){
   if(view.dataset.revealed==='true'){resetAuthView(view,true);return}
@@ -1591,7 +2030,7 @@ async function toggleAuthView(view){
   try{
     const model=await messageViewModel(view);
     if(!isCurrent())return;
-    const full=await decodeEmbeddedUtf8(model);
+    const full=authText(model,true);
     if(!isCurrent())return;
     view.querySelector('.auth-headers').textContent=full;
     view.dataset.revealed='true';view._authFullText=full;
@@ -1608,6 +2047,103 @@ async function toggleAuthView(view){
     status.textContent=`Authentication values could not be revealed: ${error.message}`;
     status.classList.add('warning');
   }finally{if(isCurrent())button.disabled=false}
+}
+function formatByteCount(value){
+  const units=['B','KiB','MiB','GiB'];let size=value,unit=0;
+  while(size>=1024&&unit<units.length-1){size/=1024;unit++}
+  return unit===0?`${value.toLocaleString('en-US')} ${units[unit]}`:`${size.toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})} ${units[unit]}`;
+}
+function fullHeadersText(model){
+  let text=`${model.startLine}\n`;
+  for(const header of model.headers){
+    text+=`${header.name}: ${header.value}\n`;
+    if(text.length>MAX_COPY_CHARACTERS)return null;
+  }
+  return text;
+}
+function boundedDisplay(value,limit,marker){
+  if(value.length<=limit)return value;
+  const prefix=Math.max(0,limit-marker.length-1);
+  return`${value.slice(0,prefix)}\n${marker}`;
+}
+function rawBodyText(model){return decodeBodyText(model)}
+function rawCopyText(panel,model){
+  const headers=fullHeadersText(model);
+  if(headers===null)return null;
+  const body=model.body,label=panel.dataset.bodyLabel||'Body',status=panel.dataset.bodyStatus||'';
+  const size=body.removedEncodings.length
+    ?`${formatByteCount(body.length)} decoded; ${formatByteCount(body.capturedLength)} captured`
+    :formatByteCount(body.length);
+  let text=`Original headers\n${headers}\n${body.removedEncodings.length?'Decoded body':'Body'} (${size})\nFormat: ${label}\nStatus: ${status}\n`;
+  if(body.decodingStatus)text+=`Decode status: ${body.decodingStatus}\n`;
+  text+=rawBodyText(model);
+  if(body.isTruncated)text+='\n[Body preview truncated; the complete body is not retained in this report.]';
+  if(body.showCapturedBytes){
+    const captured=messageCapturedBytes(model);
+    text+=`\n\nCaptured bytes (pre-decode)\n${capturedPreviewText(model)}`;
+    if(body.fallbackCapturedTruncated||captured.length<body.capturedLength)text+='\n[Captured byte preview truncated]';
+  }
+  return text.length<=MAX_COPY_CHARACTERS?text:null;
+}
+async function renderHeadersView(pre,generation){
+  if(pre._hydrated)return;
+  try{
+    const model=await messageViewModel(pre);
+    if(generation!==renderGeneration||!pre.isConnected)return;
+    const headers=fullHeadersText(model);
+    const source=headers??`${model.startLine}\n${model.headers.map(header=>`${header.name}: ${header.value}\n`).join('')}`;
+    pre.textContent=boundedDisplay(source,256*1024,'[Header display truncated at the 256 KiB rendering limit.]\n');
+    pre._hydrated=true;
+  }catch(error){pre.textContent=`Headers could not be loaded: ${error.message}`;pre.classList.add('warning')}
+}
+async function renderRawView(panel,generation){
+  if(panel._hydrated)return;
+  try{
+    const model=await messageViewModel(panel);
+    if(generation!==renderGeneration||!panel.isConnected)return;
+    const headers=panel.querySelector('.headers');if(headers)await renderHeadersView(headers,generation);
+    let body=rawBodyText(model);
+    if(model.body.isTruncated)body+='\n[Body preview truncated; the complete body is not retained in this report.]';
+    panel.querySelector('[data-copy-field="rawBody"]').textContent=boundedDisplay(body,256*1024,'[Body display truncated at the 256 KiB rendering limit.]');
+    const captured=panel.querySelector('[data-copy-field="captured"]');
+    if(captured){
+      const bytes=messageCapturedBytes(model);
+      let text=capturedPreviewText(model);
+      if(model.body.fallbackCapturedTruncated||bytes.length<model.body.capturedLength)text+='\n[Captured byte preview truncated]';
+      captured.textContent=boundedDisplay(text,256*1024,'[Captured-byte display truncated at the 256 KiB rendering limit.]');
+    }
+    panel._hydrated=true;
+  }catch(error){
+    panel.querySelectorAll('[data-copy-field]').forEach(target=>{target.textContent=`Content could not be displayed: ${error.message}`;target.classList.add('warning')});
+  }
+}
+async function canonicalCopySource(button){
+  const panel=button.closest('.message-panel');
+  if(!panel)return{error:'Copy source is detached.'};
+  let model;
+  try{model=await loadMessageModel(panel)}
+  catch(error){return{error:`Copy source could not be decoded. ${error.message}`}}
+  const key=button.dataset.copyKey;
+  if(key==='headers'){
+    const text=fullHeadersText(model);return text===null?{error:'Copy source exceeds the 1 MiB safety limit.'}:{text};
+  }
+  if(key==='raw'){
+    const text=rawCopyText(panel,model);return text===null?{error:'Copy source exceeds the 1 MiB safety limit.'}:{text};
+  }
+  if(key==='webview'){
+    const text=decodeBodyText(model);return text.length>MAX_COPY_CHARACTERS?{error:'Copy source exceeds the 1 MiB safety limit.'}:{text};
+  }
+  if(key==='auth'){
+    const view=button.closest('[role="tabpanel"]').querySelector('.auth-view');
+    const text=view?.dataset.revealed==='true'?view._authFullText:authText(model,false);
+    return typeof text==='string'?{text}:{error:'Authentication headers could not be prepared.'};
+  }
+  if(key==='json'||key==='xml'){
+    const container=button.closest('[role="tabpanel"]').querySelector('.structured-body');
+    await hydrateStructuredBody(container,renderGeneration);
+    return typeof container._formattedText==='string'?{text:container._formattedText}:{error:`${key.toUpperCase()} text could not be prepared.`};
+  }
+  return{error:'Copy source is unavailable.'};
 }
 function setupDynamicViewControls(root,generation){
   root.querySelectorAll('.webview').forEach(view=>{
@@ -1629,17 +2165,26 @@ function deactivateDynamicViews(root){
   root.querySelectorAll('.auth-view').forEach(view=>resetAuthView(view,false));
   root.querySelectorAll('.webview').forEach(deactivateWebView);
 }
+function viewsWithin(root,selector){
+  const matches=[...root.querySelectorAll(selector)];
+  if(root.matches?.(selector))matches.unshift(root);
+  return matches;
+}
 function hydrateViewPayloads(root,generation){
   if(root.classList?.contains('hidden')||root.closest?.('.primary-panel.hidden'))return;
-  root.querySelectorAll('.websocket-inspector').forEach(host=>renderWebSocketInspector(host,generation));
-  root.querySelectorAll('.image-view').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderImageView(view,generation)});
-  root.querySelectorAll('.webview').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderWebView(view,generation)});
-  root.querySelectorAll('.hex-view').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderHexView(view,generation)});
+  viewsWithin(root,'.websocket-inspector').forEach(host=>renderWebSocketInspector(host,generation));
+  viewsWithin(root,'.message-panel .structured-body').forEach(view=>{if(!view.closest('.tab-panel.hidden'))hydrateStructuredBody(view,generation)});
+  viewsWithin(root,'.headers[data-copy-field="headers"]').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderHeadersView(view,generation)});
+  viewsWithin(root,'.tab-panel-raw').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderRawView(view,generation)});
+  viewsWithin(root,'.auth-view').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderAuthView(view,generation)});
+  viewsWithin(root,'.image-view').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderImageView(view,generation)});
+  viewsWithin(root,'.webview').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderWebView(view,generation)});
+  viewsWithin(root,'.hex-view').forEach(view=>{if(!view.closest('.tab-panel.hidden'))renderHexView(view,generation)});
   root.querySelectorAll('.protocol-block').forEach(host=>{
     if((host.dataset.compressedPayload||host._payloadData!==undefined)&&!host.closest('.tab-panel.hidden'))renderProtocolTree(host,generation);
   });
   root.querySelectorAll('.tree-subview').forEach(host=>{
-    if((host.dataset.compressedPayload||host._payloadData!==undefined)&&!host.classList.contains('hidden')&&!host.closest('.tab-panel.hidden'))renderValueTree(host,generation);
+    if((host.dataset.compressedPayload||host._payloadData!==undefined||host._treeData!==undefined)&&!host.classList.contains('hidden')&&!host.closest('.tab-panel.hidden'))renderValueTree(host,generation);
   });
 }
 function prepareLazyPayloads(root){
@@ -1657,14 +2202,19 @@ function setupTreeToggles(root){
     const treeView=container.querySelector('.tree-subview');
     const prettyView=container.querySelector('.pretty-subview');
     if(!toolbar)return;
+    container.dataset.viewMode=treeView&&!treeView.classList.contains('hidden')?'tree':'pretty';
     toolbar.querySelectorAll('.view-toggle button').forEach(btn=>{
       btn.addEventListener('click',()=>{
         if(btn.disabled)return;
         const showTree=btn.dataset.view==='tree';
+        container.dataset.viewMode=showTree?'tree':'pretty';
         treeView.classList.toggle('hidden',!showTree);
         prettyView.classList.toggle('hidden',showTree);
         toolbar.querySelectorAll('.view-toggle button').forEach(other=>other.setAttribute('aria-pressed',String(other===btn)));
-        if(showTree)renderValueTree(treeView,renderGeneration);
+        if(showTree){
+          if(!treeView._treeRendered)treeView._treeBuildToken=null;
+          renderValueTree(treeView,renderGeneration);
+        }
         container.dispatchEvent(new CustomEvent('saz-view-change',{bubbles:true}));
       });
     });
@@ -1694,7 +2244,7 @@ function protocolCopyText(data){
   visit(data.root,0);
   return exceeded?{error:'MAPI copy exceeds the 1 MiB safety limit.'}:{text};
 }
-function copySource(button){
+async function copySource(button){
   if(typeof button._copyText==='string'){
     return button._copyText.length>MAX_COPY_CHARACTERS
       ?{error:'Copy source exceeds the 1 MiB safety limit.'}
@@ -1707,32 +2257,8 @@ function copySource(button){
     const data=host._protocolData;
     return data?protocolCopyText(data):{error:'MAPI protocol data is unavailable.'};
   }
-  const panel=button.closest('.message-panel');
-  if(panel?._copyModelError)return{error:panel._copyModelError};
-  const text=panel?._copyModel?.[button.dataset.copyKey];
-  if(typeof text!=='string')return{error:'Copy source could not be decoded.'};
-  if(text.length>MAX_COPY_CHARACTERS)return{error:'Copy source exceeds the 1 MiB safety limit.'};
-  return{text};
-}
-async function loadCopyModel(panel){
-  if(panel.dataset.payloadError)throw new Error(panel.dataset.payloadError);
-  if(!panel.dataset.compressedPayload&&panel._payloadData===undefined)return{};
-  const model=await decodeCompressedPayload(panel,'copy-model');
-  if(!model||typeof model!=='object'||Array.isArray(model))throw new Error('Copy data has an invalid format.');
-  Object.values(model).forEach(value=>{
-    if(typeof value!=='string'||value.length>MAX_COPY_CHARACTERS)throw new Error('Copy data exceeds the 1 MiB safety limit.');
-  });
-  return model;
-}
-function hydrateCopyModel(panel,model){
-  panel.querySelectorAll('[data-copy-field]').forEach(target=>{
-    const text=model[target.dataset.copyField];
-    if(typeof text!=='string')return;
-    const start=Number.parseInt(target.dataset.copyStart||'0',10);
-    const length=Number.parseInt(target.dataset.copyLength||String(text.length),10);
-    if(!Number.isSafeInteger(start)||!Number.isSafeInteger(length)||start<0||length<0||start+length>text.length)return;
-    target.textContent=text.slice(start,start+length);
-  });
+  if(button.dataset.copyKind==='canonical')return canonicalCopySource(button);
+  return{error:'Copy source could not be decoded.'};
 }
 function fallbackCopyText(text,button){
   const active=document.activeElement;
@@ -1769,28 +2295,11 @@ async function writeClipboardText(text,button){
   return fallbackCopyText(text,button);
 }
 function setupCopyControls(root){
-  root.querySelectorAll('.message-panel').forEach(panel=>{
-    const buttons=[...panel.querySelectorAll('.copy-button[data-copy-key]')];
-    buttons.forEach(button=>{button.disabled=true;button.setAttribute('aria-disabled','true');button.setAttribute('aria-busy','true')});
-    panel._copyReadyPromise=loadCopyModel(panel).then(model=>{
-      panel._copyModel=model;
-      hydrateCopyModel(panel,model);
-      highlightSelected(panel);
-      buttons.forEach(button=>{button.disabled=false;button.removeAttribute('aria-disabled');button.removeAttribute('aria-busy')});
-    }).catch(error=>{
-      panel._copyModelError=`Copy data could not be prepared. ${error.message}`;
-      panel.querySelectorAll('[data-copy-field]').forEach(target=>{
-        target.textContent='Content could not be displayed because this browser could not read the compressed local report data.';
-        target.classList.add('warning');
-      });
-      buttons.forEach(button=>{button.disabled=false;button.removeAttribute('aria-disabled');button.removeAttribute('aria-busy')});
-    });
-  });
   root.querySelectorAll('.copy-button').forEach(button=>{
     button.addEventListener('click',async()=>{
       if(button.disabled)return;
       const status=button.parentElement.querySelector('.copy-status');
-      const source=copySource(button);
+      const source=await copySource(button);
       if(source.error){
         status.textContent=source.error;
         button.textContent='Copy';
@@ -2013,6 +2522,224 @@ function focusStableInspectorControl(){
   if(websocketMessage){websocketMessage.focus();return}
   inspectorClose.focus();
 }
+function httpElement(tag,className,text){
+  const element=document.createElement(tag);
+  if(className)element.className=className;
+  if(text!==undefined)element.textContent=text;
+  return element;
+}
+function httpCopyToolbar(key,enabled,accessibleName,description,kind='canonical'){
+  const toolbar=httpElement('div','copy-toolbar');
+  const button=httpElement('button','copy-button','Copy');button.type='button';
+  button.setAttribute('aria-label',accessibleName);button.dataset.copyDescription=description;
+  if(!enabled){button.disabled=true;button.setAttribute('aria-disabled','true')}
+  else{button.dataset.copyKind=kind;if(kind==='canonical')button.dataset.copyKey=key}
+  const status=httpElement('span','copy-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+  toolbar.append(button,status);return toolbar;
+}
+function httpTabButton(side,key,label,enabled,selected){
+  const button=httpElement('button','',label);button.type='button';button.id=`${side}-tab-${key}`;
+  button.setAttribute('role','tab');button.setAttribute('aria-controls',`${side}-panel-${key}`);
+  button.setAttribute('aria-selected',String(selected));button.dataset.tab=key;button.tabIndex=selected?0:-1;
+  if(!enabled){button.disabled=true;button.setAttribute('aria-disabled','true')}
+  return button;
+}
+function httpTabPanel(side,key,selected,enabled,copy,content,unavailable){
+  const panel=httpElement('div',`tab-panel tab-panel-${key}${selected?'':' hidden'}`);
+  panel.id=`${side}-panel-${key}`;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',`${side}-tab-${key}`);panel.tabIndex=0;
+  panel.append(copy);
+  if(enabled){if(content)panel.append(content)}
+  else panel.append(httpElement('div','tab-empty',unavailable));
+  return panel;
+}
+function formatMeta(model){
+  const meta=httpElement('div','format-meta');
+  meta.append(httpElement('span','format-badge',model.label),httpElement('span','format-status',model.status));
+  return meta;
+}
+function createStructuredBody(model,format){
+  const container=httpElement('div','structured-body');container.dataset.format=format;container.append(formatMeta(model));
+  const toolbar=httpElement('div','tree-toolbar'),toggle=httpElement('div','view-toggle');
+  toggle.setAttribute('role','group');toggle.setAttribute('aria-label',`${format.toUpperCase()} view mode`);
+  const treeButton=httpElement('button','', 'Tree');treeButton.type='button';treeButton.dataset.view='tree';treeButton.setAttribute('aria-pressed','true');
+  const prettyButton=httpElement('button','', 'Pretty Text');prettyButton.type='button';prettyButton.dataset.view='pretty';prettyButton.setAttribute('aria-pressed','false');
+  toggle.append(treeButton,prettyButton);
+  const expand=httpElement('button','tree-expand-all','Expand all');expand.type='button';
+  const collapse=httpElement('button','tree-collapse-all','Collapse all');collapse.type='button';
+  toolbar.append(toggle,expand,collapse);container.append(toolbar);
+  const tree=httpElement('div','tree-subview','Tree loads when this session is selected.');
+  const pretty=httpElement('div','pretty-subview hidden'),pre=httpElement('pre','body-view formatted-view');
+  pre.dataset.format=format;pre.dataset.copyField=format;pretty.append(pre);container.append(tree,pretty);return container;
+}
+function createImageView(model){
+  const info=model.image,view=httpElement('div','image-view');view.dataset.imageMime=info.mimeType;
+  const meta=httpElement('div','image-meta');
+  meta.append(httpElement('span','',info.mimeType),httpElement('span','',`${model.body.length.toLocaleString('en-US')} bytes`),
+    httpElement('span','',info.animation),httpElement('span','image-dimensions','Dimensions load with the image.'));
+  view.append(meta,httpElement('div','format-status',info.detection));
+  if(info.warning)view.append(httpElement('div','warning',info.warning));
+  const stage=httpElement('div','image-stage'),image=document.createElement('img');
+  image.alt='Captured HTTP image';image.decoding='async';image.referrerPolicy='no-referrer';image.draggable=false;stage.append(image);
+  const status=httpElement('div','image-load-status','Image loads when this tab is selected.');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+  view.append(stage,status);return view;
+}
+function createWebView(model){
+  const view=httpElement('div','webview');view.dataset.mode='rendered';
+  const toolbar=httpElement('div','webview-toolbar'),modes=httpElement('div','webview-mode');
+  modes.setAttribute('role','group');modes.setAttribute('aria-label','WebView display mode');
+  for(const [key,label,pressed] of [['rendered','Rendered',true],['source','Source',false]]){
+    const button=httpElement('button','',label);button.type='button';button.dataset.webviewMode=key;button.setAttribute('aria-pressed',String(pressed));modes.append(button);
+  }
+  toolbar.append(modes,httpElement('span','format-status',model.webViewDetection));
+  const status=httpElement('div','webview-status','Inert preview loads only when this tab is selected.');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+  const source=httpElement('pre','webview-source hidden');source.tabIndex=0;source.setAttribute('aria-label','Original decoded captured HTML source');source.dataset.copyField='webview';
+  view.append(toolbar,status,httpElement('div','webview-frame-host'),source);return view;
+}
+function createHexView(model,decodedEnabled){
+  const body=model.body,view=httpElement('div','hex-view');
+  view.dataset.capturedLength=String(body.capturedLength);view.dataset.decodedLength=String(body.length);
+  const toolbar=httpElement('div','hex-toolbar'),sourceLabel=httpElement('span','hex-source-label','Captured body bytes'),label=httpElement('label','','Source ');
+  const select=httpElement('select','hex-source');select.setAttribute('aria-label','Hex byte source');
+  const captured=httpElement('option','','Captured');captured.value='captured';
+  const decoded=httpElement('option','','Decoded');decoded.value='decoded';decoded.disabled=!decodedEnabled;select.append(captured,decoded);label.append(select);toolbar.append(sourceLabel,label);view.append(toolbar);
+  if(body.removedEncodings.length)view.append(httpElement('div','decode-status',`Removed encodings: ${body.removedEncodings.join(' -> ')}`));
+  const dump=httpElement('pre','hex-dump');dump.tabIndex=0;dump.setAttribute('aria-label','Captured body byte hex dump');
+  view.append(dump,httpElement('div','hex-status muted'));return view;
+}
+function createAuthView(){
+  const view=httpElement('div','auth-view');view.dataset.revealed='false';
+  view.append(httpElement('div','warning','Authentication values are redacted. Reveal only when it is safe to display captured credentials or challenge tokens.'));
+  const reveal=httpElement('button','auth-reveal','Reveal values');reveal.type='button';reveal.setAttribute('aria-pressed','false');reveal.setAttribute('aria-label','Reveal full authentication header values');
+  const pre=httpElement('pre','auth-headers');pre.dataset.copyField='auth';
+  const status=httpElement('div','auth-status','Values are redacted.');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+  view.append(reveal,pre,status);return view;
+}
+function createRawView(model){
+  const fragment=document.createDocumentFragment();
+  fragment.append(httpElement('h4','','Original headers'));
+  const headers=httpElement('pre','headers');headers.dataset.copyField='headers';fragment.append(headers);
+  const heading=httpElement('h4','',model.body.removedEncodings.length?'Decoded body ':'Body ');
+  heading.append(httpElement('span','muted',`(${model.body.removedEncodings.length?`${formatByteCount(model.body.length)} decoded; ${formatByteCount(model.body.capturedLength)} captured`:formatByteCount(model.body.length)})`));
+  fragment.append(heading,formatMeta(model));
+  if(model.body.decodingStatus)fragment.append(httpElement('div',model.body.removedEncodings.length?'decode-status':'warning',model.body.decodingStatus));
+  const body=httpElement('pre','body-view');body.dataset.copyField='rawBody';fragment.append(body);
+  if(model.body.showCapturedBytes){
+    const details=httpElement('details','captured-bytes'),summary=httpElement('summary','','Captured bytes (pre-decode)'),captured=httpElement('pre');
+    captured.dataset.copyField='captured';details.append(summary,captured);fragment.append(details);
+  }
+  return fragment;
+}
+function moveProtocolSource(source){
+  if(!source)return null;
+  source.hidden=false;source.className='protocol-block';source.removeAttribute('data-message-side');
+  source.textContent='Protocol tree loads when this view is selected.';source.firstChild&&source.firstChild.parentElement?.classList.add('muted');
+  return source;
+}
+function createMessagePanel(side,title,model,protocolSource){
+  const lower=title.toLowerCase(),panel=httpElement('section','message-panel');panel.dataset.messageSide=side;
+  if(model){panel.dataset.bodyFormat=model.format;panel.dataset.bodyLabel=model.label;panel.dataset.bodyStatus=model.status}
+  const flags={
+    json:!!model&&model.format==='json'&&model.canToggle,
+    xml:!!model&&model.format==='xml'&&model.canToggle,
+    mapi:!!protocolSource,image:!!model?.image,webview:!!model?.webViewDetection,
+    hex:!!model&&typeof model.body.captured==='string'&&model.body.captured.length>0,
+    auth:!!model?.hasAuth,headers:!!model&&model.headers.length>0,raw:!!model
+  };
+  const initial=flags.mapi?'mapi':flags.json?'json':flags.xml?'xml':flags.raw?'raw':flags.headers?'headers':null;
+  const strip=httpElement('div','tab-strip');strip.setAttribute('role','tablist');strip.setAttribute('aria-label',`${title} detail views`);
+  strip.dataset.side=side;strip.dataset.priority='mapi,json,xml,raw,headers';
+  const labels={json:'JSON',xml:'XML',mapi:'MAPI',image:'Image',webview:'WebView',hex:'HexView',auth:'Auth',headers:'Headers',raw:'Raw'};
+  Object.entries(labels).forEach(([key,label])=>strip.append(httpTabButton(side,key,label,flags[key],initial===key)));panel.append(strip);
+  const panels=httpElement('div','tab-panels');
+  const descriptions={
+    json:[`Copy ${lower} JSON pretty text`,`${lower} JSON pretty text`],xml:[`Copy ${lower} XML pretty text`,`${lower} XML pretty text`],
+    mapi:[`Copy ${lower} MAPI protocol tree`,`${lower} MAPI protocol tree`],image:[`Copy ${lower} image metadata`,`${lower} image metadata`],
+    webview:[`Copy ${lower} HTML source`,`${lower} HTML source`],hex:[`Copy ${lower} hex view`,`${lower} hex view`],
+    auth:[`Copy redacted ${lower} authentication headers`,`redacted ${lower} authentication headers`],
+    headers:[`Copy ${lower} headers`,`${lower} headers`],raw:[`Copy ${lower} raw message`,`${lower} raw message`]
+  };
+  const contents={
+    json:flags.json?createStructuredBody(model,'json'):null,xml:flags.xml?createStructuredBody(model,'xml'):null,
+    mapi:flags.mapi?moveProtocolSource(protocolSource):null,image:flags.image?createImageView(model):null,
+    webview:flags.webview?createWebView(model):null,
+    hex:flags.hex?createHexView(model,model.body.decoded!==null&&model.body.decoded!==undefined):null,
+    auth:flags.auth?createAuthView():null,
+    headers:flags.headers?httpElement('pre','headers'):null,
+    raw:flags.raw?createRawView(model):null
+  };
+  if(contents.headers)contents.headers.dataset.copyField='headers';
+  const unavailable={
+    json:`JSON view is not available: the ${lower} body is not recognized, valid JSON.`,
+    xml:`XML view is not available: the ${lower} body is not recognized, valid XML.`,
+    mapi:`MAPI view is not available: no protocol tree was parsed for this ${lower}.`,
+    image:`Image view is not available: the ${lower} body is not a complete retained PNG, JPEG, GIF, WebP, BMP, or ICO image.`,
+    webview:`WebView is not available: the ${lower} body is not complete retained HTML or XHTML.`,
+    hex:`HexView is not available: no captured ${lower} body bytes were retained.`,
+    auth:`Auth view is not available: no Authorization, Proxy-Authorization, WWW-Authenticate, or Proxy-Authenticate header was captured for this ${lower}.`,
+    headers:model?`No headers were captured for this ${lower}.`:`No ${lower} entry was captured.`,
+    raw:`No ${lower} entry was captured.`
+  };
+  Object.keys(labels).forEach(key=>{
+    const kind=key==='mapi'?'mapi':key==='image'||key==='hex'?key:'canonical';
+    const copy=httpCopyToolbar(key,flags[key],descriptions[key][0],descriptions[key][1],kind);
+    panels.append(httpTabPanel(side,key,initial===key,flags[key],copy,contents[key],unavailable[key]));
+  });
+  if(!Object.values(flags).some(Boolean))panels.append(httpElement('div','tab-empty',`No ${lower} entry was captured.`));
+  panel.append(panels);return panel;
+}
+function primaryTab(side,label,selected){
+  const button=httpTabButton('primary',side,label,true,selected);return button;
+}
+function buildHttpInspector(source,store){
+  const request=store.request?validateMessageModel(store.request):null,response=store.response?validateMessageModel(store.response):null;
+  const details=[...source.children].filter(child=>child.classList.contains('session-details'));
+  const requestProtocol=source.querySelector('.mapi-source[data-message-side="request"]');
+  const responseProtocol=source.querySelector('.mapi-source[data-message-side="response"]');
+  const bar=httpElement('div','primary-view-bar'),tabs=httpElement('div','primary-tab-strip tab-strip');
+  tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Request or response');tabs.dataset.side='primary';tabs.dataset.priority='request,response';
+  tabs.append(primaryTab('request','Request',true),primaryTab('response','Response',false));
+  const layout=httpElement('button','http-layout-toggle','Split view');layout.type='button';layout.setAttribute('aria-pressed','false');
+  layout.setAttribute('aria-label','Show Request and Response side by side');layout.title='Show Request and Response side by side';bar.append(tabs,layout);
+  const panels=httpElement('div','primary-panels tab-panels');
+  const requestPanel=httpElement('div','tab-panel primary-panel');requestPanel.id='primary-panel-request';requestPanel.dataset.side='Request';
+  requestPanel.setAttribute('role','tabpanel');requestPanel.setAttribute('aria-labelledby','primary-tab-request');requestPanel.tabIndex=0;
+  requestPanel.append(httpElement('h3','http-pane-heading','Request'),createMessagePanel('request','Request',request,requestProtocol));
+  const splitter=httpElement('div','http-splitter hidden');splitter.setAttribute('role','separator');splitter.setAttribute('aria-label','Resize Request and Response panes');
+  splitter.setAttribute('aria-orientation','vertical');splitter.tabIndex=0;splitter.title='Drag or use Left and Right arrow keys to resize Request and Response panes';
+  const responsePanel=httpElement('div','tab-panel primary-panel hidden');responsePanel.id='primary-panel-response';responsePanel.dataset.side='Response';
+  responsePanel.setAttribute('role','tabpanel');responsePanel.setAttribute('aria-labelledby','primary-tab-response');responsePanel.tabIndex=0;
+  responsePanel.append(httpElement('h3','http-pane-heading','Response'),createMessagePanel('response','Response',response,responseProtocol));
+  panels.append(requestPanel,splitter,responsePanel);source.replaceChildren(...details,bar,panels);
+}
+function setupInspectorContent(root,generation){
+  prepareLazyPayloads(root);setupTabs(root);setupTreeToggles(root);setupCopyControls(root);setupDynamicViewControls(root,generation);
+  if(!setupHttpLayout(root))setupHttpViewSearch(root,generation);
+  hydrateViewPayloads(root,generation);
+}
+async function initializeHttpInspector(root,generation,focusBody){
+  const source=root.querySelector('.http-session-source');
+  if(!source){
+    setupInspectorContent(root,generation);
+    if(focusBody)inspectorClose.focus();
+    return;
+  }
+  try{
+    if(source.dataset.payloadError)throw new Error(source.dataset.payloadError);
+    const store=await decodeCompressedPayload(source,'http-session');
+    if(generation!==renderGeneration||!source.isConnected)return;
+    if(!store||store.schema!==1||typeof store!=='object'||Array.isArray(store))throw new Error('session data has an unsupported schema');
+    buildHttpInspector(source,store);setupInspectorContent(root,generation);
+    if(focusBody){
+      const tab=root.querySelector('.primary-tab-strip [role="tab"][aria-selected="true"]');
+      (tab||inspectorClose).focus();
+    }
+  }catch(error){
+    if(generation!==renderGeneration||!source.isConnected)return;
+    const warning=httpElement('div','warning',payloadFailureText(error,'HTTP session',' Regenerate the report with the current SAZ Viewer.'));
+    warning.setAttribute('role','status');source.replaceChildren(warning);
+    if(focusBody)inspectorClose.focus();
+  }
+}
 function loadRow(row){
   const template=document.getElementById(row.dataset.detail);
   if(!template)return false;
@@ -2031,24 +2758,13 @@ function loadRow(row){
   renderGeneration++;
   const generation=renderGeneration;
   inspectorBody.replaceChildren(template.content.cloneNode(true));
-  prepareLazyPayloads(inspectorBody);
-  setupTabs(inspectorBody);
-  setupTreeToggles(inspectorBody);
-  setupCopyControls(inspectorBody);
-  setupDynamicViewControls(inspectorBody,generation);
-  if(!setupHttpLayout(inspectorBody))setupHttpViewSearch(inspectorBody,generation);
-  hydrateViewPayloads(inspectorBody,generation);
+  initializeHttpInspector(inspectorBody,generation,focusWasInBody);
   updateNavState();
   // Request is always the default-selected primary tab after (re)loading a row (see
   // initialTabFor's "request,response" priority and the preferredTab reset above), so it is a
   // stable, guaranteed-enabled place to land focus when the previously focused element lived
   // inside the body content we just discarded (e.g. a secondary tab or tree item reached via the
   // Alt+Arrow inspector-navigation shortcut).
-  if(focusWasInBody){
-    const primaryRequestTab=inspectorBody.querySelector('.primary-tab-strip [role="tab"][aria-selected="true"]');
-    if(primaryRequestTab)primaryRequestTab.focus();
-    else inspectorClose.focus();
-  }
   return true;
 }
 function openInspector(row){
@@ -2293,17 +3009,122 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             html.Append("</template>");
             return;
         }
+        html.Append("<div class=\"http-session-source\"");
+        AppendSessionPayloadAttributes(html, session);
+        html.Append('>');
         AppendSessionDetails(html, session);
-        html.Append("<div class=\"primary-view-bar\"><div class=\"primary-tab-strip tab-strip\" role=\"tablist\" aria-label=\"Request or response\" data-side=\"primary\" data-priority=\"request,response\">");
-        AppendTabButton(html, "primary", "request", "Request", true, true);
-        AppendTabButton(html, "primary", "response", "Response", true, false);
-        html.Append("</div><button type=\"button\" class=\"http-layout-toggle\" aria-pressed=\"false\" aria-label=\"Show Request and Response side by side\" title=\"Show Request and Response side by side\">Split view</button></div><div class=\"primary-panels tab-panels\">");
-        html.Append("<div role=\"tabpanel\" id=\"primary-panel-request\" aria-labelledby=\"primary-tab-request\" tabindex=\"0\" class=\"tab-panel primary-panel\" data-side=\"Request\"><h3 class=\"http-pane-heading\">Request</h3>");
-        AppendMessagePanel(html, "Request", "request", session.Request, session.Mapi?.Request);
-        html.Append("</div><div class=\"http-splitter hidden\" role=\"separator\" aria-label=\"Resize Request and Response panes\" aria-orientation=\"vertical\" tabindex=\"0\" title=\"Drag or use Left and Right arrow keys to resize Request and Response panes\"></div>");
-        html.Append("<div role=\"tabpanel\" id=\"primary-panel-response\" aria-labelledby=\"primary-tab-response\" tabindex=\"0\" class=\"tab-panel primary-panel hidden\" data-side=\"Response\"><h3 class=\"http-pane-heading\">Response</h3>");
-        AppendMessagePanel(html, "Response", "response", session.Response, session.Mapi?.Response);
-        html.Append("</div></div></template>");
+        AppendProtocolSource(html, "request", session.Mapi?.Request);
+        AppendProtocolSource(html, "response", session.Mapi?.Response);
+        html.Append("<div class=\"http-session-loading\" role=\"status\">Loading Request and Response inspector...</div></div></template>");
+    }
+
+    private static void AppendProtocolSource(
+        StringBuilder html,
+        string side,
+        MapiMessageParse? protocol)
+    {
+        if (protocol is null)
+        {
+            return;
+        }
+        var warnings = protocol.Warnings.Take(50).ToArray();
+        var payload = JsonSerializer.Serialize(new
+        {
+            root = ToProtocolData(protocol.Root),
+            complete = protocol.Complete,
+            parsedBytes = protocol.ParsedBytes,
+            totalBytes = protocol.TotalBytes,
+            warnings,
+            omittedWarnings = protocol.Warnings.Length - warnings.Length
+        });
+        var compressed = CreateCompressedPayload(
+            "mapi-protocol",
+            payload,
+            ProtocolPayloadMaxDecodedBytes);
+        html.Append("<div class=\"mapi-source\" data-message-side=\"").Append(side).Append('"');
+        if (compressed is not null)
+        {
+            AppendCompressedPayloadAttributes(html, compressed);
+        }
+        else
+        {
+            html.Append(" data-payload-error=\"Protocol tree exceeds the 32 MiB report safety limit.\"");
+        }
+        html.Append(" hidden></div>");
+    }
+
+    private void AppendSessionPayloadAttributes(StringBuilder html, HttpSession session)
+    {
+        var model = new SessionPayload(
+            1,
+            BuildMessagePayload(session.Request),
+            BuildMessagePayload(session.Response));
+        var payload = CreateCompressedPayload(
+            "http-session",
+            JsonSerializer.SerializeToUtf8Bytes(model, SessionPayloadOptions),
+            HttpSessionPayloadMaxDecodedBytes);
+        if (payload is not null)
+        {
+            AppendCompressedPayloadAttributes(html, payload);
+        }
+        else
+        {
+            html.Append(" data-payload-error=\"Session data exceeds the compressed report safety limit.\"");
+        }
+    }
+
+    private MessagePayload? BuildMessagePayload(HttpMessage? message)
+    {
+        if (message is null)
+        {
+            return null;
+        }
+
+        var body = message.Body;
+        var captured = body.WasDecoded
+            ? body.CapturedBytes
+            : !body.DecodedBytes.IsEmpty
+                ? body.DecodedBytes
+                : body.CapturedBytes;
+        var decoded = body.WasDecoded ? body.DecodedBytes : ReadOnlyMemory<byte>.Empty;
+        if (!decoded.IsEmpty && decoded.Span.SequenceEqual(captured.Span))
+        {
+            decoded = ReadOnlyMemory<byte>.Empty;
+        }
+
+        var presentation = bodyFormatter.Format(body, message.Header("Content-Type"));
+        var fallbackText = captured.IsEmpty && body.Preview.Length > 0
+            ? body.Preview[..Math.Min(body.Preview.Length, 65536)]
+            : null;
+        var fallbackCapturedText = captured.IsEmpty && body.CapturedBytesPreview is not null
+            ? body.CapturedBytesPreview[..Math.Min(body.CapturedBytesPreview.Length, MaxHydratedDisplayCharacters)]
+            : null;
+        return new MessagePayload(
+            message.StartLine,
+            message.Headers.ToArray(),
+            new BodyPayload(
+                body.Length,
+                body.CapturedLength,
+                body.IsBinary,
+                body.IsTruncated || (fallbackText is not null && fallbackText.Length < body.Preview.Length),
+                body.Charset,
+                body.RemovedEncodings.ToArray(),
+                body.DecodingStatus,
+                Convert.ToBase64String(captured.Span),
+                decoded.IsEmpty ? null : Convert.ToBase64String(decoded.Span),
+                fallbackText,
+                fallbackCapturedText,
+                captured.IsEmpty && body.CapturedBytesPreview is not null
+                    ? body.CapturedBytesPreviewTruncated || fallbackCapturedText!.Length < body.CapturedBytesPreview.Length
+                    : null,
+                body.CapturedBytesPreview is not null),
+            presentation.Format.ToString().ToLowerInvariant(),
+            presentation.Label,
+            presentation.Status,
+            presentation.CanToggle,
+            DetectImageView(message),
+            SafeHtmlPreviewBuilder.TryCreate(message)?.Detection,
+            BuildAuthView(message) is not null);
     }
 
     private void AppendWebSocketInspector(
@@ -3183,14 +4004,12 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         var rawEnabled = message is not null;
         var anyEnabled = jsonEnabled || xmlEnabled || mapiEnabled || imageEnabled || webViewEnabled
             || hexEnabled || authEnabled || headersEnabled || rawEnabled;
-        var jsonCopy = CopyText(
+        var jsonCopy = CanonicalCopy(
             $"Copy {lowerTitle} JSON pretty text",
-            $"{lowerTitle} JSON pretty text",
-            jsonEnabled ? body!.Formatted : null);
-        var xmlCopy = CopyText(
+            $"{lowerTitle} JSON pretty text");
+        var xmlCopy = CanonicalCopy(
             $"Copy {lowerTitle} XML pretty text",
-            $"{lowerTitle} XML pretty text",
-            xmlEnabled ? body!.Formatted : null);
+            $"{lowerTitle} XML pretty text");
         var mapiCopy = new CopySource(
             $"Copy {lowerTitle} MAPI protocol tree",
             $"{lowerTitle} MAPI protocol tree",
@@ -3201,40 +4020,34 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             $"{lowerTitle} image metadata",
             null,
             imageEnabled ? "image" : null);
-        var webViewCopy = CopyText(
+        var webViewCopy = CanonicalCopy(
             $"Copy {lowerTitle} HTML source",
-            $"{lowerTitle} HTML source",
-            webView?.Source);
+            $"{lowerTitle} HTML source");
         var hexCopy = new CopySource(
             $"Copy {lowerTitle} hex view",
             $"{lowerTitle} hex view",
             null,
             hexEnabled ? "hex" : null);
-        var authCopy = CopyText(
+        var authCopy = CanonicalCopy(
             $"Copy redacted {lowerTitle} authentication headers",
-            $"redacted {lowerTitle} authentication headers",
-            auth?.Redacted);
-        var headersCopy = CopyText(
+            $"redacted {lowerTitle} authentication headers");
+        var headersCopy = CanonicalCopy(
             $"Copy {lowerTitle} headers",
-            $"{lowerTitle} headers",
-            message is not null ? BuildHeadersText(message) : default);
-        var rawCopy = CopyText(
+            $"{lowerTitle} headers");
+        var rawCopy = CanonicalCopy(
             $"Copy {lowerTitle} raw message",
-            $"{lowerTitle} raw message",
-            rawEnabled ? BuildRawText(message!, body!) : default);
-        html.Append("<section class=\"message-panel\"");
-        AppendCopyModelAttribute(
-            html,
-            jsonCopy,
-            xmlCopy,
-            webViewCopy,
-            webView,
-            authCopy,
-            auth?.Full,
-            headersCopy,
-            rawCopy,
-            message,
-            body);
+            $"{lowerTitle} raw message");
+        html.Append("<section class=\"message-panel\" data-message-side=\"")
+            .Append(side).Append('"');
+        if (body is not null)
+        {
+            html.Append(" data-body-format=\"").Append(body.Format.ToString().ToLowerInvariant())
+                .Append("\" data-body-label=\"");
+            Attribute(html, body.Label);
+            html.Append("\" data-body-status=\"");
+            Attribute(html, body.Status);
+            html.Append('"');
+        }
         html.Append('>');
 
         string? initial = !anyEnabled
@@ -3430,6 +4243,12 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             html.Append(" data-copy-kind=\"");
             Attribute(html, source.Kind);
             html.Append('"');
+            if (source.Kind == "canonical")
+            {
+                html.Append(" data-copy-key=\"");
+                Attribute(html, key);
+                html.Append('"');
+            }
         }
         else if (source.Error is not null)
         {
@@ -3444,150 +4263,6 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             html.Append('"');
         }
         html.Append(">Copy</button><span class=\"copy-status\" role=\"status\" aria-live=\"polite\"></span></div>");
-    }
-
-    private static void AppendCopyModelAttribute(
-        StringBuilder html,
-        CopySource json,
-        CopySource xml,
-        CopySource webView,
-        SafeHtmlPreview? webViewData,
-        CopySource auth,
-        string? authFull,
-        CopySource headers,
-        CopySource raw,
-        HttpMessage? message,
-        BodyPresentation? body)
-    {
-        var model = new Dictionary<string, string>(StringComparer.Ordinal);
-        Add("json", json);
-        Add("xml", xml);
-        Add("webview", webView);
-        Add("auth", auth);
-        Add("headers", headers);
-        Add("raw", raw);
-        if (webViewData is not null)
-        {
-            model.Add("webViewDocument", webViewData.Document);
-        }
-        if (authFull is not null)
-        {
-            var secret = CreateCompressedPayload(
-                "auth-secret",
-                Encoding.UTF8.GetBytes(authFull),
-                MaxCopyCharacters);
-            if (secret is not null)
-            {
-                model.Add("authSecret", secret.Base64);
-                model.Add("authSecretBytes", secret.DecodedBytes.ToString(CultureInfo.InvariantCulture));
-            }
-        }
-        if (message is not null && !message.Body.CapturedBytes.IsEmpty)
-        {
-            model.Add("capturedBytes", Convert.ToBase64String(message.Body.CapturedBytes.Span));
-        }
-        if (message is not null && message.Body.WasDecoded && !message.Body.DecodedBytes.IsEmpty)
-        {
-            model.Add(
-                "decodedBytes",
-                Convert.ToBase64String(message.Body.DecodedBytes.Span[..Math.Min(
-                    message.Body.DecodedBytes.Length,
-                    HexViewBytesLimit)]));
-        }
-        if (message is not null && DetectImageView(message) is not null)
-        {
-            model.Add("imageBytes", Convert.ToBase64String(message.Body.DecodedBytes.Span));
-        }
-        if (message is not null && headers.Text is null)
-        {
-            model.Add("displayHeaders", BuildHeadersDisplayText(message));
-        }
-        if (message is not null && body is not null && raw.Text is null)
-        {
-            model.Add("displayRawBody", BoundDisplayText(
-                body.Raw,
-                "[Body display truncated at the 256 KiB rendering limit.]"));
-            if (message.Body.CapturedBytesPreview is not null)
-            {
-                var captured = message.Body.CapturedBytesPreview
-                    + (message.Body.CapturedBytesPreviewTruncated
-                        ? "\n[Captured byte preview truncated]"
-                        : string.Empty);
-                model.Add("displayCaptured", BoundDisplayText(
-                    captured,
-                    "[Captured-byte display truncated at the 256 KiB rendering limit.]"));
-            }
-        }
-        if (model.Count == 0)
-        {
-            return;
-        }
-
-        var payload = CreateCompressedPayload(
-            "copy-model",
-            JsonSerializer.SerializeToUtf8Bytes(model),
-            CopyPayloadMaxDecodedBytes);
-        if (payload is not null)
-        {
-            AppendCompressedPayloadAttributes(html, payload);
-        }
-        else
-        {
-            html.Append(" data-payload-error=\"Copy/display data exceeds the compressed report safety limit.\"");
-        }
-
-        void Add(string key, CopySource source)
-        {
-            if (source.Text is not null)
-            {
-                model.Add(key, source.Text);
-            }
-        }
-    }
-
-    private static string BuildHeadersDisplayText(HttpMessage message)
-    {
-        const string marker = "[Header display truncated at the 256 KiB rendering limit.]\n";
-        var text = new StringBuilder(Math.Min(MaxHydratedDisplayCharacters, 16 * 1024));
-        if (!Append(message.StartLine + "\n"))
-        {
-            return text.ToString();
-        }
-        foreach (var header in message.Headers)
-        {
-            if (!Append($"{header.Name}: {header.Value}\n"))
-            {
-                break;
-            }
-        }
-        return text.ToString();
-
-        bool Append(string value)
-        {
-            var remaining = MaxHydratedDisplayCharacters - marker.Length - text.Length;
-            if (remaining <= 0)
-            {
-                text.Append(marker);
-                return false;
-            }
-            if (value.Length <= remaining)
-            {
-                text.Append(value);
-                return true;
-            }
-            text.Append(value.AsSpan(0, remaining)).Append(marker);
-            return false;
-        }
-    }
-
-    private static string BoundDisplayText(string value, string marker)
-    {
-        if (value.Length <= MaxHydratedDisplayCharacters)
-        {
-            return value;
-        }
-        var prefixLength = MaxHydratedDisplayCharacters - marker.Length - 1;
-        return string.Concat(value.AsSpan(0, prefixLength), "\n", marker);
     }
 
     private static CompressedPayload? CreateCompressedPayload(
@@ -3640,6 +4315,9 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
                 null,
                 Error: "Copy source exceeds the 1 MiB safety limit.");
     }
+
+    private static CopySource CanonicalCopy(string accessibleName, string description) =>
+        new(accessibleName, description, null, Kind: "canonical");
 
     private static CopySource CopyText(string accessibleName, string description, BuiltCopyText text) =>
         text.TooLarge
@@ -3754,19 +4432,11 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
 
     private static void AppendHeadersOnly(StringBuilder html, CopySource headersCopy)
     {
-        html.Append("<pre class=\"headers\" data-copy-field=\"")
-            .Append(headersCopy.Text is null ? "displayHeaders" : "headers")
-            .Append("\"></pre>");
+        html.Append("<pre class=\"headers\" data-copy-field=\"headers\"></pre>");
     }
 
     private static void AppendStructuredBody(StringBuilder html, BodyPresentation body, string format)
     {
-        var treeJson = format == "json" ? BuildJsonTreePayload(body.Formatted) : BuildXmlTreePayload(body.Formatted);
-        var treePayload = treeJson is null
-            ? null
-            : CreateCompressedPayload($"{format}-tree", treeJson, TreePayloadMaxDecodedBytes);
-        var treeAvailable = treePayload is not null;
-
         html.Append("<div class=\"structured-body\" data-format=\"").Append(format).Append("\">");
         html.Append("<div class=\"format-meta\"><span class=\"format-badge\">");
         Text(html, body.Label);
@@ -3776,36 +4446,14 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
 
         html.Append("<div class=\"tree-toolbar\"><div class=\"view-toggle\" role=\"group\" aria-label=\"")
             .Append(format == "json" ? "JSON" : "XML").Append(" view mode\">")
-            .Append("<button type=\"button\" data-view=\"tree\" aria-pressed=\"").Append(treeAvailable ? "true" : "false").Append('"');
-        if (!treeAvailable)
-        {
-            html.Append(" disabled");
-        }
-        html.Append(">Tree</button>")
-            .Append("<button type=\"button\" data-view=\"pretty\" aria-pressed=\"").Append(treeAvailable ? "false" : "true").Append("\">Pretty Text</button></div>");
-        if (treeAvailable)
-        {
-            html.Append("<button type=\"button\" class=\"tree-expand-all\">Expand all</button>")
-                .Append("<button type=\"button\" class=\"tree-collapse-all\">Collapse all</button>");
-        }
+            .Append("<button type=\"button\" data-view=\"tree\" aria-pressed=\"true\">Tree</button>")
+            .Append("<button type=\"button\" data-view=\"pretty\" aria-pressed=\"false\">Pretty Text</button></div>")
+            .Append("<button type=\"button\" class=\"tree-expand-all\">Expand all</button>")
+            .Append("<button type=\"button\" class=\"tree-collapse-all\">Collapse all</button>");
         html.Append("</div>");
 
-        html.Append("<div class=\"tree-subview\"");
-        if (treeAvailable)
-        {
-            AppendCompressedPayloadAttributes(html, treePayload!);
-        }
-        else
-        {
-            html.Append(" hidden");
-        }
-        html.Append('>');
-        html.Append(treeAvailable
-            ? "<span class=\"muted\">Tree loads when this session is selected.</span>"
-            : "<div class=\"tab-empty\">Tree view is not available for this body; showing Pretty Text.</div>");
-        html.Append("</div>");
-
-        html.Append("<div class=\"pretty-subview").Append(treeAvailable ? " hidden" : "")
+        html.Append("<div class=\"tree-subview\"><span class=\"muted\">Tree loads when this session is selected.</span></div>");
+        html.Append("<div class=\"pretty-subview hidden")
             .Append("\"><pre class=\"body-view formatted-view\" data-format=\"").Append(format)
             .Append("\" data-copy-field=\"").Append(format).Append("\"></pre></div></div>");
     }
@@ -3841,30 +4489,10 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
             Text(html, source.DecodingStatus);
             html.Append("</div>");
         }
-        html.Append("<pre class=\"body-view\" data-copy-field=\"");
-        if (rawCopy.Text is null)
-        {
-            html.Append("displayRawBody");
-        }
-        else
-        {
-            html.Append("raw\" data-copy-start=\"").Append(rawCopy.BodyStart)
-                .Append("\" data-copy-length=\"").Append(rawCopy.BodyLength);
-        }
-        html.Append("\"></pre>");
+        html.Append("<pre class=\"body-view\" data-copy-field=\"rawBody\"></pre>");
         if (source.CapturedBytesPreview is not null)
         {
-            html.Append("<details class=\"captured-bytes\"><summary>Captured bytes (pre-decode)</summary><pre data-copy-field=\"");
-            if (rawCopy.Text is null)
-            {
-                html.Append("displayCaptured");
-            }
-            else
-            {
-                html.Append("raw\" data-copy-start=\"").Append(rawCopy.CapturedStart)
-                    .Append("\" data-copy-length=\"").Append(rawCopy.CapturedLength);
-            }
-            html.Append("\"></pre></details>");
+            html.Append("<details class=\"captured-bytes\"><summary>Captured bytes (pre-decode)</summary><pre data-copy-field=\"captured\"></pre></details>");
         }
     }
 
@@ -3873,9 +4501,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         ImageViewInfo image,
         BodyPreview body)
     {
-        html.Append("<div class=\"image-view\" data-byte-field=\"")
-            .Append("imageBytes")
-            .Append("\" data-image-mime=\"");
+        html.Append("<div class=\"image-view\" data-image-mime=\"");
         Attribute(html, image.MimeType);
         html.Append("\"><div class=\"image-meta\"><span>");
         Text(html, image.MimeType);
@@ -3919,7 +4545,7 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         html.Append("<div class=\"hex-view\" data-captured-length=\"")
             .Append(body.CapturedLength)
             .Append("\" data-decoded-length=\"").Append(body.Length)
-            .Append("\" data-captured-retained=\"").Append(body.CapturedBytes.Length)
+            .Append("\" data-captured-retained=\"").Append(Math.Min(body.CapturedBytes.Length, HexViewBytesLimit))
             .Append("\" data-decoded-retained=\"").Append(Math.Min(body.DecodedBytes.Length, HexViewBytesLimit))
             .Append("\"><div class=\"hex-toolbar\"><span class=\"hex-source-label\">Captured body bytes</span>")
             .Append("<label>Source <select class=\"hex-source\" aria-label=\"Hex byte source\"><option value=\"captured\">Captured</option><option value=\"decoded\"");
@@ -4060,47 +4686,47 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
-            {
-                var properties = element.EnumerateObject().ToList();
-                var children = new List<TreeNode>();
-                var omitted = 0;
-                foreach (var property in properties)
                 {
-                    if (children.Count >= TreeMaxChildrenPerNode || budget.NodeCount >= TreeMaxNodes)
+                    var properties = element.EnumerateObject().ToList();
+                    var children = new List<TreeNode>();
+                    var omitted = 0;
+                    foreach (var property in properties)
                     {
-                        omitted = properties.Count - children.Count;
-                        break;
+                        if (children.Count >= TreeMaxChildrenPerNode || budget.NodeCount >= TreeMaxNodes)
+                        {
+                            omitted = properties.Count - children.Count;
+                            break;
+                        }
+                        children.Add(BuildJsonNode(property.Value, property.Name, false, depth + 1, budget));
                     }
-                    children.Add(BuildJsonNode(property.Value, property.Name, false, depth + 1, budget));
+                    return new TreeNode { Kind = "object", Name = name, IsIndex = isIndex, Count = properties.Count, Omitted = omitted, Children = children };
                 }
-                return new TreeNode { Kind = "object", Name = name, IsIndex = isIndex, Count = properties.Count, Omitted = omitted, Children = children };
-            }
             case JsonValueKind.Array:
-            {
-                var items = element.EnumerateArray().ToList();
-                var children = new List<TreeNode>();
-                var omitted = 0;
-                for (var i = 0; i < items.Count; i++)
                 {
-                    if (children.Count >= TreeMaxChildrenPerNode || budget.NodeCount >= TreeMaxNodes)
+                    var items = element.EnumerateArray().ToList();
+                    var children = new List<TreeNode>();
+                    var omitted = 0;
+                    for (var i = 0; i < items.Count; i++)
                     {
-                        omitted = items.Count - children.Count;
-                        break;
+                        if (children.Count >= TreeMaxChildrenPerNode || budget.NodeCount >= TreeMaxNodes)
+                        {
+                            omitted = items.Count - children.Count;
+                            break;
+                        }
+                        children.Add(BuildJsonNode(items[i], i.ToString(CultureInfo.InvariantCulture), true, depth + 1, budget));
                     }
-                    children.Add(BuildJsonNode(items[i], i.ToString(CultureInfo.InvariantCulture), true, depth + 1, budget));
+                    return new TreeNode { Kind = "array", Name = name, IsIndex = isIndex, Count = items.Count, Omitted = omitted, Children = children };
                 }
-                return new TreeNode { Kind = "array", Name = name, IsIndex = isIndex, Count = items.Count, Omitted = omitted, Children = children };
-            }
             case JsonValueKind.String:
-            {
-                var (value, truncated) = BoundScalar(element.GetString() ?? string.Empty);
-                return new TreeNode { Kind = "string", Name = name, IsIndex = isIndex, Value = value, Truncated = truncated };
-            }
+                {
+                    var (value, truncated) = BoundScalar(element.GetString() ?? string.Empty);
+                    return new TreeNode { Kind = "string", Name = name, IsIndex = isIndex, Value = value, Truncated = truncated };
+                }
             case JsonValueKind.Number:
-            {
-                var (value, truncated) = BoundScalar(element.GetRawText());
-                return new TreeNode { Kind = "number", Name = name, IsIndex = isIndex, Value = value, Truncated = truncated };
-            }
+                {
+                    var (value, truncated) = BoundScalar(element.GetRawText());
+                    return new TreeNode { Kind = "number", Name = name, IsIndex = isIndex, Value = value, Truncated = truncated };
+                }
             case JsonValueKind.True:
             case JsonValueKind.False:
                 return new TreeNode { Kind = "boolean", Name = name, IsIndex = isIndex, Value = element.GetRawText() };
@@ -4160,21 +4786,21 @@ else if(initialInspectorState)enterInspectorOnlyMode(initialInspectorState);
         switch (reader.NodeType)
         {
             case XmlNodeType.Comment:
-            {
-                var (value, truncated) = BoundScalar(reader.Value);
-                return new TreeNode { Kind = "comment", Value = value, Truncated = truncated };
-            }
+                {
+                    var (value, truncated) = BoundScalar(reader.Value);
+                    return new TreeNode { Kind = "comment", Value = value, Truncated = truncated };
+                }
             case XmlNodeType.CDATA:
-            {
-                var (value, truncated) = BoundScalar(reader.Value);
-                return new TreeNode { Kind = "cdata", Value = value, Truncated = truncated };
-            }
+                {
+                    var (value, truncated) = BoundScalar(reader.Value);
+                    return new TreeNode { Kind = "cdata", Value = value, Truncated = truncated };
+                }
             case XmlNodeType.Text:
             case XmlNodeType.SignificantWhitespace:
-            {
-                var (value, truncated) = BoundScalar(reader.Value);
-                return new TreeNode { Kind = "text", Value = value, Truncated = truncated };
-            }
+                {
+                    var (value, truncated) = BoundScalar(reader.Value);
+                    return new TreeNode { Kind = "text", Value = value, Truncated = truncated };
+                }
             case XmlNodeType.Element:
                 return BuildXmlElement(reader, depth, budget);
             default:
