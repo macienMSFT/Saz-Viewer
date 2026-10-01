@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.RegularExpressions;
 using ICSharpCode.SharpZipLib.Zip;
 using SazViewer.Cli;
 using SazViewer.Core;
@@ -829,6 +830,88 @@ public sealed class EncryptedSazCliTests
         Assert.Contains("up to three attempts", console.Output, StringComparison.Ordinal);
         Assert.Contains("Leading and trailing", console.Output, StringComparison.Ordinal);
         Assert.Contains("not supported", console.Output, StringComparison.Ordinal);
+        Assert.Contains("--scrub-auth", console.Output, StringComparison.Ordinal);
+        Assert.Contains("-ScrubAuth", console.Output, StringComparison.Ordinal);
+        Assert.Contains("typed markers", console.Output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("--scrub-auth")]
+    [InlineData("-ScrubAuth")]
+    public void ScrubAuthOptionRemovesSecretsAndPrintsCounts(string option)
+    {
+        const string canary = "cli-auth-canary-941d53e2";
+        using var directory = new TemporaryDirectory();
+        var input = directory.PathFor("capture.saz");
+        var output = directory.PathFor("report.html");
+        WritePlainSaz(
+            input,
+            $"POST /login?access_token={canary} HTTP/1.1\r\n"
+            + "Host: example.test\r\n"
+            + $"Authorization: Bearer {canary}\r\n"
+            + $"Cookie: auth={canary}\r\n"
+            + "Content-Type: application/json\r\n\r\n"
+            + $$"""{"client_secret":"{{canary}}"}""",
+            $"HTTP/1.1 200 OK\r\nSet-Cookie: session={canary}; Path=/\r\nContent-Type: text/plain\r\n\r\npassword={canary}");
+        var console = FakeConsole.Redirected("");
+
+        var exitCode = new CliApplication(console).Run([option, input, output]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Authentication scrub:", console.Output, StringComparison.Ordinal);
+        Assert.Contains("Bearer:", console.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain(canary, console.Output + console.Error, StringComparison.Ordinal);
+        var html = File.ReadAllText(output);
+        Assert.Contains("This report was generated with --scrub-auth.", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(canary, html, StringComparison.Ordinal);
+        foreach (Match match in Regex.Matches(html, "data-compressed-payload=\"([A-Za-z0-9+/=]+)\""))
+        {
+            using var compressed = new MemoryStream(Convert.FromBase64String(match.Groups[1].Value));
+            using var gzip = new GZipStream(compressed, CompressionMode.Decompress);
+            using var reader = new StreamReader(gzip, Encoding.UTF8);
+            Assert.DoesNotContain(canary, reader.ReadToEnd(), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void WithoutScrubAuthCliOutputMatchesDirectGeneration()
+    {
+        using var directory = new TemporaryDirectory();
+        var input = directory.PathFor("capture.saz");
+        var output = directory.PathFor("report.html");
+        WritePlainSaz(
+            input,
+            "GET /?token=unchanged-canary HTTP/1.1\r\nHost: example.test\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nunchanged");
+        var expected = new HtmlReportGenerator().Generate(new SazParser().Parse(input));
+
+        Assert.Equal(0, new CliApplication(FakeConsole.Redirected("")).Run([input, output]));
+
+        Assert.Equal(expected, File.ReadAllText(output));
+    }
+
+    [Fact]
+    public void RejectsDuplicateScrubAuthOption()
+    {
+        var console = FakeConsole.Redirected("");
+
+        Assert.Equal(2, new CliApplication(console).Run(["--scrub-auth", "-ScrubAuth", "capture.saz"]));
+        Assert.Contains("may be specified only once", console.Error, StringComparison.Ordinal);
+    }
+
+    private static void WritePlainSaz(string path, string request, string response)
+    {
+        using var stream = File.Create(path);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
+        WriteEntry(archive, "raw/1_c.txt", request);
+        WriteEntry(archive, "raw/1_s.txt", response);
+    }
+
+    private static void WriteEntry(ZipArchive archive, string name, string value)
+    {
+        var entry = archive.CreateEntry(name);
+        using var output = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+        output.Write(value);
     }
 
     private static int Count(string value, string fragment)

@@ -62,6 +62,10 @@ internal sealed class CliApplication(ICliConsole console)
                 ? new StandardInputPasswordProvider(console)
                 : new InteractivePasswordProvider(console);
             var report = new SazParser().Parse(inputPath, passwordProvider);
+            if (parsed.ScrubAuth)
+            {
+                AuthScrubber.Scrub(report);
+            }
             var html = new HtmlReportGenerator().Generate(report);
             var outputDirectory = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrEmpty(outputDirectory))
@@ -76,6 +80,14 @@ internal sealed class CliApplication(ICliConsole console)
             console.WriteLine($"Created: {outputPath}");
             console.WriteLine(
                 $"HTTP sessions: {report.Sessions.Count}; WebSocket messages: {report.WebSocketMessages.Count}; Warnings: {report.Warnings.Count}");
+            if (report.AuthScrub is { } scrub)
+            {
+                console.WriteLine(
+                    $"Authentication scrub: {scrub.Total:N0} value(s) replaced"
+                    + (scrub.Counts.Count == 0
+                        ? "."
+                        : $" ({string.Join(", ", scrub.Counts.Select(item => $"{item.Key}: {item.Value:N0}"))})."));
+            }
             if (report.Warnings.Count > 0)
             {
                 console.WriteLine("The report contains warning details for entries that could not be fully parsed.");
@@ -120,6 +132,7 @@ internal sealed class CliApplication(ICliConsole console)
         out string error)
     {
         var passwordFromStandardInput = false;
+        var scrubAuth = false;
         var positional = new List<string>(2);
         foreach (var argument in args)
         {
@@ -132,6 +145,17 @@ internal sealed class CliApplication(ICliConsole console)
                     return false;
                 }
                 passwordFromStandardInput = true;
+            }
+            else if (argument.Equals("--scrub-auth", StringComparison.OrdinalIgnoreCase)
+                || argument.Equals("-ScrubAuth", StringComparison.OrdinalIgnoreCase))
+            {
+                if (scrubAuth)
+                {
+                    parsed = default;
+                    error = "--scrub-auth/-ScrubAuth may be specified only once.";
+                    return false;
+                }
+                scrubAuth = true;
             }
             else if (argument.StartsWith('-'))
             {
@@ -155,7 +179,8 @@ internal sealed class CliApplication(ICliConsole console)
         parsed = new ParsedArguments(
             positional[0],
             positional.Count == 2 ? positional[1] : null,
-            passwordFromStandardInput);
+            passwordFromStandardInput,
+            scrubAuth);
         error = "";
         return true;
     }
@@ -167,7 +192,7 @@ internal sealed class CliApplication(ICliConsole console)
             SAZ Viewer - create a portable, local HTML report from a Fiddler SAZ archive.
 
             Usage:
-              saz-viewer [--password-stdin] <input.saz> [output.html]
+              saz-viewer [--password-stdin] [--scrub-auth] <input.saz> [output.html]
               saz-viewer --help
 
             Encrypted SAZ archives are detected automatically. When necessary, the tool
@@ -176,6 +201,12 @@ internal sealed class CliApplication(ICliConsole console)
             characters) from standard input and does not retry. Leading and trailing
             password spaces are preserved. A password command-line option is intentionally
             not supported because process arguments can leak secrets.
+
+            --scrub-auth (also -ScrubAuth) replaces credentials, tokens, cookies,
+            secret query/body fields, WebSocket values, and MAPI authentication values
+            with typed markers before report generation. Binary retained bytes that
+            cannot be safely rewritten are omitted. The report and CLI show replacement
+            counts but never print the captured secret values.
 
             If output.html is omitted, the report is written beside the archive using
             the same base name. The tool never executes captured content or accesses
@@ -190,7 +221,8 @@ internal sealed class CliApplication(ICliConsole console)
     private readonly record struct ParsedArguments(
         string InputPath,
         string? OutputPath,
-        bool PasswordFromStandardInput);
+        bool PasswordFromStandardInput,
+        bool ScrubAuth);
 }
 
 internal sealed class InteractivePasswordProvider(ICliConsole console) : ISazPasswordProvider

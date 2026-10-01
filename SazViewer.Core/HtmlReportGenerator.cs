@@ -181,6 +181,10 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 </head>
 <body><main>
 """);
+        if (report.AuthScrub is not null)
+        {
+            AppendAuthScrubBanner(html, report.AuthScrub);
+        }
         AppendHttpSection(html, report.Sessions, report.WebSocketMessages);
         html.Append("""
 </main>

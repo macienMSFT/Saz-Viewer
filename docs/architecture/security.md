@@ -7,7 +7,10 @@ flowchart LR
     U["Untrusted SAZ bytes"] --> A["Archive validation<br/>size / count / encryption"]
     A --> P["Bounded parsers<br/>warnings + raw fallback"]
     P --> M["Typed in-memory model"]
-    M --> E["HTML encoding +<br/>compressed JSON envelopes"]
+    M --> S{"--scrub-auth?"}
+    S -->|No| E["HTML encoding +<br/>compressed JSON envelopes"]
+    S -->|Yes| R["Deterministic post-parse scrub<br/>typed markers + byte removal"]
+    R --> E
     E --> B["Outer report CSP<br/>no network"]
     B --> D["DOM/text-node rendering"]
     D --> W["Opaque sandboxed WebView<br/>deny-all child CSP"]
@@ -80,6 +83,16 @@ Captured HTML is never inserted into the parent report DOM. Active search switch
 The Auth view recognizes only `Authorization`, `Proxy-Authorization`, `WWW-Authenticate`, and `Proxy-Authenticate`. It starts redacted and conservatively masks credentials, tokens, nonces, responses, and unknown schemes. Full values are read from the already bounded canonical model only after explicit Reveal.
 
 Reveal state is scoped to one side/session/view and resets on tab change, navigation, close, or teardown. Before reveal, full values do not appear in Auth DOM text, attributes, accessible names, titles, search results, or copied Auth text. Full captured values remain visible in Headers and Raw by product design.
+
+## Export scrubbing
+
+`--scrub-auth` is an explicit export transformation, separate from the Auth tab's interactive masking. The parser first uses the original bounded values so JSON, XML, HTTP decoding, WebSocket assembly, and MAPI semantics remain intact. `AuthScrubber` then rewrites the in-memory report before any outer HTML or compressed payload envelope is generated.
+
+The scrub pass covers request/response start lines and headers, every cookie value, sensitive URL parameters, JSON/form/XML/multipart/plain-text bodies, decodable WebSocket payloads, MAPI names/values/warnings, metadata, timers, and warnings. It recognizes authentication schemes and challenges, common API/subscription/function/CSRF headers, Azure SAS and shared-key forms, OAuth fields, JWT/JWE, GitHub/Slack/AWS/Google tokens, private keys, SAML assertions, and common webhook URLs. Replacements preserve surrounding structure where practical and use deterministic typed markers. A report banner and CLI summary contain marker counts only; secret values are never logged by the scrubber.
+
+Opaque data is fail-closed. If a retained HTTP or WebSocket payload cannot be decoded and safely rewritten, its bytes are dropped and the model receives an explicit `removed by --scrub-auth` note. Malformed declared JSON/XML/multipart bodies, binary WebSocket messages, and raw MAPI byte nodes are removed rather than interpreted heuristically; URL user-info is redacted. When decoded HTTP content is scrubbed, pre-decode compressed/transfer-encoded bytes are also removed so HexView, Image, WebView, Raw, search, and copy cannot recover the original. The unflagged path never invokes the scrubber and does not emit scrub metadata or UI.
+
+Scrubbing intentionally favors over-redaction and is defense in depth rather than a data-classification guarantee. Tests seed canaries across synthetic SAZ locations, inspect the resulting model and outer HTML, decompress every embedded gzip envelope, decode retained byte fields, and exercise representative inspector views in Edge.
 
 ## Review checklist
 

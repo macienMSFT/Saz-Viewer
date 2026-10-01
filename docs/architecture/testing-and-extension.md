@@ -5,6 +5,7 @@
 | Test area | Main files | What it proves |
 |---|---|---|
 | Archive/encryption | `EncryptedSazTests.cs` | AES/ZipCrypto authentication, retries, corruption, limits, password handling |
+| Export scrubbing | `AuthScrubberTests.cs`, `AuthScrubberBrowserTests.cs` | Typed-marker detection, parser-generated canaries, retained-byte leak checks, CLI aliases, and Edge view rendering |
 | SAZ and HTTP | `SazParserTests.cs`, `HttpBodyDecodingTests.cs` | sparse discovery, metadata, ordering, body boundaries, codings, byte retention |
 | WebSocket | `SazParserTests.cs` plus browser tests | Fiddler records, RFC frames, fragmentation, limits, inspector behavior |
 | MAPI primitives | `MapiReaderTests.cs`, NSPI/rule/action tests | byte widths, offsets, restrictions, properties, entry IDs |

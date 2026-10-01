@@ -11,6 +11,25 @@ namespace SazViewer.Core;
 
 public sealed partial class HtmlReportGenerator
 {
+    private static void AppendAuthScrubBanner(StringBuilder html, AuthScrubSummary summary)
+    {
+        html.Append("<aside class=\"warning auth-scrub-banner\" role=\"status\" aria-label=\"Authentication scrub summary\"><strong>This report was generated with --scrub-auth.</strong> ")
+            .Append(summary.Total.ToString("N0", CultureInfo.InvariantCulture))
+            .Append(" secret value(s) were replaced.");
+        if (summary.Counts.Count > 0)
+        {
+            html.Append("<ul>");
+            foreach (var item in summary.Counts)
+            {
+                html.Append("<li>");
+                Text(html, item.Key);
+                html.Append(": ").Append(item.Value.ToString("N0", CultureInfo.InvariantCulture)).Append("</li>");
+            }
+            html.Append("</ul>");
+        }
+        html.Append("</aside>");
+    }
+
     private void AppendHttpSection(
         StringBuilder html,
         IReadOnlyList<HttpSession> sessions,

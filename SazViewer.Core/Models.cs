@@ -7,6 +7,12 @@ public sealed class SazReport
     public List<WebSocketMessage> WebSocketMessages { get; } = [];
     public List<string> Warnings { get; } = [];
     public MapiCapture? Mapi { get; internal set; }
+    public AuthScrubSummary? AuthScrub { get; internal set; }
+}
+
+public sealed record AuthScrubSummary(IReadOnlyDictionary<string, int> Counts)
+{
+    public int Total => Counts.Values.Sum();
 }
 
 public sealed class HttpSession
