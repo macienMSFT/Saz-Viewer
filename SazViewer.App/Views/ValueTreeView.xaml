@@ -74,9 +74,10 @@
                     </Border>
                     <controls:RichLine Grid.Column="2" Line="{Binding Line}" Version="{Binding Line.Version}" TextWrapping="Wrap"
                                        VerticalAlignment="Top" Margin="0,2" />
-                    <TextBlock Grid.Column="3" Text="{Binding Meta}" Foreground="{DynamicResource Saz.Muted}" Margin="12,2,0,2"
-                               VerticalAlignment="Top"
-                               Visibility="{Binding Meta, Converter={StaticResource NotNullToVisibility}}" />
+                    <controls:RichLine Grid.Column="3" Line="{Binding MetaLine}" Version="{Binding MetaLine.Version}"
+                                       Foreground="{DynamicResource Saz.Muted}" FontSize="11" Margin="12,3,0,2"
+                                       VerticalAlignment="Top"
+                                       Visibility="{Binding MetaLine, Converter={StaticResource NotNullToVisibility}}" />
                 </Grid>
                 <DataTemplate.Triggers>
                     <DataTrigger Binding="{Binding IsExpandable}" Value="False">

@@ -39,6 +39,25 @@
         <views:WebPreviewView />
     </DataTemplate>
 
+    <DataTemplate DataType="{x:Type vm:MapiViewModel}">
+        <DockPanel>
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                <TextBlock DockPanel.Dock="Right" Text="{Binding Status}" Foreground="{DynamicResource Saz.Muted}" FontSize="11"
+                           Margin="12,0,0,0" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                <TextBlock Text="{Binding Summary}" Foreground="{DynamicResource Saz.Muted}" TextWrapping="Wrap" VerticalAlignment="Center" />
+            </DockPanel>
+            <Border DockPanel.Dock="Top" Style="{StaticResource Saz.Warning}"
+                    Visibility="{Binding WarningText, Converter={StaticResource NotNullToVisibility}}">
+                <ScrollViewer MaxHeight="96" VerticalScrollBarVisibility="Auto" Focusable="False">
+                    <TextBox Text="{Binding WarningText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0"
+                             Background="Transparent" Foreground="{DynamicResource Saz.Text}" Padding="0"
+                             AutomationProperties.Name="MAPI parser warnings" />
+                </ScrollViewer>
+            </Border>
+            <ContentControl Content="{Binding Tree}" Focusable="False" />
+        </DockPanel>
+    </DataTemplate>
+
     <DataTemplate DataType="{x:Type vm:PlaceholderViewModel}">
         <TextBlock Text="{Binding Message}" Foreground="{DynamicResource Saz.Muted}" TextWrapping="Wrap" Margin="4" />
     </DataTemplate>

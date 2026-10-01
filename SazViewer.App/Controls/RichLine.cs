@@ -82,6 +82,8 @@ internal sealed class RichLine : TextBlock
             SpanStyle.Attribute => "Saz.SynPurple",
             SpanStyle.Accent or SpanStyle.Name => "Saz.Accent",
             SpanStyle.Warning => "Saz.Warn",
+            SpanStyle.ProtocolKind => "Saz.ProtocolKind",
+            SpanStyle.ProtocolBinary => "Saz.ProtocolBinary",
             _ => null
         };
         if (brush is not null)

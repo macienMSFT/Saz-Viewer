@@ -11,6 +11,12 @@ internal sealed record TreeItem(string Text, IReadOnlyList<StyledSpan> Spans, IR
     public bool IsStatus { get; init; }
 
     public string? Meta { get; init; }
+
+    /// <summary>Styling for <see cref="Meta"/> (e.g. the coloured MAPI kind).</summary>
+    public IReadOnlyList<StyledSpan>? MetaSpans { get; init; }
+
+    /// <summary>Overrides the UIA name (defaults to <c>Text, Meta</c>).</summary>
+    public string? AccessibleName { get; init; }
 }
 
 /// <summary>A row of a <see cref="ValueTreeViewModel"/>; all rows exist up front, only visible ones are listed.</summary>
@@ -25,9 +31,17 @@ internal sealed class TreeRow : ObservableObject
         Meta = item.Meta;
         IsStatus = item.IsStatus;
         Line = new DocumentLine(item.Text, item.IsStatus ? LineKind.Muted : LineKind.Code, item.Spans, 0, 0, null);
+        if (item.Meta is not null)
+        {
+            MetaLine = new DocumentLine(item.Meta, LineKind.Muted, item.MetaSpans ?? [], 0, 0, null);
+        }
+        AccessibleName = item.AccessibleName ?? (Meta is null ? Text : $"{Text}, {Meta}");
     }
 
     public DocumentLine Line { get; }
+
+    /// <summary>The metadata column as a searchable, highlightable line (null when there is no metadata).</summary>
+    public DocumentLine? MetaLine { get; }
 
     public string Text => Line.Text;
 
@@ -66,7 +80,7 @@ internal sealed class TreeRow : ObservableObject
 
     public int SizeOfSet { get; internal set; }
 
-    public string AccessibleName => Meta is null ? Text : $"{Text}, {Meta}";
+    public string AccessibleName { get; }
 }
 
 /// <summary>
@@ -78,6 +92,7 @@ internal sealed class ValueTreeViewModel : ISearchableView
     private readonly List<TreeRow> roots = [];
     private readonly List<TreeRow> all = [];
     private List<TreeRow> matchRows = [];
+    private List<DocumentLine> matchLines = [];
     private Dictionary<TreeRow, bool>? snapshot;
     private int currentMatch = -1;
 
@@ -129,21 +144,8 @@ internal sealed class ValueTreeViewModel : ISearchableView
         var capped = false;
         foreach (var row in all)
         {
-            var highlights = new List<RowHighlight>();
-            foreach (var start in SearchText.Matches(row.Text, foldedQuery))
-            {
-                if (matchRows.Count >= SearchText.MaxMatches)
-                {
-                    capped = true;
-                    break;
-                }
-                highlights.Add(new RowHighlight(start, foldedQuery.Length, matchRows.Count));
-                matchRows.Add(row);
-            }
-            if (highlights.Count > 0)
-            {
-                row.Line.SetHighlights(highlights, -1);
-            }
+            capped = !Highlight(row, row.Line, foldedQuery)
+                || (row.MetaLine is not null && !Highlight(row, row.MetaLine, foldedQuery));
             if (capped)
             {
                 break;
@@ -171,22 +173,23 @@ internal sealed class ValueTreeViewModel : ISearchableView
         {
             return;
         }
-        if (currentMatch >= 0 && currentMatch < matchRows.Count)
+        if (currentMatch >= 0 && currentMatch < matchLines.Count)
         {
-            matchRows[currentMatch].Line.SetCurrentMatch(-1);
+            matchLines[currentMatch].SetCurrentMatch(-1);
         }
         currentMatch = index;
-        matchRows[index].Line.SetCurrentMatch(index);
+        matchLines[index].SetCurrentMatch(index);
         ScrollRequested?.Invoke(this, matchRows[index]);
     }
 
     public void ClearSearch()
     {
-        foreach (var row in matchRows.Distinct())
+        foreach (var line in matchLines.Distinct())
         {
-            row.Line.SetHighlights([], -1);
+            line.SetHighlights([], -1);
         }
         matchRows = [];
+        matchLines = [];
         currentMatch = -1;
         if (snapshot is not null)
         {
@@ -197,6 +200,29 @@ internal sealed class ValueTreeViewModel : ISearchableView
             snapshot = null;
             Refresh();
         }
+    }
+
+    /// <summary>Highlights matches in one line of <paramref name="row"/>; false once the match cap is reached.</summary>
+    private bool Highlight(TreeRow row, DocumentLine line, string foldedQuery)
+    {
+        var highlights = new List<RowHighlight>();
+        var withinCap = true;
+        foreach (var start in SearchText.Matches(line.Text, foldedQuery))
+        {
+            if (matchRows.Count >= SearchText.MaxMatches)
+            {
+                withinCap = false;
+                break;
+            }
+            highlights.Add(new RowHighlight(start, foldedQuery.Length, matchRows.Count));
+            matchRows.Add(row);
+            matchLines.Add(line);
+        }
+        if (highlights.Count > 0)
+        {
+            line.SetHighlights(highlights, -1);
+        }
+        return withinCap;
     }
 
     /// <summary>Plain-text outline of the visible rows (two spaces per level), used for row copy.</summary>

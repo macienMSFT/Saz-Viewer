@@ -32,7 +32,11 @@ internal enum SpanStyle
     Bold,
     Warning,
     /// <summary>Tree node name: accent colour, semibold.</summary>
-    Name
+    Name,
+    /// <summary>MAPI node kind in the technical column.</summary>
+    ProtocolKind,
+    /// <summary>MAPI binary (Raw) value.</summary>
+    ProtocolBinary
 }
 
 internal readonly record struct StyledSpan(int Start, int Length, SpanStyle Style)

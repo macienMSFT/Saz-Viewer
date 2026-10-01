@@ -154,6 +154,7 @@ internal sealed class MessagePaneViewModel : ObservableObject
             "auth" => new AuthViewModel(HtmlReportGenerator.BuildAuthView(content.Message)!),
             "image" => new ImageViewModel(content.Image!, content.BodyBytes, content.Body.Length),
             "webview" => new WebPreviewViewModel(content.HtmlPreview!, content.DecodeBodyText),
+            "mapi" => new MapiViewModel(Protocol!),
             _ => new PlaceholderViewModel($"The native {TabOrder.First(tab => tab.Key == key).Label} view is not available yet.")
         };
     }
