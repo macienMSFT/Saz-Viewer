@@ -1,8 +1,17 @@
 namespace SazViewer.Core;
 
+public enum CaptureFormat
+{
+    Saz,
+    Har
+}
+
 public sealed class SazReport
 {
     public required string SourceName { get; init; }
+    public CaptureFormat Format { get; init; } = CaptureFormat.Saz;
+    public string? Creator { get; init; }
+    public string? Browser { get; init; }
     public List<HttpSession> Sessions { get; } = [];
     public List<WebSocketMessage> WebSocketMessages { get; } = [];
     public List<string> Warnings { get; } = [];
