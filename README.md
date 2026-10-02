@@ -52,6 +52,8 @@ If a session has associated `_w.txt` traffic, the same row opens a WebSocket ins
 
 `SazViewer.App` is a WPF (`net8.0-windows`) app that shows each capture in native WPF views with the same behavior as the HTML report: the session grid with filters, search and Hide CONNECT; the inspector with Previous/Next, split view and per-side JSON, XML, MAPI, Image, WebView, HexView, Auth, Headers and Raw tabs; per-pane search and Copy; and the WebSocket inspector. **Export HTML** still writes the CLI's exact report. See [Desktop app: native views](docs/architecture/desktop-app.md) for the architecture.
 
+<img src="SazViewer.App/Assets/SazViewer-256.png" alt="SAZ Viewer icon" width="64" align="right">The app icon is an original design: a capture sheet listing sessions under a magnifier. `SazViewer.App\Assets\Generate-Icon.ps1` is its source; it uses only System.Drawing to write the SVG, a 256 px PNG and `SazViewer.ico` (16–256 px). The icon is embedded in the exe (Explorer, the taskbar and the `.saz` association's `DefaultIcon`) and is set on the main and pop-out inspector windows. To change it, edit the script and run `pwsh -File .\SazViewer.App\Assets\Generate-Icon.ps1`.
+
 ```powershell
 dotnet run --project .\SazViewer.App
 dotnet run --project .\SazViewer.App -- .\capture.saz .\other.saz
