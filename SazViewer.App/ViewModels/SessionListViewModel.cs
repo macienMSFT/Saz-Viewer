@@ -50,6 +50,7 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
     private SessionFilterOption filter = FilterOptions[0];
     private bool hideConnect;
     private SessionSortColumn sortColumn = SessionSortColumn.Index;
+    private SessionColumnDefinition? sortDefinition;
     private ListSortDirection sortDirection = ListSortDirection.Ascending;
     private SessionRow? selectedRow;
     private bool searchPayloads;
@@ -70,6 +71,11 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
         this.payloadCache = payloadCache ?? new PayloadSearchCache();
         this.payloadDebounce = payloadDebounce ?? TimeSpan.FromMilliseconds(250);
         searchPayloads = preferences?.SearchPayloads == true;
+        GridColumns = SessionColumnCatalog.Resolve(preferences?.GridColumns ?? new UiPreferences(null).GridColumns);
+        if (preferences is not null)
+        {
+            preferences.GridColumnsChanged += OnGridColumnsChanged;
+        }
         VisibleRows = new BulkObservableCollection<SessionRow>(rows);
         CancelPayloadSearchCommand = new RelayCommand(CancelPayloadSearch, () => IsPayloadSearching);
     }
@@ -80,6 +86,10 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
 
     /// <summary>Raised after <see cref="VisibleRows"/> is recomputed.</summary>
     public event EventHandler? VisibleRowsChanged;
+
+    public event EventHandler? GridColumnsChanged;
+
+    public IReadOnlyList<SessionColumnDefinition> GridColumns { get; private set; }
 
     public RelayCommand CancelPayloadSearchCommand { get; }
 
@@ -175,6 +185,30 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
     public void Sort(SessionSortColumn column, ListSortDirection direction)
     {
         sortColumn = column;
+        sortDefinition = column == SessionSortColumn.Index
+            ? null
+            : SessionColumnCatalog.BuiltIns.FirstOrDefault(candidate => candidate.Id == column switch
+            {
+                SessionSortColumn.Time => "time",
+                SessionSortColumn.Id => "id",
+                SessionSortColumn.Result => "result",
+                SessionSortColumn.Method => "method",
+                SessionSortColumn.Url => "url",
+                SessionSortColumn.Elapsed => "elapsed",
+                SessionSortColumn.RequestSize => "request-size",
+                SessionSortColumn.ResponseSize => "response-size",
+                _ => ""
+            });
+        sortDirection = direction;
+        OnPropertyChanged(nameof(SortColumn));
+        OnPropertyChanged(nameof(SortDirection));
+        Refresh();
+    }
+
+    public void Sort(SessionColumnDefinition? column, ListSortDirection direction)
+    {
+        sortDefinition = column;
+        sortColumn = column is null ? SessionSortColumn.Index : SortColumnFor(column.Id);
         sortDirection = direction;
         OnPropertyChanged(nameof(SortColumn));
         OnPropertyChanged(nameof(SortDirection));
@@ -187,6 +221,8 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
         var folded = query.ToLowerInvariant();
         if (folded.Length > 0
             && !row.SearchText.Contains(folded, StringComparison.Ordinal)
+            && !GridColumns.Where(column => column.Setting.Visible)
+                .Any(column => row.ColumnValue(column).Display.Contains(folded, StringComparison.OrdinalIgnoreCase))
             && !(SearchPayloads
                  && payloadResultQuery == folded
                  && payloadMatches.Contains(row)))
@@ -218,9 +254,9 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
     private void Refresh()
     {
         IEnumerable<SessionRow> visible = rows.Where(Matches);
-        if (sortColumn != SessionSortColumn.Index || sortDirection != ListSortDirection.Ascending)
+        if (sortDefinition is not null)
         {
-            visible = visible.Order(RowComparer.For(sortColumn, sortDirection == ListSortDirection.Descending));
+            visible = visible.Order(ColumnRowComparer.For(sortDefinition, sortDirection == ListSortDirection.Descending));
         }
         VisibleRows.ReplaceAll(visible.ToList());
         OnPropertyChanged(nameof(CountText));
@@ -310,41 +346,64 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        if (preferences is not null)
+        {
+            preferences.GridColumnsChanged -= OnGridColumnsChanged;
+        }
         payloadSearchCancellation?.Cancel();
         payloadSearchCancellation?.Dispose();
         payloadSearchCancellation = null;
         IsPayloadSearching = false;
     }
 
-    /// <summary>Typed comparisons with chronological order as the tie-breaker in both directions; missing values sort first.</summary>
-    private sealed class RowComparer(SessionSortColumn column, bool descending) : IComparer<SessionRow>
+    private void OnGridColumnsChanged(object? sender, EventArgs e)
     {
-        public static RowComparer For(SessionSortColumn column, bool descending) => new(column, descending);
+        GridColumns = SessionColumnCatalog.Resolve(preferences?.GridColumns ?? []);
+        sortDefinition = sortDefinition is null
+            ? null
+            : GridColumns.FirstOrDefault(column => column.Id == sortDefinition.Id && column.Setting.Visible);
+        if (sortDefinition is null)
+        {
+            sortColumn = SessionSortColumn.Index;
+            sortDirection = ListSortDirection.Ascending;
+        }
+        OnPropertyChanged(nameof(GridColumns));
+        Refresh();
+        GridColumnsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static SessionSortColumn SortColumnFor(string id) => id switch
+    {
+        "time" => SessionSortColumn.Time,
+        "id" => SessionSortColumn.Id,
+        "result" => SessionSortColumn.Result,
+        "method" => SessionSortColumn.Method,
+        "url" => SessionSortColumn.Url,
+        "elapsed" => SessionSortColumn.Elapsed,
+        "request-size" => SessionSortColumn.RequestSize,
+        "response-size" => SessionSortColumn.ResponseSize,
+        _ => SessionSortColumn.Index
+    };
+
+    /// <summary>Typed comparison with blanks last and chronological order as the stable tie-breaker.</summary>
+    private sealed class ColumnRowComparer(SessionColumnDefinition column, bool descending) : IComparer<SessionRow>
+    {
+        public static ColumnRowComparer For(SessionColumnDefinition column, bool descending) => new(column, descending);
 
         public int Compare(SessionRow? x, SessionRow? y)
         {
             if (x is null || y is null)
             {
-                return x is null ? (y is null ? 0 : -1) : 1;
+                return x is null ? (y is null ? 0 : 1) : -1;
             }
-            var result = column switch
+            var left = x.ColumnValue(column);
+            var right = y.ColumnValue(column);
+            var result = SessionColumnCatalog.Compare(left, right);
+            if (result != 0)
             {
-                SessionSortColumn.Time => Nullable.Compare(x.Session.Timestamp, y.Session.Timestamp),
-                SessionSortColumn.Id => CompareIds(x.Id, y.Id),
-                SessionSortColumn.Result => Nullable.Compare(x.ResultCode, y.ResultCode),
-                SessionSortColumn.Method => string.Compare(x.Method, y.Method, StringComparison.OrdinalIgnoreCase),
-                SessionSortColumn.Url => string.Compare(x.Url, y.Url, StringComparison.OrdinalIgnoreCase),
-                SessionSortColumn.Elapsed => Nullable.Compare(x.Session.ElapsedMilliseconds, y.Session.ElapsedMilliseconds),
-                SessionSortColumn.RequestSize => x.Session.RequestBytes.CompareTo(y.Session.RequestBytes),
-                SessionSortColumn.ResponseSize => x.Session.ResponseBytes.CompareTo(y.Session.ResponseBytes),
-                _ => 0
-            };
-            return result != 0 ? (descending ? -result : result) : x.Index.CompareTo(y.Index);
+                return descending && !left.IsBlank && !right.IsBlank ? -result : result;
+            }
+            return x.Index.CompareTo(y.Index);
         }
-
-        private static int CompareIds(string x, string y) =>
-            long.TryParse(x, out var left) && long.TryParse(y, out var right)
-                ? left.CompareTo(right)
-                : string.Compare(x, y, StringComparison.OrdinalIgnoreCase);
     }
 }

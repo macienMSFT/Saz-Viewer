@@ -103,7 +103,7 @@
                   IsReadOnly="True"
                   CanUserAddRows="False"
                   CanUserDeleteRows="False"
-                  CanUserReorderColumns="False"
+                  CanUserReorderColumns="True"
                   CanUserResizeRows="False"
                   CanUserSortColumns="True"
                   SelectionMode="Single"
@@ -116,7 +116,7 @@
                   Foreground="{DynamicResource Saz.Text}"
                   BorderThickness="0"
                   EnableRowVirtualization="True"
-                  EnableColumnVirtualization="False"
+                  EnableColumnVirtualization="True"
                   VirtualizingPanel.IsVirtualizing="True"
                   VirtualizingPanel.VirtualizationMode="Recycling"
                   ScrollViewer.CanContentScroll="True"
@@ -125,52 +125,11 @@
                   RowStyle="{StaticResource GridRow}"
                   AutomationProperties.Name="HTTP sessions"
                   Sorting="OnSorting"
+                  ColumnReordered="OnColumnReordered"
                   SelectionChanged="OnGridSelectionChanged"
                   PreviewKeyDown="OnGridPreviewKeyDown"
+                  PreviewMouseRightButtonUp="OnGridPreviewMouseRightButtonUp"
                   MouseDoubleClick="OnGridDoubleClick">
-            <DataGrid.Columns>
-                <DataGridTextColumn x:Name="TimeColumn" Header="Time" Binding="{Binding Time, Mode=OneTime}" SortMemberPath="Time"
-                                    ElementStyle="{StaticResource GridCellText}">
-                    <DataGridTextColumn.CellStyle>
-                        <Style TargetType="DataGridCell" BasedOn="{StaticResource GridCell}">
-                            <Setter Property="ToolTip" Value="{Binding TimeToolTip, Mode=OneTime}" />
-                        </Style>
-                    </DataGridTextColumn.CellStyle>
-                </DataGridTextColumn>
-                <DataGridTextColumn x:Name="IdColumn" Header="ID" Binding="{Binding Id, Mode=OneTime}" SortMemberPath="Id"
-                                    ElementStyle="{StaticResource GridNumberText}" />
-                <DataGridTextColumn x:Name="ResultColumn" Header="Result" Binding="{Binding Result, Mode=OneTime}" SortMemberPath="Result"
-                                    ElementStyle="{StaticResource GridNumberText}">
-                    <DataGridTextColumn.CellStyle>
-                        <Style TargetType="DataGridCell" BasedOn="{StaticResource GridCell}">
-                            <Setter Property="ToolTip" Value="{Binding ResultToolTip, Mode=OneTime}" />
-                        </Style>
-                    </DataGridTextColumn.CellStyle>
-                </DataGridTextColumn>
-                <DataGridTemplateColumn x:Name="MethodColumn" Header="Method" SortMemberPath="Method">
-                    <DataGridTemplateColumn.CellTemplate>
-                        <DataTemplate>
-                            <Border Style="{StaticResource Saz.MethodBadge}" Margin="8,0">
-                                <TextBlock Text="{Binding Method, Mode=OneTime}" FontSize="12" />
-                            </Border>
-                        </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                </DataGridTemplateColumn>
-                <DataGridTextColumn x:Name="UrlColumn" Header="URL" Binding="{Binding Url, Mode=OneTime}" SortMemberPath="Url" Width="*"
-                                    MinWidth="120">
-                    <DataGridTextColumn.ElementStyle>
-                        <Style TargetType="TextBlock" BasedOn="{StaticResource GridCellText}">
-                            <Setter Property="ToolTip" Value="{Binding Url, Mode=OneTime}" />
-                        </Style>
-                    </DataGridTextColumn.ElementStyle>
-                </DataGridTextColumn>
-                <DataGridTextColumn x:Name="ElapsedColumn" Header="Elapsed Time" Binding="{Binding Elapsed, Mode=OneTime}" SortMemberPath="Elapsed"
-                                    ElementStyle="{StaticResource GridNumberText}" />
-                <DataGridTextColumn x:Name="RequestColumn" Header="Req" Binding="{Binding RequestSize, Mode=OneTime}" SortMemberPath="RequestSize"
-                                    ElementStyle="{StaticResource GridNumberText}" />
-                <DataGridTextColumn x:Name="ResponseColumn" Header="Resp" Binding="{Binding ResponseSize, Mode=OneTime}" SortMemberPath="ResponseSize"
-                                    ElementStyle="{StaticResource GridNumberText}" />
-            </DataGrid.Columns>
         </DataGrid>
 
         <GridSplitter x:Name="InspectorSplitter" Grid.Row="2" Height="5" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"

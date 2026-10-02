@@ -74,6 +74,7 @@
                     <MenuItem x:Name="ViewerWindowMenuItem" Header="_New window" IsCheckable="True"
                               Click="OnViewerWindow" AutomationProperties.Name="New window" />
                 </MenuItem>
+                <MenuItem Header="_Columns…" Click="OnColumns" AutomationProperties.Name="Customize session columns" />
                 <Separator />
                 <MenuItem x:Name="HideConnectOnOpenMenuItem" Header="_Hide CONNECT on open" IsCheckable="True"
                           Click="OnHideConnectOnOpen" AutomationProperties.Name="Hide CONNECT on open" />

@@ -30,10 +30,27 @@ internal enum SessionViewerLocation
     NewWindow
 }
 
+internal sealed record SessionColumnSetting(
+    string Id,
+    string Kind,
+    string Source,
+    string Header,
+    bool Visible = true,
+    double? Width = null)
+{
+    public const string BuiltInKind = "builtin";
+    public const string RequestHeaderKind = "request-header";
+    public const string ResponseHeaderKind = "response-header";
+    public const string SessionFlagKind = "session-flag";
+
+    public static SessionColumnSetting BuiltIn(string id, bool visible = true, double? width = null) =>
+        new(id, BuiltInKind, id, "", visible, width);
+}
+
 /// <summary>
 /// Small per-user UI preferences persisted as JSON (the native counterpart of the report's localStorage keys):
-/// the explicit theme choice, the HTTP inspector layout per width class and the scrub banner state. A missing or
-/// corrupt file yields the defaults; write failures are ignored so a read-only profile never blocks viewing.
+/// the explicit theme choice, inspector layouts, session-grid columns and scrub banner state. A missing or corrupt
+/// file yields the defaults; write failures are ignored so a read-only profile never blocks viewing.
 /// </summary>
 internal sealed class UiPreferences
 {
@@ -47,6 +64,17 @@ internal sealed class UiPreferences
     };
 
     private static UiPreferences? current;
+    private static readonly SessionColumnSetting[] DefaultGridColumns =
+    [
+        SessionColumnSetting.BuiltIn("time"),
+        SessionColumnSetting.BuiltIn("id"),
+        SessionColumnSetting.BuiltIn("result"),
+        SessionColumnSetting.BuiltIn("method"),
+        SessionColumnSetting.BuiltIn("url"),
+        SessionColumnSetting.BuiltIn("elapsed"),
+        SessionColumnSetting.BuiltIn("request-size"),
+        SessionColumnSetting.BuiltIn("response-size")
+    ];
     private readonly string? storePath;
     private Document document;
 
@@ -63,6 +91,27 @@ internal sealed class UiPreferences
 
     /// <summary>Restores an in-memory instance (tests).</summary>
     internal static void Reset(UiPreferences? preferences = null) => current = preferences;
+
+    public event EventHandler? GridColumnsChanged;
+
+    public IReadOnlyList<SessionColumnSetting> GridColumns =>
+        document.GridColumns is { Count: > 0 } saved
+            ? NormalizeColumns(saved)
+            : DefaultGridColumns;
+
+    public void SetGridColumns(IEnumerable<SessionColumnSetting> columns)
+    {
+        document.GridColumns = NormalizeColumns(columns).ToList();
+        Save();
+        GridColumnsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ResetGridColumns()
+    {
+        document.GridColumns = null;
+        Save();
+        GridColumnsChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     public static LayoutWidthClass WidthClassFor(double width) =>
         width < NarrowBreakpoint ? LayoutWidthClass.Narrow : LayoutWidthClass.Wide;
@@ -233,7 +282,7 @@ internal sealed class UiPreferences
             }
             using var stream = File.OpenRead(path);
             var loaded = JsonSerializer.Deserialize<Document>(stream) ?? new Document();
-            loaded.Version = 2;
+            loaded.Version = 3;
             return loaded;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
@@ -264,9 +313,54 @@ internal sealed class UiPreferences
         }
     }
 
+    private static IReadOnlyList<SessionColumnSetting> NormalizeColumns(IEnumerable<SessionColumnSetting> columns)
+    {
+        var normalized = new List<SessionColumnSetting>();
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var candidate in columns.Take(512))
+        {
+            var kind = candidate.Kind switch
+            {
+                SessionColumnSetting.BuiltInKind => SessionColumnSetting.BuiltInKind,
+                SessionColumnSetting.RequestHeaderKind => SessionColumnSetting.RequestHeaderKind,
+                SessionColumnSetting.ResponseHeaderKind => SessionColumnSetting.ResponseHeaderKind,
+                SessionColumnSetting.SessionFlagKind => SessionColumnSetting.SessionFlagKind,
+                _ => null
+            };
+            var source = candidate.Source?.Trim();
+            if (kind is null || string.IsNullOrEmpty(source) || source.Length > 256)
+            {
+                continue;
+            }
+            var id = candidate.Id?.Trim();
+            if (string.IsNullOrEmpty(id) || id.Length > 128 || !ids.Add(id))
+            {
+                continue;
+            }
+            var header = candidate.Header?.Trim() ?? "";
+            if (header.Length > 128)
+            {
+                header = header[..128];
+            }
+            var width = candidate.Width is { } value && double.IsFinite(value)
+                ? (double?)Math.Clamp(value, 40, 2000)
+                : null;
+            normalized.Add(new SessionColumnSetting(id, kind, source, header, candidate.Visible, width));
+        }
+        if (normalized.Count == 0)
+        {
+            return DefaultGridColumns;
+        }
+        if (!normalized.Any(column => column.Visible))
+        {
+            normalized[0] = normalized[0] with { Visible = true };
+        }
+        return normalized;
+    }
+
     private sealed class Document
     {
-        public int Version { get; set; } = 2;
+        public int Version { get; set; } = 3;
 
         public string? Theme { get; set; }
 
@@ -289,5 +383,7 @@ internal sealed class UiPreferences
         public double? RightPaneGridFraction { get; set; }
 
         public double? RightPaneHttpSplitFraction { get; set; }
+
+        public List<SessionColumnSetting>? GridColumns { get; set; }
     }
 }

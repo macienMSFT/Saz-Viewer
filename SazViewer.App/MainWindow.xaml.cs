@@ -484,6 +484,9 @@ public partial class MainWindow : Window, ICaptureTabHost
     private void OnViewerWindow(object sender, RoutedEventArgs e) =>
         SetSessionViewerLocation(SessionViewerLocation.NewWindow);
 
+    private void OnColumns(object sender, RoutedEventArgs e) =>
+        new ColumnChooserWindow(UiPreferences.Current) { Owner = this }.ShowDialog();
+
     private void OnHideConnectOnOpen(object sender, RoutedEventArgs e)
     {
         UiPreferences.Current.HideConnectOnOpen = HideConnectOnOpenMenuItem.IsChecked;

@@ -6,6 +6,8 @@ namespace SazViewer.App.Model;
 /// <summary>Immutable grid row for one HTTP session; mirrors the report's <c>AppendHttpRow</c> cell text and filter data.</summary>
 internal sealed class SessionRow
 {
+    private readonly Dictionary<string, SessionColumnValue> columnValues = new(StringComparer.Ordinal);
+
     public SessionRow(HttpSession session, int index, IReadOnlyList<WebSocketMessage> webSocketMessages)
     {
         Session = session;
@@ -78,6 +80,17 @@ internal sealed class SessionRow
     public string SearchText { get; }
 
     public string AutomationName => $"Inspect HTTP session {Id}";
+
+    public SessionColumnValue ColumnValue(SessionColumnDefinition column)
+    {
+        var cacheKey = $"{column.Id}\0{column.Setting.Kind}\0{column.Setting.Source}";
+        if (!columnValues.TryGetValue(cacheKey, out var value))
+        {
+            value = column.Read(this);
+            columnValues[cacheKey] = value;
+        }
+        return value;
+    }
 
     public static string FormatTime(DateTimeOffset? timestamp) =>
         timestamp?.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) ?? "-";

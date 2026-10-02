@@ -158,7 +158,7 @@ public sealed class SessionListViewModelTests
         Assert.Equal(["5", "2", "1", "3", "4"], list.VisibleRows.Select(row => row.Id));
 
         list.Sort(SessionSortColumn.Result, ListSortDirection.Ascending);
-        Assert.Equal("4", list.VisibleRows[0].Id);
+        Assert.Equal("4", list.VisibleRows[^1].Id);
 
         list.Sort(SessionSortColumn.Index, ListSortDirection.Ascending);
         Assert.Equal(["1", "2", "3", "4", "5"], list.VisibleRows.Select(row => row.Id));

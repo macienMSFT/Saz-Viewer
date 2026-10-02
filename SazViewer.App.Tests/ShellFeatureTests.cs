@@ -28,6 +28,9 @@ public sealed class ShellFeatureTests
         Assert.False(preferences.HideConnectOnOpen);
         Assert.False(preferences.SearchPayloads);
         Assert.False(preferences.ScrubBannerExpanded);
+        Assert.Equal(
+            ["time", "id", "result", "method", "url", "elapsed", "request-size", "response-size"],
+            preferences.GridColumns.Select(column => column.Id));
         Assert.Equal(LayoutWidthClass.Narrow, UiPreferences.WidthClassFor(899.5));
         Assert.Equal(LayoutWidthClass.Wide, UiPreferences.WidthClassFor(900));
     }
@@ -96,7 +99,7 @@ public sealed class ShellFeatureTests
         Assert.True(migrated.ScrubBannerExpanded);
         Assert.Equal(InspectorLayoutMode.Automatic, migrated.DefaultInspectorLayout);
         Assert.Equal(SessionViewerLocation.NewWindow, migrated.SessionViewer);
-        Assert.Contains("\"Version\": 2", File.ReadAllText(path), StringComparison.Ordinal);
+        Assert.Contains("\"Version\": 3", File.ReadAllText(path), StringComparison.Ordinal);
     }
 
     [Fact]

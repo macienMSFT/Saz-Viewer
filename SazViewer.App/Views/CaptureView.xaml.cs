@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using SazViewer.App.Model;
@@ -23,10 +24,14 @@ internal partial class CaptureView : UserControl
 
     private CaptureViewModel? model;
     private SessionViewerLocation? appliedLocation;
+    private readonly Dictionary<DataGridColumn, SessionColumnDefinition> columnDefinitions = [];
+    private bool rebuildingColumns;
+    private bool widthSavePending;
 
     public CaptureView()
     {
         InitializeComponent();
+        SessionGrid.AddHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(OnColumnHeaderDragCompleted));
         DataContextChanged += (_, e) => Attach(e.NewValue as CaptureViewModel);
     }
 
@@ -55,6 +60,7 @@ internal partial class CaptureView : UserControl
             model.PropertyChanged -= OnModelPropertyChanged;
             model.Inspector.PropertyChanged -= OnInspectorPropertyChanged;
             model.Inspector.Loaded -= OnInspectorLoaded;
+            model.Sessions.GridColumnsChanged -= OnGridColumnsChanged;
         }
         model = next;
         if (model is null)
@@ -68,9 +74,12 @@ internal partial class CaptureView : UserControl
         model.PropertyChanged += OnModelPropertyChanged;
         model.Inspector.PropertyChanged += OnInspectorPropertyChanged;
         model.Inspector.Loaded += OnInspectorLoaded;
-        FitColumns(model.Rows);
+        model.Sessions.GridColumnsChanged += OnGridColumnsChanged;
+        BuildColumns();
         UpdateInspectorLayout();
     }
+
+    private void OnGridColumnsChanged(object? sender, EventArgs e) => BuildColumns();
 
     private void OnModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -256,7 +265,7 @@ internal partial class CaptureView : UserControl
     private void OnSorting(object sender, DataGridSortingEventArgs e)
     {
         e.Handled = true;
-        if (model is null || !Enum.TryParse<SessionSortColumn>(e.Column.SortMemberPath, out var column))
+        if (model is null || !columnDefinitions.TryGetValue(e.Column, out var column))
         {
             return;
         }
@@ -272,12 +281,81 @@ internal partial class CaptureView : UserControl
             other.SortDirection = null;
         }
         e.Column.SortDirection = next;
-        model.Sessions.Sort(next is null ? SessionSortColumn.Index : column, next ?? ListSortDirection.Ascending);
+        model.Sessions.Sort(next is null ? null : column, next ?? ListSortDirection.Ascending);
         if (model.Inspector.Row is { } row && model.Sessions.VisibleRows.Contains(row))
         {
             SessionGrid.SelectedItem = row;
             SessionGrid.ScrollIntoView(row);
         }
+    }
+
+    private void OnColumnReordered(object sender, DataGridColumnEventArgs e) => QueueSaveColumnLayout();
+
+    private void OnColumnHeaderDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (FindAncestor<DataGridColumnHeader>(e.OriginalSource as DependencyObject) is null)
+        {
+            return;
+        }
+        QueueSaveColumnLayout();
+    }
+
+    private void QueueSaveColumnLayout()
+    {
+        if (rebuildingColumns || widthSavePending)
+        {
+            return;
+        }
+        widthSavePending = true;
+        Dispatcher.BeginInvoke(() =>
+        {
+            widthSavePending = false;
+            SaveColumnLayout();
+        }, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private void OnGridPreviewMouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (FindAncestor<DataGridColumnHeader>(e.OriginalSource as DependencyObject) is null || model is null)
+        {
+            return;
+        }
+        var menu = new ContextMenu();
+        foreach (var setting in model.Preferences.GridColumns)
+        {
+            var definition = SessionColumnCatalog.Resolve(setting);
+            if (definition is null)
+            {
+                continue;
+            }
+            var item = new MenuItem
+            {
+                Header = definition.Header,
+                IsCheckable = true,
+                IsChecked = setting.Visible,
+                StaysOpenOnClick = true
+            };
+            AutomationProperties.SetName(item, $"Show {definition.Header} column");
+            item.Click += (_, _) =>
+            {
+                if (!SetColumnVisibility(setting.Id, item.IsChecked))
+                {
+                    item.IsChecked = true;
+                }
+            };
+            menu.Items.Add(item);
+        }
+        menu.Items.Add(new Separator());
+        var more = new MenuItem { Header = "More columns\u2026" };
+        AutomationProperties.SetName(more, "Customize session columns");
+        more.Click += (_, _) => ShowColumnChooser();
+        menu.Items.Add(more);
+        var reset = new MenuItem { Header = "Reset columns to default" };
+        reset.Click += (_, _) => model.Preferences.ResetGridColumns();
+        menu.Items.Add(reset);
+        menu.PlacementTarget = (UIElement)sender;
+        menu.IsOpen = true;
+        e.Handled = true;
     }
 
     private void OnGridSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -370,34 +448,199 @@ internal partial class CaptureView : UserControl
         }
     }
 
-    /// <summary>Sizes every column except URL to its widest content; URL takes the remaining width.</summary>
+    private void BuildColumns()
+    {
+        if (model is null)
+        {
+            return;
+        }
+        rebuildingColumns = true;
+        try
+        {
+            SessionGrid.Columns.Clear();
+            columnDefinitions.Clear();
+            foreach (var definition in model.Sessions.GridColumns.Where(column => column.Setting.Visible))
+            {
+                var column = CreateGridColumn(definition);
+                if (definition.Setting.Width is { } width)
+                {
+                    column.Width = width;
+                }
+                SessionGrid.Columns.Add(column);
+                columnDefinitions[column] = definition;
+            }
+            FitColumns(model.Rows);
+        }
+        finally
+        {
+            rebuildingColumns = false;
+        }
+    }
+
+    private DataGridColumn CreateGridColumn(SessionColumnDefinition definition)
+    {
+        var binding = CellBinding(definition);
+        if (definition.Id == "method")
+        {
+            var text = new FrameworkElementFactory(typeof(TextBlock));
+            text.SetBinding(TextBlock.TextProperty, binding);
+            text.SetValue(TextBlock.FontSizeProperty, 12d);
+            var badge = new FrameworkElementFactory(typeof(Border));
+            badge.SetValue(FrameworkElement.StyleProperty, FindResource("Saz.MethodBadge"));
+            badge.SetValue(FrameworkElement.MarginProperty, new Thickness(8, 0, 8, 0));
+            badge.AppendChild(text);
+            return new DataGridTemplateColumn
+            {
+                Header = definition.Header,
+                SortMemberPath = definition.Id,
+                MinWidth = 40,
+                CellTemplate = new DataTemplate { VisualTree = badge }
+            };
+        }
+
+        var baseStyle = (Style)FindResource(definition.Numeric ? "GridNumberText" : "GridCellText");
+        var elementStyle = new Style(typeof(TextBlock), baseStyle);
+        Binding tooltip = definition.Id switch
+        {
+            "time" => new Binding(nameof(SessionRow.TimeToolTip)) { Mode = BindingMode.OneTime },
+            "result" => new Binding(nameof(SessionRow.ResultToolTip)) { Mode = BindingMode.OneTime },
+            _ => CellBinding(definition)
+        };
+        elementStyle.Setters.Add(new Setter(ToolTipService.ToolTipProperty, tooltip));
+        return new DataGridTextColumn
+        {
+            Header = definition.Header,
+            Binding = binding,
+            SortMemberPath = definition.Id,
+            ElementStyle = elementStyle,
+            MinWidth = definition.Id == "url" ? 120 : 40
+        };
+    }
+
+    private static Binding CellBinding(SessionColumnDefinition definition) => new()
+    {
+        Mode = BindingMode.OneTime,
+        Converter = SessionColumnValueConverter.Instance,
+        ConverterParameter = definition
+    };
+
+    /// <summary>Sizes newly added columns from bounded text measurement without decoding bodies.</summary>
     private void FitColumns(IReadOnlyList<SessionRow> rows)
     {
         var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         var regular = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
         var bold = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
+        var samples = rows.Count <= 512
+            ? rows
+            : Enumerable.Range(0, 512)
+                .Select(index => rows[(int)((long)index * (rows.Count - 1) / 511)])
+                .ToArray();
         const double HeaderChrome = 16 + 1 + 18; // padding, border, sort glyph
         const double CellChrome = 16 + 4;         // TextBlock margins + slack
-        const double BadgeChrome = 16 + 14 + 2 + 4;
 
         double Measure(string text, Typeface face, double size) =>
             new FormattedText(text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, size, Brushes.Black, dpi).WidthIncludingTrailingWhitespace;
 
-        double Fit(DataGridColumn column, Func<SessionRow, string> value, double size = 13, double chrome = CellChrome)
+        double Fit(DataGridColumn column, SessionColumnDefinition definition)
         {
-            var header = Measure((string)column.Header, bold, 13) + HeaderChrome;
+            var header = Measure(definition.Header, bold, 13) + HeaderChrome;
             // Measuring the longest few strings (by length) is enough for a proportional font and keeps this O(n).
-            var widest = rows.Select(value).Distinct().OrderByDescending(text => text.Length).Take(8)
-                .Select(text => Measure(text, regular, size) + chrome).DefaultIfEmpty(0).Max();
+            var widest = samples.Select(row => row.ColumnValue(definition).Display)
+                .Distinct().OrderByDescending(text => text.Length).Take(8)
+                .Select(text => Measure(text, regular, 13) + CellChrome).DefaultIfEmpty(0).Max();
             return Math.Ceiling(Math.Max(header, widest));
         }
 
-        TimeColumn.Width = Fit(TimeColumn, row => row.Time);
-        IdColumn.Width = Fit(IdColumn, row => row.Id);
-        ResultColumn.Width = Fit(ResultColumn, row => row.Result);
-        MethodColumn.Width = Fit(MethodColumn, row => row.Method, 12, BadgeChrome);
-        ElapsedColumn.Width = Fit(ElapsedColumn, row => row.Elapsed);
-        RequestColumn.Width = Fit(RequestColumn, row => row.RequestSize);
-        ResponseColumn.Width = Fit(ResponseColumn, row => row.ResponseSize);
+        foreach (var (column, definition) in columnDefinitions)
+        {
+            if (definition.Setting.Width is null)
+            {
+                column.Width = definition.Id == "url"
+                    ? new DataGridLength(1, DataGridLengthUnitType.Star)
+                    : Fit(column, definition);
+            }
+        }
+    }
+
+    private void SaveColumnLayout()
+    {
+        if (model is null || rebuildingColumns || SessionGrid.Columns.Count == 0)
+        {
+            return;
+        }
+        var visible = SessionGrid.Columns.OrderBy(column => column.DisplayIndex)
+            .Select(column =>
+            {
+                var definition = columnDefinitions[column];
+                return definition.Setting with
+                {
+                    Visible = true,
+                    Width = Math.Clamp(column.ActualWidth, 40, 2000)
+                };
+            })
+            .ToList();
+        var visibleIds = visible.Select(setting => setting.Id).ToHashSet(StringComparer.Ordinal);
+        visible.AddRange(model.Preferences.GridColumns.Where(setting => !visibleIds.Contains(setting.Id)));
+        model.Preferences.SetGridColumns(visible);
+    }
+
+    private bool SetColumnVisibility(string id, bool visible)
+    {
+        if (model is null)
+        {
+            return false;
+        }
+        var settings = model.Preferences.GridColumns.ToList();
+        var index = settings.FindIndex(setting => setting.Id == id);
+        if (index < 0)
+        {
+            return false;
+        }
+        if (!visible && settings.Count(setting => setting.Visible) <= 1)
+        {
+            return false;
+        }
+        settings[index] = settings[index] with { Visible = visible };
+        model.Preferences.SetGridColumns(settings);
+        return true;
+    }
+
+    private void ShowColumnChooser()
+    {
+        if (model is null)
+        {
+            return;
+        }
+        var dialog = new ColumnChooserWindow(model.Preferences)
+        {
+            Owner = Window.GetWindow(this)
+        };
+        dialog.ShowDialog();
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? value) where T : DependencyObject
+    {
+        while (value is not null)
+        {
+            if (value is T result)
+            {
+                return result;
+            }
+            value = VisualTreeHelper.GetParent(value);
+        }
+        return null;
+    }
+
+    private sealed class SessionColumnValueConverter : IValueConverter
+    {
+        public static SessionColumnValueConverter Instance { get; } = new();
+
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+            value is SessionRow row && parameter is SessionColumnDefinition definition
+                ? row.ColumnValue(definition).Display
+                : "";
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+            Binding.DoNothing;
     }
 }
