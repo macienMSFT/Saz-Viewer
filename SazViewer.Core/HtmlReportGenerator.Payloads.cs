@@ -1442,6 +1442,22 @@ window.addEventListener('storage',event=>{
             children.Add(BuildXmlNode(reader, depth + 1, budget));
         }
 
+        if (omitted == 0 && children.Count == 1 && children[0].Kind == "text")
+        {
+            var text = children[0];
+            budget.NodeCount--;
+            return new TreeNode
+            {
+                Kind = "element",
+                Name = name,
+                Value = text.Value,
+                Truncated = text.Truncated,
+                Attrs = attrs,
+                Count = count,
+                Children = []
+            };
+        }
+
         return new TreeNode { Kind = "element", Name = name, Attrs = attrs, Count = count, Omitted = omitted, Children = children };
     }
 

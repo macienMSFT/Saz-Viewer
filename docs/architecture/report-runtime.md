@@ -93,7 +93,7 @@ stateDiagram-v2
 | Headers | Start line and ordered captured headers |
 | Raw | Captured headers plus decoded/body representation and byte provenance |
 
-Copy text and active-search text are built from the active model on demand. Search never indexes unrevealed Auth values. JSON and XML expose Tree and Formatted Text subviews; JSON/XML/MAPI trees render in animation-frame batches with node/depth/child budgets.
+Copy text and active-search text are built from the active model on demand. Search never indexes unrevealed Auth values. JSON and XML expose Tree and Formatted Text subviews; JSON/XML/MAPI trees share the dense protocol-tree component and render in animation-frame batches with node/depth/child budgets. XML tree nodes use compact semantic labels (`name: text`, `@attr: value`, `#text`, `#comment`, and `#cdata`) without XML brackets or child counts; mixed content stays ordered, while pure-text and empty elements remain leaves where possible.
 
 ## Browser state
 

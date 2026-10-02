@@ -52,6 +52,7 @@ public sealed class HtmlReportBrowserTests
             await VerifyHttpLayoutDefaultsAndMigrationAsync(browser, reportPath);
             await VerifyHttpSplitViewAsync(browser, reportPath);
             await VerifyStructuredTreeToolbarsAsync(browser, tempDirectory);
+            await VerifyXmlTreeStyleAsync(browser, tempDirectory);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 1440);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 320);
             await VerifyNewTabInspectorAsync(browser, reportPath);
@@ -68,6 +69,84 @@ public sealed class HtmlReportBrowserTests
             {
                 Directory.Delete(tempDirectory, recursive: true);
             }
+        }
+    }
+
+    private static async Task VerifyXmlTreeStyleAsync(IBrowser browser, string tempDirectory)
+    {
+        const string body = "<root id=\"7\"><value>safe</value><mixed flag=\"yes\">before<child />after</mixed><escaped>emoji😀&#x202E;</escaped><!--note--><![CDATA[raw]]><empty /></root>";
+        var report = new SazReport { SourceName = "xml-tree-style.saz" };
+        report.Sessions.Add(
+            new HttpSession
+            {
+                Id = "xml",
+                ArchiveOrder = 0,
+                Method = "POST",
+                Url = "https://example.test/xml",
+                StatusCode = 200,
+                Response = Message("HTTP/1.1 200 OK", "application/xml", body)
+            });
+        var reportPath = Path.Combine(tempDirectory, "xml tree style report.html");
+        await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(report));
+
+        var errors = new List<string>();
+        var page = await browser.NewPageAsync(new()
+        {
+            ViewportSize = new ViewportSize { Width = 1280, Height = 800 },
+        });
+        CaptureErrors(page, errors);
+        try
+        {
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync("()=>localStorage.setItem('saz-viewer.http-layout.wide.v2','single')");
+            await page.ReloadAsync();
+            await page.Locator("#httpTable tbody tr").ClickAsync();
+            await page.Locator("#primary-tab-response").ClickAsync();
+            await AssertTreeActionToolbarAsync(page, "#response-panel-xml");
+
+            var tree = page.Locator("#response-panel-xml .xml-tree");
+            await tree.Locator(".tree-item").First.WaitForAsync();
+            Assert.True(await tree.EvaluateAsync<bool>("element=>element.classList.contains('protocol-tree')"));
+            Assert.Equal(
+                [
+                    "root",
+                    "@id: 7",
+                    "value: safe",
+                    "mixed",
+                    "@flag: yes",
+                    "#text: before",
+                    "child",
+                    "#text: after",
+                    @"escaped: emoji😀\u202E",
+                    "#comment: note",
+                    "#cdata: raw",
+                    "empty"
+                ],
+                await tree.Locator(".tree-label").AllTextContentsAsync());
+            Assert.DoesNotContain(
+                await tree.Locator(".tree-label").AllTextContentsAsync(),
+                label => label.Contains('<') || label.Contains('>') || label.Contains(" child", StringComparison.Ordinal));
+            Assert.Null(await tree.Locator(".tree-item[aria-label='value: safe']").GetAttributeAsync("aria-expanded"));
+            Assert.Null(await tree.Locator(".tree-item[aria-label='child']").GetAttributeAsync("aria-expanded"));
+            Assert.Null(await tree.Locator(".tree-item[aria-label='empty']").GetAttributeAsync("aria-expanded"));
+
+            var caret = tree.Locator(".tree-item[aria-expanded]>.tree-row>.tree-caret").First;
+            Assert.Equal("\u2212", await caret.InnerTextAsync());
+
+            await page.Locator("#response-panel-xml .tree-collapse-all").ClickAsync();
+            var root = tree.Locator(":scope>.tree-item").First;
+            Assert.Equal("false", await root.GetAttributeAsync("aria-expanded"));
+            var search = page.Locator(".http-view-search-input");
+            await search.FillAsync("raw");
+            await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
+            Assert.Equal("true", await root.GetAttributeAsync("aria-expanded"));
+            await search.FillAsync("");
+            Assert.Equal("false", await root.GetAttributeAsync("aria-expanded"));
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            await page.CloseAsync();
         }
     }
 
@@ -969,6 +1048,25 @@ public sealed class HtmlReportBrowserTests
             await page.Locator("#primary-tab-response").ClickAsync();
             Assert.Equal("", await search.InputValueAsync());
             await AssertTreeActionToolbarAsync(page, "#response-panel-xml");
+            var xmlTree = page.Locator("#response-panel-xml .xml-tree");
+            await xmlTree.Locator(".tree-item").First.WaitForAsync();
+            Assert.True(await xmlTree.EvaluateAsync<bool>("tree=>tree.classList.contains('protocol-tree')"));
+            Assert.Equal(
+                [
+                    "root",
+                    "value: safe"
+                ],
+                await xmlTree.Locator(".tree-label").AllTextContentsAsync());
+            Assert.DoesNotContain(
+                await xmlTree.Locator(".tree-label").AllTextContentsAsync(),
+                label => label.Contains('<') || label.Contains('>') || label.Contains(" child", StringComparison.Ordinal));
+            var xmlCaret = xmlTree.Locator(".tree-item[aria-expanded]>.tree-row>.tree-caret").First;
+            Assert.Equal("\u2212", await xmlCaret.InnerTextAsync());
+            Assert.Equal(
+                jsonCaretStyle,
+                await xmlCaret.EvaluateAsync<string>(
+                    "caret=>{const style=getComputedStyle(caret);return [style.width,style.height,style.borderTopWidth,style.borderTopStyle,style.borderRadius,style.backgroundColor,style.fontSize,style.lineHeight,style.textAlign].join('|')}"));
+            Assert.Null(await xmlTree.Locator(".tree-item[aria-label='value: safe']").GetAttributeAsync("aria-expanded"));
             await page.Locator("#response-panel-xml .tree-collapse-all").ClickAsync();
             var xmlRoot = page.Locator("#response-panel-xml .tree-view>.tree-item[aria-expanded]").First;
             Assert.Equal("false", await xmlRoot.GetAttributeAsync("aria-expanded"));
@@ -1398,6 +1496,8 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal("safe", await responseSearch.InputValueAsync());
             await Assertions.Expect(responseStatus).ToHaveTextAsync("1 of 1 matches");
             Assert.Equal(ExpectedXml(), await CopyAndReadAsync(page, "response-panel-xml"));
+            Assert.True(await page.Locator("#response-panel-xml .xml-tree")
+                .EvaluateAsync<bool>("tree=>tree.classList.contains('protocol-tree')"));
 
             var splitter = page.Locator(".http-splitter");
             await Assertions.Expect(splitter).ToBeVisibleAsync();
@@ -1812,7 +1912,7 @@ public sealed class HtmlReportBrowserTests
                 "HTTP/1.1 200 OK\nContent-Type: application/xml\n",
                 await CopyAndReadAsync(page, "response-panel-headers"));
             await page.Locator("#response-tab-raw").ClickAsync();
-            Assert.Contains("<root><value>safe</value></root>", await page.Locator("#response-panel-raw").InnerTextAsync());
+            Assert.Contains(ResponseBody, await page.Locator("#response-panel-raw").InnerTextAsync());
             Assert.Equal(ExpectedResponseRaw(), await CopyAndReadAsync(page, "response-panel-raw", mode: "fallback"));
             Assert.True(await page.EvaluateAsync<bool>("globalThis.__fallbackFocusedInInspector"));
 
@@ -1932,8 +2032,11 @@ public sealed class HtmlReportBrowserTests
             Assert.True(await popup.EvaluateAsync<bool>("globalThis.__fallbackFocusedInInspector"));
 
             await popup.Locator("#primary-tab-response").ClickAsync();
+            await popup.Locator("#response-panel-xml .tree-item").First.WaitForAsync();
+            Assert.True(await popup.Locator("#response-panel-xml .xml-tree")
+                .EvaluateAsync<bool>("tree=>tree.classList.contains('protocol-tree')"));
             await popup.Locator("#response-tab-raw").ClickAsync();
-            Assert.Contains("<root><value>safe</value></root>", await popup.Locator("#response-panel-raw").InnerTextAsync());
+            Assert.Contains(ResponseBody, await popup.Locator("#response-panel-raw").InnerTextAsync());
             await popup.Locator("#inspectorNext").ClickAsync();
             Assert.Equal("2 of 2", await popup.Locator("#inspectorPosition").InnerTextAsync());
             Assert.Equal("true", await popup.Locator("#primary-tab-request").GetAttributeAsync("aria-selected"));
@@ -2889,8 +2992,8 @@ public sealed class HtmlReportBrowserTests
         new BodyFormatter().Format(
             new BodyPreview
             {
-                Length = ResponseBody.Length,
-                CapturedLength = ResponseBody.Length,
+                Length = Encoding.UTF8.GetByteCount(ResponseBody),
+                CapturedLength = Encoding.UTF8.GetByteCount(ResponseBody),
                 Preview = ResponseBody,
             },
             "application/xml").Formatted;
@@ -2923,7 +3026,7 @@ public sealed class HtmlReportBrowserTests
         "Original headers\n" +
         "HTTP/1.1 200 OK\n" +
         "Content-Type: application/xml\n\n" +
-        $"Body ({ResponseBody.Length} B)\n" +
+        $"Body ({Encoding.UTF8.GetByteCount(ResponseBody)} B)\n" +
         "Format: XML\n" +
         "Status: Parsed as XML from Content-Type and body content.\n" +
         ResponseBody;

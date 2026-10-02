@@ -1131,14 +1131,20 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("item.setAttribute('role','treeitem');", html, StringComparison.Ordinal);
         Assert.Contains("group.setAttribute('role','group');", html, StringComparison.Ordinal);
         Assert.Contains(".tree-item[role=treeitem]:focus-visible>.tree-row", html, StringComparison.Ordinal);
-        Assert.Contains("tree.className=kind==='json'?'protocol-tree tree-view json-tree':'tree-view'", html, StringComparison.Ordinal);
-        Assert.Contains(".json-tree .tree-row{grid-template-columns:14px minmax(240px,1fr)}", html, StringComparison.Ordinal);
-        Assert.Contains("if(node.kind==='object'||node.kind==='array')return name;", html, StringComparison.Ordinal);
-        Assert.Contains("name.textContent=safeProtocolText(String(node.name??'Root'))", html, StringComparison.Ordinal);
-        Assert.Contains("caret.textContent=kind==='json'?(expanded?'+':'\\u2212')", html, StringComparison.Ordinal);
+        Assert.Contains("const protocolStyle=kind==='json'||kind==='xml';", html, StringComparison.Ordinal);
+        Assert.Contains("tree.className=protocolStyle?`protocol-tree tree-view ${kind}-tree`:'tree-view'", html, StringComparison.Ordinal);
+        Assert.Contains(".json-tree .tree-row,.xml-tree .tree-row{grid-template-columns:14px minmax(240px,1fr)}", html, StringComparison.Ordinal);
+        Assert.Contains("if(node.kind==='text')return'#text';", html, StringComparison.Ordinal);
+        Assert.Contains("if(node.kind==='cdata')return'#cdata';", html, StringComparison.Ordinal);
+        Assert.Contains("if(node.kind==='comment')return'#comment';", html, StringComparison.Ordinal);
+        Assert.Contains("safeProtocolText(String(node.value))", html, StringComparison.Ordinal);
+        Assert.Contains("name.textContent=treeNodeName(node,kind)", html, StringComparison.Ordinal);
+        Assert.Contains("caret.textContent=protocolStyle?(expanded?'+':'\\u2212')", html, StringComparison.Ordinal);
+        Assert.Contains("sourceChildren.length===1&&sourceChildren[0].nodeType===Node.TEXT_NODE", html, StringComparison.Ordinal);
         Assert.Contains("const childName=name===null||name===undefined?`[${index}]`:`${name}[${index}]`;", html, StringComparison.Ordinal);
         Assert.DoesNotContain("propert${node.count===1?'y':'ies'}", html, StringComparison.Ordinal);
         Assert.DoesNotContain("item${node.count===1?'':'s'}", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("child${node.count===1?'':'ren'}", html, StringComparison.Ordinal);
 
         // Initially expanded by default (desiredExpanded starts true; Expand/Collapse all can
         // change it live, and that state is what still-queued nodes consult as they stream in).
@@ -1364,7 +1370,7 @@ public sealed class HtmlReportGeneratorTests
                 Request = Message(
                     "POST /api HTTP/1.1",
                     "application/xml",
-                    "<root xmlns:ns=\"urn:test\"><ns:child ns:attr=\"v\">Hello</ns:child><!--note--><![CDATA[cdata-content]]></root>")
+                    "<root xmlns:ns=\"urn:test\"><ns:child ns:attr=\"v\">Hello</ns:child><mixed>before<empty />after</mixed><!--note--><![CDATA[cdata-content]]></root>")
             });
 
         var html = new HtmlReportGenerator().Generate(report);
@@ -1384,9 +1390,9 @@ public sealed class HtmlReportGeneratorTests
         Assert.Equal("urn:test", rootAttrs[0].GetProperty("value").GetString());
 
         var rootKids = rootElement.GetProperty("children");
-        Assert.Equal(3, rootKids.GetArrayLength());
+        Assert.Equal(4, rootKids.GetArrayLength());
 
-        // Document order preserved: element, comment, CDATA (in source order).
+        // A pure-text element collapses to one name/value row while retaining its attributes.
         var childElement = rootKids[0];
         Assert.Equal("element", childElement.GetProperty("kind").GetString());
         Assert.Equal("ns:child", childElement.GetProperty("name").GetString());
@@ -1394,15 +1400,26 @@ public sealed class HtmlReportGeneratorTests
         Assert.Equal(1, childAttrs.GetArrayLength());
         Assert.Equal("ns:attr", childAttrs[0].GetProperty("name").GetString());
         Assert.Equal("v", childAttrs[0].GetProperty("value").GetString());
-        var text = childElement.GetProperty("children")[0];
-        Assert.Equal("text", text.GetProperty("kind").GetString());
-        Assert.Equal("Hello", text.GetProperty("value").GetString());
+        Assert.Equal("Hello", childElement.GetProperty("value").GetString());
+        Assert.Empty(childElement.GetProperty("children").EnumerateArray());
 
-        var comment = rootKids[1];
+        // Mixed content stays ordered and uses explicit text leaves; empty elements stay leaves.
+        var mixed = rootKids[1];
+        Assert.Equal("mixed", mixed.GetProperty("name").GetString());
+        var mixedChildren = mixed.GetProperty("children");
+        Assert.Equal(3, mixedChildren.GetArrayLength());
+        Assert.Equal("text", mixedChildren[0].GetProperty("kind").GetString());
+        Assert.Equal("before", mixedChildren[0].GetProperty("value").GetString());
+        Assert.Equal("empty", mixedChildren[1].GetProperty("name").GetString());
+        Assert.Empty(mixedChildren[1].GetProperty("children").EnumerateArray());
+        Assert.Equal("text", mixedChildren[2].GetProperty("kind").GetString());
+        Assert.Equal("after", mixedChildren[2].GetProperty("value").GetString());
+
+        var comment = rootKids[2];
         Assert.Equal("comment", comment.GetProperty("kind").GetString());
         Assert.Equal("note", comment.GetProperty("value").GetString());
 
-        var cdata = rootKids[2];
+        var cdata = rootKids[3];
         Assert.Equal("cdata", cdata.GetProperty("kind").GetString());
         Assert.Equal("cdata-content", cdata.GetProperty("value").GetString());
     }
