@@ -64,6 +64,8 @@ internal static class SessionColumnCatalog
         Text("response-decoded-size", "Decoded response", "Basics", row => DecodedBodySize(row.Session.Response), numeric: true, type: SessionColumnType.Size),
         Text("compression-ratio", "Compression ratio", "Basics", row => CompressionRatio(row.Session), numeric: true),
         Text("redirect-location", "Redirect Location", "Basics", row => Header(row.Session.Response, "Location")),
+        Text("page-reference", "Page reference", "Basics", row => Value(Metadata(row.Session, "pageref"))),
+        Text("page-title", "Page title", "Basics", row => Value(Metadata(row.Session, "har.page.title"))),
 
         Timer("client-connected", "ClientConnected"),
         Timer("client-begin-request", "ClientBeginRequest"),
@@ -81,9 +83,9 @@ internal static class SessionColumnCatalog
         DurationTimer("tcp-connect-time", "TCP connect", "TCPConnectTime", "x-tcpconnecttime"),
         DurationTimer("tls-handshake-time", "TLS handshake", "HTTPSHandshakeTime", "x-httpsHandshakeTime"),
         DurationTimer("gateway-time", "Gateway time", "GatewayTime", "x-gatewaytime"),
-        Text("ttfb", "TTFB", "Timing", row => TimerDelta(row.Session, "ClientBeginRequest", "ServerBeginResponse"), numeric: true, type: SessionColumnType.Duration),
+        Text("ttfb", "TTFB", "Timing", row => HarDurationOrDelta(row.Session, "HAR.Wait", "ClientBeginRequest", "ServerBeginResponse"), numeric: true, type: SessionColumnType.Duration),
         Text("server-time", "Server time", "Timing", row => TimerDelta(row.Session, "ServerGotRequest", "ServerBeginResponse"), numeric: true, type: SessionColumnType.Duration),
-        Text("download-time", "Download time", "Timing", row => TimerDelta(row.Session, "ServerBeginResponse", "ServerDoneResponse"), numeric: true, type: SessionColumnType.Duration),
+        Text("download-time", "Download time", "Timing", row => HarDurationOrDelta(row.Session, "HAR.Receive", "ServerBeginResponse", "ServerDoneResponse"), numeric: true, type: SessionColumnType.Duration),
 
         Text("client-endpoint", "Client IP:port", "Connection and process", row => Endpoint(row.Session.ClientEndpoint)),
         Text("server-ip", "Server IP", "Connection and process", row => Endpoint(Metadata(row.Session, "x-hostip"))),
@@ -93,6 +95,7 @@ internal static class SessionColumnCatalog
         Text("process-id", "Process ID", "Connection and process", row => Integer(ProcessPart(row.Session, wantPid: true)), numeric: true),
         Text("sni-host", "SNI host", "Connection and process", row => Value(Metadata(row.Session, "https-client-snihostname"))),
         Text("tls-info", "TLS / certificate", "Connection and process", row => Value(TlsInfo(row.Session))),
+        Text("connection-id", "Connection ID", "Connection and process", row => Value(Metadata(row.Session, "connection"))),
         Text("comment", "Comment", "Connection and process", row => Value(Metadata(row.Session, "ui-comments"))),
         Text("mark-color", "Mark colour", "Connection and process", row => Value(Metadata(row.Session, "ui-color"))),
         Text("mark-background", "Mark background", "Connection and process", row => Value(Metadata(row.Session, "ui-backcolor"))),
@@ -290,6 +293,15 @@ internal static class SessionColumnCatalog
         }
         return Duration((long)(end - start).TotalMilliseconds);
     }
+
+    private static SessionColumnValue HarDurationOrDelta(
+        HttpSession session,
+        string harTimer,
+        string startName,
+        string endName) =>
+        session.Timers.TryGetValue(harTimer, out var value)
+            ? Duration(ParseMilliseconds(value))
+            : TimerDelta(session, startName, endName);
 
     private static long? ParseMilliseconds(string? value)
     {

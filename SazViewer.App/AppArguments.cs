@@ -1,6 +1,6 @@
 namespace SazViewer.App;
 
-/// <summary>Result of parsing the desktop app's command line: <c>SazViewer.App.exe [--] [path.saz ...]</c>.</summary>
+/// <summary>Result of parsing the desktop app's command line: <c>SazViewer.App.exe [--] [path.saz|path.har ...]</c>.</summary>
 internal sealed record AppArguments(IReadOnlyList<string> CapturePaths, bool ShowHelp, string? Error)
 {
     /// <summary>Upper bound on paths per launch; also the single-instance hand-off limit.</summary>
@@ -9,10 +9,10 @@ internal sealed record AppArguments(IReadOnlyList<string> CapturePaths, bool Sho
     public const string Usage =
         """
         Usage:
-          SazViewer.App [path.saz ...]
+          SazViewer.App [path.saz|path.har ...]
           SazViewer.App --help
 
-        Opens one or more Fiddler SAZ captures in the SAZ Viewer desktop app,
+        Opens one or more Fiddler SAZ or HTTP Archive captures in the SAZ Viewer desktop app,
         one tab per capture. If SAZ Viewer is already running, the paths are
         opened as new tabs in the running window. Encrypted captures prompt for
         a password in a masked dialog; passwords are never accepted on the

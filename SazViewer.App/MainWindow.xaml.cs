@@ -134,7 +134,7 @@ public partial class MainWindow : Window, ICaptureTabHost
         BringToForeground();
         if (forwarded.Ignored > 0)
         {
-            StatusText.Text = $"Ignored {forwarded.Ignored} forwarded path(s) that are not existing .saz files.";
+            StatusText.Text = $"Ignored {forwarded.Ignored} forwarded path(s) that are not existing .saz or .har files.";
         }
         await OpenCapturesAsync(forwarded.Accepted);
     }
@@ -504,8 +504,8 @@ public partial class MainWindow : Window, ICaptureTabHost
     {
         var dialog = new OpenFileDialog
         {
-            Title = "Open Fiddler capture",
-            Filter = "Fiddler sessions (*.saz)|*.saz|All files (*.*)|*.*",
+            Title = "Open capture",
+            Filter = "Captures (*.saz;*.har)|*.saz;*.har|Fiddler sessions (*.saz)|*.saz|HTTP archives (*.har)|*.har|All files (*.*)|*.*",
             CheckFileExists = true,
             Multiselect = true
         };
@@ -600,7 +600,9 @@ public partial class MainWindow : Window, ICaptureTabHost
 
     private static string[] DroppedCaptures(DragEventArgs e) =>
         e.Data.GetData(DataFormats.FileDrop) is string[] files
-            ? files.Where(file => file.EndsWith(".saz", StringComparison.OrdinalIgnoreCase)).Take(AppArguments.MaximumPaths).ToArray()
+            ? files.Where(file => file.EndsWith(".saz", StringComparison.OrdinalIgnoreCase)
+                    || file.EndsWith(".har", StringComparison.OrdinalIgnoreCase))
+                .Take(AppArguments.MaximumPaths).ToArray()
             : [];
 
     private void OnDragOver(object sender, DragEventArgs e)
@@ -639,7 +641,7 @@ public partial class MainWindow : Window, ICaptureTabHost
     {
         if (ReadRegistrationState() is { Status: FileAssociationStatus.Stale } && tabs.Count == 0 && !Busy)
         {
-            StatusText.Text = "The .saz registration points to a different copy of SAZ Viewer. Use Tools › Register to update it.";
+            StatusText.Text = "The capture registration points to a different copy of SAZ Viewer. Use Tools › Register to update it.";
         }
     }
 
@@ -649,8 +651,8 @@ public partial class MainWindow : Window, ICaptureTabHost
         RegisterMenuItem.IsEnabled = AppPaths.ExecutablePath is not null;
         RegisterMenuItem.IsChecked = state?.Status == FileAssociationStatus.Registered;
         RegisterMenuItem.Header = state?.Status == FileAssociationStatus.Stale
-            ? "_Register as .saz handler (update moved app path)…"
-            : "_Register as .saz handler";
+            ? "_Register as .saz/.har handler (update moved app path)…"
+            : "_Register as .saz/.har handler";
         UnregisterMenuItem.IsEnabled = state is not null && state.Status != FileAssociationStatus.NotRegistered;
     }
 
@@ -664,7 +666,7 @@ public partial class MainWindow : Window, ICaptureTabHost
         var state = ReadRegistrationState();
         if (state?.Status == FileAssociationStatus.Stale
             && MessageBox.Show(this,
-                $"The .saz registration points to another location:\n{state.RegisteredCommand}\n\nUpdate it to this copy of SAZ Viewer?\n{executable}",
+                $"The capture registration points to another location:\n{state.RegisteredCommand}\n\nUpdate it to this copy of SAZ Viewer?\n{executable}",
                 AppTitle, MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
         {
             return;
@@ -675,13 +677,13 @@ public partial class MainWindow : Window, ICaptureTabHost
         }
         catch (Exception exception) when (exception is SecurityException or UnauthorizedAccessException or IOException or ArgumentException)
         {
-            ShowError($"Could not register SAZ Viewer for .saz files: {exception.Message}");
+            ShowError($"Could not register SAZ Viewer for .saz and .har files: {exception.Message}");
             return;
         }
-        StatusText.Text = "Registered SAZ Viewer as a .saz handler for your account.";
+        StatusText.Text = "Registered SAZ Viewer as a .saz and .har handler for your account.";
         var openSettings = MessageBox.Show(this,
-            "SAZ Viewer is now registered as a handler for .saz files for your account. Your current default app is not changed.\n\n"
-            + "Windows may still ask you to confirm: right-click a .saz file, choose Open with › Choose another app, select SAZ Viewer, "
+            "SAZ Viewer is now registered as a handler for .saz and .har files for your account. Your current default apps are not changed.\n\n"
+            + "Windows may still ask you to confirm: right-click a capture, choose Open with › Choose another app, select SAZ Viewer, "
             + "and tick \"Always\". You can also choose it in Settings › Apps › Default apps.\n\nOpen Default apps settings now?",
             AppTitle, MessageBoxButton.YesNo, MessageBoxImage.Information);
         if (openSettings == MessageBoxResult.Yes)
@@ -708,6 +710,6 @@ public partial class MainWindow : Window, ICaptureTabHost
             ShowError($"Could not unregister SAZ Viewer: {exception.Message}");
             return;
         }
-        StatusText.Text = "Removed SAZ Viewer's .saz registration for your account.";
+        StatusText.Text = "Removed SAZ Viewer's .saz and .har registration for your account.";
     }
 }

@@ -125,6 +125,8 @@ public sealed class BodyPreview
     public bool CapturedBytesPreviewTruncated { get; init; }
     public IReadOnlyList<string> RemovedEncodings { get; init; } = [];
     public string? DecodingStatus { get; init; }
+    /// <summary>True when the source supplied only an already-decoded representation, as HAR does.</summary>
+    public bool SourceIsDecoded { get; init; }
     public bool WasDecoded => RemovedEncodings.Count > 0;
     internal ReadOnlyMemory<byte> CapturedBytes { get; init; }
     internal ReadOnlyMemory<byte> DecodedBytes { get; init; }

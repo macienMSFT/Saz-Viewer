@@ -61,6 +61,8 @@ public sealed class HarParserTests
         Assert.Equal([0, 1, 2, 255], early.Response!.Body.DecodedBytes.ToArray());
         Assert.True(early.Response.Body.IsBinary);
         Assert.Empty(early.Response.Body.CapturedBytes.ToArray());
+        Assert.True(early.Response.Body.SourceIsDecoded);
+        Assert.Equal(0, early.Response.Body.CapturedLength);
         Assert.False(early.Response.Body.WasDecoded);
         Assert.Contains("original wire bytes", early.Response.Body.DecodingStatus, StringComparison.Ordinal);
         Assert.Equal("https://example.test/next", early.Response.Header("Location"));

@@ -304,9 +304,10 @@ public sealed class HarParser
             return new BodyPreview
             {
                 Length = absentLength,
-                CapturedLength = absentLength,
+                CapturedLength = 0,
                 Preview = string.Empty,
                 IsTruncated = absentLength > 0,
+                SourceIsDecoded = true,
                 DecodingStatus = absentLength > 0
                     ? "HAR declared decoded body bytes but did not retain content text."
                     : "HAR stores decoded content; original wire bytes are unavailable."
@@ -355,12 +356,13 @@ public sealed class HarParser
         return new BodyPreview
         {
             Length = length,
-            CapturedLength = length,
+            CapturedLength = 0,
             IsBinary = preview.IsBinary,
             IsTruncated = length > retained.Length,
             Charset = preview.Charset,
             Preview = preview.Preview,
             DecodingStatus = "HAR stores decoded content; original wire bytes and transfer encoding are unavailable.",
+            SourceIsDecoded = true,
             DecodedBytes = retained,
             NormalizedBytes = retained
         };
@@ -387,6 +389,7 @@ public sealed class HarParser
         Length = 0,
         CapturedLength = 0,
         Preview = string.Empty,
+        SourceIsDecoded = true,
         DecodingStatus = "HAR stores decoded content; original wire bytes and transfer encoding are unavailable."
     };
 

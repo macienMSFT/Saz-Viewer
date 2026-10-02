@@ -146,6 +146,42 @@ public sealed class HexViewModelTests
     }
 
     [Fact]
+    public void HarDecodedBodiesDefaultToDecodedAndDisableCaptured()
+    {
+        var report = new SazReport { SourceName = "capture.har", Format = CaptureFormat.Har };
+        report.Sessions.Add(new HttpSession
+        {
+            Id = "1",
+            ArchiveOrder = 0,
+            Method = "GET",
+            Url = "https://example.test/",
+            StatusCode = 200,
+            Response = new HttpMessage
+            {
+                StartLine = "HTTP/2 200 OK",
+                Body = new BodyPreview
+                {
+                    Length = 4,
+                    CapturedLength = 0,
+                    Preview = "test",
+                    SourceIsDecoded = true,
+                    DecodedBytes = "test"u8.ToArray()
+                }
+            }
+        });
+        var model = new CaptureViewModel(report, new FakeClipboard());
+        model.Inspector.Load(model.Sessions.VisibleRows[0]);
+
+        var hex = Assert.IsType<HexViewModel>(model.Inspector.Response!.Tab("hex").Content);
+
+        Assert.True(hex.CanShowDecoded);
+        Assert.False(hex.CanShowCaptured);
+        Assert.True(hex.IsDecoded);
+        Assert.Equal("Decoded", hex.SelectedSource);
+        Assert.Contains("|test", hex.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LargeBodiesShowTheTruncatedPrefix()
     {
         var report = MediaCaptures.Parse(

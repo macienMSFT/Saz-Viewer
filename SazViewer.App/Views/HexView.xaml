@@ -12,6 +12,7 @@
             <StackPanel Orientation="Horizontal" AutomationProperties.Name="HexView byte source"
                         KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Cycle">
                 <RadioButton Style="{StaticResource Saz.ButtonBase}" Content="Captured" Margin="0,0,2,0"
+                             IsEnabled="{Binding CanShowCaptured}"
                              IsChecked="{Binding IsCaptured, Mode=TwoWay}" AutomationProperties.Name="Captured bytes" />
                 <RadioButton Style="{StaticResource Saz.ButtonBase}" Content="Decoded"
                              IsEnabled="{Binding CanShowDecoded}"

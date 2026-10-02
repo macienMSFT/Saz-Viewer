@@ -57,7 +57,8 @@ public sealed partial class HtmlReportGenerator
         string? FallbackText,
         string? FallbackCapturedText,
         bool? FallbackCapturedTruncated,
-        bool ShowCapturedBytes);
+        bool ShowCapturedBytes,
+        bool SourceIsDecoded);
 
     // Each tree level round-trips through two JSON.NET-serializer nesting levels (an object, then
     // its "children" array before the next object), so a TreeMaxDepth-limited document can need
@@ -395,7 +396,7 @@ function validateMessageModel(message){
     ||(body.fallbackText!==null&&body.fallbackText!==undefined&&(typeof body.fallbackText!=='string'||body.fallbackText.length>65536))
     ||(body.fallbackCapturedText!==null&&body.fallbackCapturedText!==undefined&&(typeof body.fallbackCapturedText!=='string'||body.fallbackCapturedText.length>256*1024))
     ||(body.fallbackCapturedTruncated!==null&&body.fallbackCapturedTruncated!==undefined&&typeof body.fallbackCapturedTruncated!=='boolean')
-    ||typeof body.showCapturedBytes!=='boolean')throw new Error('session body data has an invalid format');
+    ||typeof body.showCapturedBytes!=='boolean'||typeof body.sourceIsDecoded!=='boolean')throw new Error('session body data has an invalid format');
   return message;
 }
 async function loadMessageModel(panel){
@@ -2666,8 +2667,10 @@ function createHexView(model,decodedEnabled){
   view.dataset.capturedLength=String(body.capturedLength);view.dataset.decodedLength=String(body.length);
   const toolbar=httpElement('div','hex-toolbar'),sourceLabel=httpElement('span','hex-source-label','Captured body bytes'),label=httpElement('label','','Source ');
   const select=httpElement('select','hex-source');select.setAttribute('aria-label','Hex byte source');
-  const captured=httpElement('option','','Captured');captured.value='captured';
-  const decoded=httpElement('option','','Decoded');decoded.value='decoded';decoded.disabled=!decodedEnabled;select.append(captured,decoded);label.append(select);toolbar.append(sourceLabel,label);view.append(toolbar);
+  const captured=httpElement('option','','Captured');captured.value='captured';captured.disabled=body.sourceIsDecoded;
+  const decoded=httpElement('option','','Decoded');decoded.value='decoded';decoded.disabled=!decodedEnabled;select.append(captured,decoded);
+  if(body.sourceIsDecoded){select.value='decoded';sourceLabel.textContent='Decoded body bytes'}
+  label.append(select);toolbar.append(sourceLabel,label);view.append(toolbar);
   if(body.removedEncodings.length)view.append(httpElement('div','decode-status',`Removed encodings: ${body.removedEncodings.join(' -> ')}`));
   const dump=httpElement('pre','hex-dump');dump.tabIndex=0;dump.setAttribute('aria-label','Captured body byte hex dump');
   view.append(dump,httpElement('div','hex-status muted'));return view;
@@ -2708,7 +2711,8 @@ function createMessagePanel(side,title,model,protocolSource){
     json:!!model&&model.format==='json'&&model.canToggle,
     xml:!!model&&model.format==='xml'&&model.canToggle,
     mapi:!!protocolSource,image:!!model?.image,webview:!!model?.webViewDetection,
-    hex:!!model&&typeof model.body.captured==='string'&&model.body.captured.length>0,
+    hex:!!model&&((typeof model.body.captured==='string'&&model.body.captured.length>0)
+      ||(typeof model.body.decoded==='string'&&model.body.decoded.length>0)),
     auth:!!model?.hasAuth,headers:!!model&&model.headers.length>0,raw:!!model
   };
   const initial=flags.mapi?'mapi':flags.json?'json':flags.xml?'xml':flags.raw?'raw':flags.headers?'headers':null;
@@ -2740,7 +2744,7 @@ function createMessagePanel(side,title,model,protocolSource){
     mapi:`MAPI view is not available: no protocol tree was parsed for this ${lower}.`,
     image:`Image view is not available: the ${lower} body is not a complete retained PNG, JPEG, GIF, WebP, BMP, or ICO image.`,
     webview:`WebView is not available: the ${lower} body is not complete retained HTML or XHTML.`,
-    hex:`HexView is not available: no captured ${lower} body bytes were retained.`,
+    hex:`HexView is not available: no ${lower} body bytes were retained.`,
     auth:`Auth view is not available: no Authorization, Proxy-Authorization, WWW-Authenticate, or Proxy-Authenticate header was captured for this ${lower}.`,
     headers:model?`No headers were captured for this ${lower}.`:`No ${lower} entry was captured.`,
     raw:`No ${lower} entry was captured.`

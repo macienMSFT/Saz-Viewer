@@ -67,10 +67,12 @@ internal sealed class MessageContent
             return null;
         }
         var body = message.Body;
-        var captured = body.WasDecoded
+        var captured = body.SourceIsDecoded
+            ? ReadOnlyMemory<byte>.Empty
+            : body.WasDecoded
             ? body.CapturedBytes
             : !body.DecodedBytes.IsEmpty ? body.DecodedBytes : body.CapturedBytes;
-        var decoded = body.WasDecoded ? body.DecodedBytes : ReadOnlyMemory<byte>.Empty;
+        var decoded = body.SourceIsDecoded || body.WasDecoded ? body.DecodedBytes : ReadOnlyMemory<byte>.Empty;
         if (!decoded.IsEmpty && decoded.Span.SequenceEqual(captured.Span))
         {
             decoded = ReadOnlyMemory<byte>.Empty;

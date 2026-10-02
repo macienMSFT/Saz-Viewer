@@ -670,10 +670,12 @@ public static class AuthScrubber
             }
 
             var retained = scrubbedBytes.AsMemory(0, Math.Min(scrubbedBytes.Length, HttpMessageParser.MaxBodyPreview));
-            var encodedBody = body.RemovedEncodings.Count > 0;
+            var encodedBody = body.RemovedEncodings.Count > 0 || body.SourceIsDecoded;
             var captured = encodedBody ? ReadOnlyMemory<byte>.Empty : retained;
             var decodedBytes = retained;
-            var note = encodedBody
+            var note = body.SourceIsDecoded
+                ? "Original wire bytes were unavailable; only the scrubbed decoded representation is retained."
+                : encodedBody
                 ? "Captured pre-decode bytes were removed by --scrub-auth; only the scrubbed decoded representation is retained."
                 : null;
             return new BodyPreview
@@ -687,6 +689,7 @@ public static class AuthScrubber
                 CapturedBytesPreview = encodedBody ? RemovedPayloadNote : null,
                 CapturedBytesPreviewTruncated = encodedBody,
                 RemovedEncodings = body.RemovedEncodings,
+                SourceIsDecoded = body.SourceIsDecoded,
                 DecodingStatus = AppendNote(ScrubText(body.DecodingStatus), note),
                 CapturedBytes = captured,
                 DecodedBytes = decodedBytes,
@@ -705,6 +708,7 @@ public static class AuthScrubber
             CapturedBytesPreview = RemovedPayloadNote,
             CapturedBytesPreviewTruncated = true,
             RemovedEncodings = body.RemovedEncodings,
+            SourceIsDecoded = body.SourceIsDecoded,
             DecodingStatus = AppendNote(ScrubText(body.DecodingStatus), RemovedPayloadNote),
             CapturedBytes = ReadOnlyMemory<byte>.Empty,
             DecodedBytes = ReadOnlyMemory<byte>.Empty,

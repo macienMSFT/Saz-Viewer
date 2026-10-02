@@ -7,7 +7,7 @@ namespace SazViewer.App;
 /// <summary>
 /// Wire format for handing command-line paths from a second launch to the running instance.
 /// <para>Request: ASCII <c>SAZV</c>, version byte <c>1</c>, little-endian <see cref="int"/> payload length,
-/// then a UTF-8 JSON payload that is exactly <c>{"paths":["C:\\full\\path.saz", ...]}</c>.</para>
+/// then a UTF-8 JSON payload that is exactly <c>{"paths":["C:\\full\\path.saz", ...]}</c> (HAR paths are also accepted).</para>
 /// <para>Response: one byte, <see cref="Accepted"/> or <see cref="Rejected"/>.</para>
 /// The format has no field for passwords or options: unknown properties, non-string entries, too many
 /// or overlong paths, a bad header, or a payload over <see cref="MaximumPayloadBytes"/> reject the whole request.

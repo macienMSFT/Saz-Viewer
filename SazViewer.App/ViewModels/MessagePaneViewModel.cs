@@ -104,7 +104,7 @@ internal sealed class MessagePaneViewModel : ObservableObject, ITabbedPane
         ["mapi"] = protocol is not null,
         ["image"] = content?.Image is not null,
         ["webview"] = content?.HtmlPreview is not null,
-        ["hex"] = content is not null && !content.Captured.IsEmpty,
+        ["hex"] = content is not null && (!content.Captured.IsEmpty || content.Decoded is not null),
         ["auth"] = content?.HasAuth == true,
         ["headers"] = content is not null && content.Headers.Count > 0,
         ["raw"] = content is not null
@@ -121,7 +121,7 @@ internal sealed class MessagePaneViewModel : ObservableObject, ITabbedPane
         "mapi" => $"MAPI view is not available: no protocol tree was parsed for this {lower}.",
         "image" => $"Image view is not available: the {lower} body is not a complete retained PNG, JPEG, GIF, WebP, BMP, or ICO image.",
         "webview" => $"WebView is not available: the {lower} body is not complete retained HTML or XHTML.",
-        "hex" => $"HexView is not available: no captured {lower} body bytes were retained.",
+        "hex" => $"HexView is not available: no {lower} body bytes were retained.",
         "auth" => $"Auth view is not available: no Authorization, Proxy-Authorization, WWW-Authenticate, or Proxy-Authenticate header was captured for this {lower}.",
         "headers" => hasModel ? $"No headers were captured for this {lower}." : $"No {lower} entry was captured.",
         _ => $"No {lower} entry was captured."

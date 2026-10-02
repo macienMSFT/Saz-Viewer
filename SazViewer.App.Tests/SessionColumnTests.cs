@@ -189,6 +189,24 @@ public sealed class SessionColumnTests
     }
 
     [Fact]
+    public void HarTimingAndPageColumnsUseMappedValues()
+    {
+        var session = BaseSession("1");
+        session.Timers["HAR.Wait"] = "25.4";
+        session.Timers["HAR.Receive"] = "7.2";
+        session.Metadata["pageref"] = "page-1";
+        session.Metadata["har.page.title"] = "Home";
+        session.Metadata["connection"] = "42";
+        var row = new SessionRow(session, 0, []);
+
+        Assert.Equal("25 ms", Read(row, "ttfb"));
+        Assert.Equal("7 ms", Read(row, "download-time"));
+        Assert.Equal("page-1", Read(row, "page-reference"));
+        Assert.Equal("Home", Read(row, "page-title"));
+        Assert.Equal("42", Read(row, "connection-id"));
+    }
+
+    [Fact]
     public void CaptureGridBuildsReorderableVirtualizedColumnsAndPersistsLayout()
     {
         var preferences = new UiPreferences(null);

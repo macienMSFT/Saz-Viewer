@@ -23,11 +23,14 @@ internal sealed class HexViewModel : TabContentViewModel
     {
         this.content = content;
         CanShowDecoded = content.Decoded is not null;
+        CanShowCaptured = !content.Body.SourceIsDecoded;
+        isDecoded = content.Body.SourceIsDecoded && CanShowDecoded;
         RemovedEncodings = content.HasRemovedEncodings ? string.Join(" -> ", content.Body.RemovedEncodings) : null;
         Render();
     }
 
     public bool CanShowDecoded { get; }
+    public bool CanShowCaptured { get; }
 
     /// <summary>"a -> b" when content codings were removed (shown as the decode status line).</summary>
     public string? RemovedEncodings { get; }
@@ -69,7 +72,7 @@ internal sealed class HexViewModel : TabContentViewModel
     public bool IsCaptured
     {
         get => !isDecoded;
-        set => IsDecoded = !value;
+        set => IsDecoded = !value || !CanShowCaptured;
     }
 
     public string SourceLabel => $"{SelectedSource} body bytes";

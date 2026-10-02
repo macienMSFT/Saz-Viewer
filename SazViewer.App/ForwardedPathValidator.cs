@@ -2,7 +2,7 @@ namespace SazViewer.App;
 
 /// <summary>
 /// Decides which forwarded paths the running instance will open. Only fully qualified, normalized
-/// paths to existing <c>.saz</c> files are accepted; device/namespace paths, wildcards, and overlong
+/// paths to existing <c>.saz</c> or <c>.har</c> files are accepted; device/namespace paths, wildcards, and overlong
 /// paths are refused. The sender resolves relative paths against its own working directory first.
 /// </summary>
 internal static class ForwardedPathValidator
@@ -40,7 +40,8 @@ internal static class ForwardedPathValidator
             || path.StartsWith(@"\\?\", StringComparison.Ordinal)
             || path.StartsWith(@"\\.\", StringComparison.Ordinal)
             || !Path.IsPathFullyQualified(path)
-            || !path.EndsWith(".saz", StringComparison.OrdinalIgnoreCase))
+            || (!path.EndsWith(".saz", StringComparison.OrdinalIgnoreCase)
+                && !path.EndsWith(".har", StringComparison.OrdinalIgnoreCase)))
         {
             return false;
         }

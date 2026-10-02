@@ -22,6 +22,8 @@ public sealed class ForwardedPathValidatorTests
     [Theory]
     [InlineData(@"C:\captures\a.saz")]
     [InlineData(@"C:\captures\A.SAZ")]
+    [InlineData(@"C:\captures\a.har")]
+    [InlineData(@"C:\captures\A.HAR")]
     [InlineData(@"\\server\share\a.saz")]
     public void WellFormedPaths(string path)
     {
@@ -63,9 +65,12 @@ public sealed class ForwardedPathValidatorTests
     {
         using var temp = new TempDirectory();
         var existing = TestCaptures.WritePlain(temp.File("present.saz"));
+        var har = temp.File("present.har");
+        File.WriteAllText(har, """{"log":{"version":"1.2","entries":[]}}""");
         Directory.CreateDirectory(temp.File("folder.saz"));
 
         Assert.True(ForwardedPathValidator.IsAcceptable(existing));
+        Assert.True(ForwardedPathValidator.IsAcceptable(har));
         Assert.False(ForwardedPathValidator.IsAcceptable(temp.File("missing.saz")));
         Assert.False(ForwardedPathValidator.IsAcceptable(temp.File("folder.saz")));
     }

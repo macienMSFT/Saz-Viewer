@@ -23,6 +23,11 @@ public sealed class CaptureParser
         };
     }
 
+    public static void CompleteDeferred(
+        SazReport report,
+        int maximumDegreeOfParallelism = -1) =>
+        SazParser.CompleteDeferred(report, maximumDegreeOfParallelism);
+
     public static CaptureFormat DetectFormat(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

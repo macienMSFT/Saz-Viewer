@@ -251,12 +251,14 @@ window.addEventListener('storage',event=>{
         }
 
         var body = message.Body;
-        var captured = body.WasDecoded
+        var captured = body.SourceIsDecoded
+            ? ReadOnlyMemory<byte>.Empty
+            : body.WasDecoded
             ? body.CapturedBytes
             : !body.DecodedBytes.IsEmpty
                 ? body.DecodedBytes
                 : body.CapturedBytes;
-        var decoded = body.WasDecoded ? body.DecodedBytes : ReadOnlyMemory<byte>.Empty;
+        var decoded = body.SourceIsDecoded || body.WasDecoded ? body.DecodedBytes : ReadOnlyMemory<byte>.Empty;
         if (!decoded.IsEmpty && decoded.Span.SequenceEqual(captured.Span))
         {
             decoded = ReadOnlyMemory<byte>.Empty;
@@ -287,7 +289,8 @@ window.addEventListener('storage',event=>{
                 captured.IsEmpty && body.CapturedBytesPreview is not null
                     ? body.CapturedBytesPreviewTruncated || fallbackCapturedText!.Length < body.CapturedBytesPreview.Length
                     : null,
-                body.CapturedBytesPreview is not null),
+                body.CapturedBytesPreview is not null,
+                body.SourceIsDecoded),
             presentation.Format.ToString().ToLowerInvariant(),
             presentation.Label,
             presentation.Status,

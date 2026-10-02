@@ -75,18 +75,22 @@ public sealed class FileAssociationServiceTests
         var service = CreateService();
         service.Register(Exe);
 
-        Assert.Equal("Fiddler Session Archive", registry.GetValue("SazViewer.Capture", null));
-        Assert.Equal("Fiddler Session Archive", registry.GetValue("SazViewer.Capture", "FriendlyTypeName"));
+        Assert.Equal("SAZ or HTTP Archive Capture", registry.GetValue("SazViewer.Capture", null));
+        Assert.Equal("SAZ or HTTP Archive Capture", registry.GetValue("SazViewer.Capture", "FriendlyTypeName"));
         Assert.Equal("\"" + Exe + "\",0", registry.GetValue(@"SazViewer.Capture\DefaultIcon", null));
         Assert.Equal(Command, registry.GetValue(@"SazViewer.Capture\shell\open\command", null));
         Assert.Equal("", registry.GetValue(@".saz\OpenWithProgids", "SazViewer.Capture"));
+        Assert.Equal("", registry.GetValue(@".har\OpenWithProgids", "SazViewer.Capture"));
         Assert.Equal("SAZ Viewer", registry.GetValue(@"Applications\SazViewer.App.exe", "FriendlyAppName"));
         Assert.Equal(Command, registry.GetValue(@"Applications\SazViewer.App.exe\shell\open\command", null));
         Assert.Equal("", registry.GetValue(@"Applications\SazViewer.App.exe\SupportedTypes", ".saz"));
+        Assert.Equal("", registry.GetValue(@"Applications\SazViewer.App.exe\SupportedTypes", ".har"));
 
         // The default handler and the user's choice are never written.
         Assert.False(registry.HasValue(".saz", ""));
         Assert.False(registry.KeyExists(@".saz\UserChoice"));
+        Assert.False(registry.HasValue(".har", ""));
+        Assert.False(registry.KeyExists(@".har\UserChoice"));
         Assert.Equal(1, notifications);
         Assert.Equal(new FileAssociationState(FileAssociationStatus.Registered, Command), service.GetState(Exe));
     }
@@ -129,6 +133,22 @@ public sealed class FileAssociationServiceTests
         service.Register(Exe);
         Assert.Equal("Fiddler.ArchiveZip", registry.GetValue(".saz", null));
         Assert.Equal("", registry.GetValue(@".saz\OpenWithProgids", "Fiddler.ArchiveZip"));
+
+        service.Unregister();
+        Assert.Equal(before, Snapshot());
+    }
+
+    [Fact]
+    public void ExistingHarHandlerIsPreserved()
+    {
+        registry.SetValue(".har", null, "Browser.Har");
+        registry.SetValue(@".har\OpenWithProgids", "Browser.Har", "");
+        var before = Snapshot();
+
+        var service = CreateService();
+        service.Register(Exe);
+        Assert.Equal("Browser.Har", registry.GetValue(".har", null));
+        Assert.Equal("", registry.GetValue(@".har\OpenWithProgids", "Browser.Har"));
 
         service.Unregister();
         Assert.Equal(before, Snapshot());

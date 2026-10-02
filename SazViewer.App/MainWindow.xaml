@@ -87,8 +87,8 @@
                           Click="OnHideConnectOnOpen" AutomationProperties.Name="Hide CONNECT on open" />
             </MenuItem>
             <MenuItem Header="_Tools" SubmenuOpened="OnToolsMenuOpened">
-                <MenuItem x:Name="RegisterMenuItem" Header="_Register as .saz handler" Click="OnRegister" />
-                <MenuItem x:Name="UnregisterMenuItem" Header="_Unregister .saz handler" Click="OnUnregister" />
+                <MenuItem x:Name="RegisterMenuItem" Header="_Register as .saz/.har handler" Click="OnRegister" />
+                <MenuItem x:Name="UnregisterMenuItem" Header="_Unregister .saz/.har handler" Click="OnUnregister" />
             </MenuItem>
         </Menu>
         <StatusBar DockPanel.Dock="Bottom" Background="{DynamicResource Saz.Panel}" Foreground="{DynamicResource Saz.Text}">
@@ -108,7 +108,7 @@
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="520">
                     <TextBlock Text="SAZ Viewer" FontSize="28" FontWeight="SemiBold" HorizontalAlignment="Center" />
                     <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center" FontSize="14"
-                               Text="Open Fiddler .saz captures with File › Open (Ctrl+O), a recent file, or by dragging them onto this window. Each capture opens in its own tab." />
+                               Text="Open .saz or .har captures with File › Open (Ctrl+O), a recent file, or by dragging them onto this window. Each capture opens in its own tab." />
                     <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center" Foreground="{DynamicResource Saz.Muted}"
                                Text="Captures are parsed locally. The viewer makes no network requests." />
                 </StackPanel>

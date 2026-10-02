@@ -18,7 +18,7 @@ internal sealed class ReportDocument
         Report = report;
         html = new Lazy<string>(() =>
         {
-            SazParser.CompleteDeferred(report);
+            CaptureParser.CompleteDeferred(report);
             return new HtmlReportGenerator().Generate(report);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
         utf8 = new Lazy<byte[]>(() => ReportBuilder.Encoding.GetBytes(html.Value), LazyThreadSafetyMode.ExecutionAndPublication);
@@ -37,7 +37,7 @@ internal sealed class ReportDocument
         lock (html)
         {
             return deferredWork ??= Report.HasDeferredWork
-                ? Task.Run(() => SazParser.CompleteDeferred(Report, Math.Max(1, Environment.ProcessorCount / 2)))
+                ? Task.Run(() => CaptureParser.CompleteDeferred(Report, Math.Max(1, Environment.ProcessorCount / 2)))
                 : Task.CompletedTask;
         }
     }
@@ -73,7 +73,7 @@ internal sealed class ReportDocument
 
 /// <summary>
 /// Parse → optional scrub → generate pipeline. Intentionally mirrors <c>CliApplication</c> step for
-/// step so desktop exports are byte-identical to <c>saz-viewer [--scrub-auth] input.saz output.html</c>.
+/// step so desktop exports are byte-identical to <c>saz-viewer [--scrub-auth] input.saz|input.har output.html</c>.
 /// </summary>
 internal static class ReportBuilder
 {
@@ -87,11 +87,11 @@ internal static class ReportBuilder
         // Bodies are decoded on demand so the session list is available quickly; the completed report is identical
         // to the CLI's eager parse (ReportDocument.Html completes it before generating).
         StartupTrace.Mark("parse-start");
-        var report = new SazParser { DeferBodyDecoding = true }.Parse(inputPath, passwordProvider);
+        var report = new CaptureParser { DeferBodyDecoding = true }.Parse(inputPath, passwordProvider);
         StartupTrace.Mark("parse-end");
         if (scrubAuth)
         {
-            SazParser.CompleteDeferred(report);
+            CaptureParser.CompleteDeferred(report);
             AuthScrubber.Scrub(report);
         }
         return new ReportDocument(inputPath, report);

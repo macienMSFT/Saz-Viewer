@@ -61,6 +61,41 @@ public sealed class ExportParityTests
         Assert.DoesNotContain(TestCaptures.Password, document.Html, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HarExportIsByteIdenticalToCli(bool scrub)
+    {
+        using var temp = new TempDirectory();
+        var capture = temp.File("capture.har");
+        File.WriteAllText(
+            capture,
+            """
+            {"log":{"version":"1.2","creator":{"name":"Synthetic","version":"1"},"entries":[{
+              "startedDateTime":"2024-05-01T12:00:00Z","time":5,
+              "request":{"method":"POST","url":"https://example.test/?access_token=har-secret","httpVersion":"HTTP/2","headers":[],"postData":{"mimeType":"application/json","text":"{\"password\":\"har-secret\"}"}},
+              "response":{"status":200,"statusText":"OK","httpVersion":"HTTP/2","headers":[],"content":{"mimeType":"application/json","text":"{\"ok\":true}"}},
+              "timings":{"wait":3,"receive":2}
+            }]}}
+            """,
+            new UTF8Encoding(false));
+        var cliOutput = temp.File("cli.html");
+        var appOutput = temp.File("app.html");
+
+        string[] args = scrub ? ["--scrub-auth", capture, cliOutput] : [capture, cliOutput];
+        Assert.Equal(0, new CliApplication(new FakeConsole()).Run(args));
+
+        var document = ReportBuilder.Build(capture, scrub, new QueuePasswordProvider());
+        ReportBuilder.WriteHtml(document, appOutput);
+
+        Assert.Equal(CaptureFormat.Har, document.Report.Format);
+        Assert.Equal(File.ReadAllBytes(cliOutput), File.ReadAllBytes(appOutput));
+        if (scrub)
+        {
+            Assert.DoesNotContain("har-secret", document.Html, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void ThreeWrongPasswordsFailWithAuthenticationError()
     {
