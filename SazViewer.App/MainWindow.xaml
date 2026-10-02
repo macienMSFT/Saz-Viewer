@@ -48,6 +48,34 @@
                 <Separator />
                 <MenuItem Header="E_xit" Click="OnExit" />
             </MenuItem>
+            <MenuItem x:Name="OptionsMenu" Header="_Options" SubmenuOpened="OnOptionsMenuOpened"
+                      AutomationProperties.Name="Options">
+                <MenuItem Header="_Theme" AutomationProperties.Name="Theme">
+                    <MenuItem x:Name="ThemeSystemMenuItem" Header="_System" IsCheckable="True" Click="OnThemeSystem"
+                              AutomationProperties.Name="System theme" />
+                    <MenuItem x:Name="ThemeLightMenuItem" Header="_Light" IsCheckable="True" Click="OnThemeLight"
+                              AutomationProperties.Name="Light theme" />
+                    <MenuItem x:Name="ThemeDarkMenuItem" Header="_Dark" IsCheckable="True" Click="OnThemeDark"
+                              AutomationProperties.Name="Dark theme" />
+                </MenuItem>
+                <MenuItem Header="_Default inspector layout" AutomationProperties.Name="Default inspector layout">
+                    <MenuItem x:Name="LayoutAutomaticMenuItem" Header="_Automatic by window width" IsCheckable="True"
+                              Click="OnLayoutAutomatic" AutomationProperties.Name="Automatic inspector layout" />
+                    <MenuItem x:Name="LayoutSplitMenuItem" Header="Always _split view" IsCheckable="True"
+                              Click="OnLayoutSplit" AutomationProperties.Name="Always split view" />
+                    <MenuItem x:Name="LayoutSingleMenuItem" Header="Always si_ngle view" IsCheckable="True"
+                              Click="OnLayoutSingle" AutomationProperties.Name="Always single view" />
+                </MenuItem>
+                <MenuItem Header="_Open session viewer in" AutomationProperties.Name="Open session viewer in">
+                    <MenuItem x:Name="ViewerBottomMenuItem" Header="_Bottom pane" IsCheckable="True"
+                              Click="OnViewerBottom" AutomationProperties.Name="Bottom pane" />
+                    <MenuItem x:Name="ViewerWindowMenuItem" Header="_New window" IsCheckable="True"
+                              Click="OnViewerWindow" AutomationProperties.Name="New window" />
+                </MenuItem>
+                <Separator />
+                <MenuItem x:Name="HideConnectOnOpenMenuItem" Header="_Hide CONNECT on open" IsCheckable="True"
+                          Click="OnHideConnectOnOpen" AutomationProperties.Name="Hide CONNECT on open" />
+            </MenuItem>
             <MenuItem Header="_Tools" SubmenuOpened="OnToolsMenuOpened">
                 <MenuItem x:Name="RegisterMenuItem" Header="_Register as .saz handler" Click="OnRegister" />
                 <MenuItem x:Name="UnregisterMenuItem" Header="_Unregister .saz handler" Click="OnUnregister" />

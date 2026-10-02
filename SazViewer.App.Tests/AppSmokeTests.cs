@@ -2,10 +2,14 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Windows.Automation;
 using Microsoft.Playwright;
 
 namespace SazViewer.App.Tests;
+
+[CollectionDefinition("App smoke", DisableParallelization = true)]
+public sealed class AppSmokeCollection;
 
 /// <summary>
 /// Launches the real SazViewer.App.exe with synthetic captures and drives the native UI through UI Automation.
@@ -13,6 +17,7 @@ namespace SazViewer.App.Tests;
 /// for this child process through the standard WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS variable, and the app data
 /// root is redirected to a private temp directory.
 /// </summary>
+[Collection("App smoke")]
 public sealed class AppSmokeTests
 {
     private const string PreviewUrl = "https://webview-preview.sazviewer.invalid/document.html";
@@ -123,6 +128,197 @@ public sealed class AppSmokeTests
             await StopAsync(process);
         }
     }
+
+    [Fact]
+    public async Task OptionsMenu_AppliesAndPersistsEveryChoice_AndWindowViewerFollowsSelection()
+    {
+        using var temp = new TempDirectory();
+        var capturePath = TestCaptures.WritePlain(temp.File("options.saz"));
+        await VerifyOptionAsync(temp.Path, "theme-light", capturePath, null, "Theme", "Light theme", "\"Theme\": \"light\"");
+        await VerifyOptionAsync(temp.Path, "theme-dark", capturePath, null, "Theme", "Dark theme", "\"Theme\": \"dark\"");
+        await VerifyOptionAsync(temp.Path, "theme-system", capturePath, """{"Version":2,"Theme":"dark"}""",
+            "Theme", "System theme", "\"Theme\"", expected: false);
+        await VerifyOptionAsync(temp.Path, "layout-split", capturePath, null, "Default inspector layout", "Always split view",
+            "\"DefaultInspectorLayout\": \"split\"");
+        await VerifyOptionAsync(temp.Path, "layout-single", capturePath, null, "Default inspector layout", "Always single view",
+            "\"DefaultInspectorLayout\": \"single\"");
+        await VerifyOptionAsync(temp.Path, "layout-auto", capturePath, """{"Version":2,"DefaultInspectorLayout":"split"}""",
+            "Default inspector layout", "Automatic inspector layout", "\"DefaultInspectorLayout\": \"automatic\"");
+        await VerifyOptionAsync(temp.Path, "viewer-window", capturePath, null, "Open session viewer in", "New window",
+            "\"SessionViewer\": \"window\"", verification: OptionUiVerification.NewWindow);
+        await VerifyOptionAsync(temp.Path, "viewer-bottom", capturePath, """{"Version":2,"SessionViewer":"window"}""",
+            "Open session viewer in", "Bottom pane", "\"SessionViewer\": \"bottom\"", verification: OptionUiVerification.BottomPane);
+        await VerifyOptionAsync(temp.Path, "hide-connect", capturePath, null, null, "Hide CONNECT on open",
+            "\"HideConnectOnOpen\": true");
+        await VerifyOptionAsync(temp.Path, "show-connect", capturePath, """{"Version":2,"HideConnectOnOpen":true}""",
+            null, "Hide CONNECT on open", "\"HideConnectOnOpen\": false");
+    }
+
+    private static async Task VerifyOptionAsync(
+        string root,
+        string name,
+        string capturePath,
+        string? initialPreferences,
+        string? groupName,
+        string optionName,
+        string expectedText,
+        bool expected = true,
+        OptionUiVerification verification = OptionUiVerification.None)
+    {
+        var dataDirectory = Path.Combine(root, name);
+        var preferencesPath = Path.Combine(dataDirectory, "preferences.json");
+        if (initialPreferences is not null)
+        {
+            Directory.CreateDirectory(dataDirectory);
+            await File.WriteAllTextAsync(preferencesPath, initialPreferences);
+        }
+        using var process = Process.Start(CreateStartInfo(capturePath, dataDirectory, port: null))!;
+        try
+        {
+            var window = await WaitForAsync(() => MainWindow(process), $"{name} main window");
+            var options = await WaitForAsync(() => Find(window, "Options", ControlType.MenuItem), "Options menu");
+            Assert.False(string.IsNullOrWhiteSpace(options.Current.AccessKey));
+            if (verification == OptionUiVerification.BottomPane)
+            {
+                await SelectFirstRowAsync(window);
+                await WaitForAsync(() => ProcessWindows(process).Count > 1 ? window : null, "initial window viewer");
+            }
+
+            await InvokeOptionAsync(process, groupName, optionName);
+            await WaitForFileAsync(preferencesPath, expectedText, expected);
+
+            if (verification == OptionUiVerification.NewWindow)
+            {
+                var rows = await SelectFirstRowAsync(window);
+                var viewer = await WaitForAsync(
+                    () => ProcessWindows(process).FirstOrDefault(candidate =>
+                        candidate.Current.NativeWindowHandle != window.Current.NativeWindowHandle),
+                    "session viewer window");
+                var firstTitle = viewer.Current.Name;
+                ((SelectionItemPattern)rows[1].GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+                await WaitForAsync(
+                    () => ProcessWindows(process).FirstOrDefault(candidate =>
+                        candidate.Current.NativeWindowHandle == viewer.Current.NativeWindowHandle
+                        && candidate.Current.Name != firstTitle),
+                    "viewer to follow selection");
+            }
+            else if (verification == OptionUiVerification.BottomPane)
+            {
+                await WaitForAsync(() => ProcessWindows(process).Count == 1 ? window : null, "bottom pane mode");
+                await WaitForAsync(() => Find(window, "Close inspector", ControlType.Button), "bottom inspector");
+            }
+        }
+        finally
+        {
+            await StopAsync(process);
+        }
+    }
+
+    private static async Task<List<AutomationElement>> SelectFirstRowAsync(AutomationElement window)
+    {
+        var grid = await WaitForAsync(() => Find(window, "HTTP sessions", ControlType.DataGrid), "session grid");
+        var rows = await WaitForAsync(() => DataRows(grid) is { Count: 2 } found ? found : null, "session rows");
+        ((SelectionItemPattern)rows[0].GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+        return rows;
+    }
+
+    private enum OptionUiVerification
+    {
+        None,
+        NewWindow,
+        BottomPane
+    }
+
+    private static async Task InvokeOptionAsync(Process process, string? groupName, string optionName)
+    {
+        var window = await WaitForAsync(() => MainWindow(process), "main window for Options");
+        BringToForeground(window);
+        window.SetFocus();
+        await Task.Delay(100);
+        var options = await WaitForAsync(() => ProcessElement(process, "Options", ControlType.MenuItem), "Options menu");
+        options.SetFocus();
+        await ExpandAsync(options);
+        if (groupName is not null)
+        {
+            var group = await WaitForAsync(() => ProcessElement(process, groupName, ControlType.MenuItem), groupName);
+            Assert.False(string.IsNullOrWhiteSpace(group.Current.AccessKey));
+            await ExpandAsync(group);
+        }
+        var option = await WaitForAsync(() => ProcessElement(process, optionName, ControlType.MenuItem), optionName);
+        Assert.False(string.IsNullOrWhiteSpace(option.Current.AccessKey));
+        if (option.TryGetCurrentPattern(InvokePattern.Pattern, out var invoke))
+        {
+            ((InvokePattern)invoke).Invoke();
+        }
+        else
+        {
+            ((TogglePattern)option.GetCurrentPattern(TogglePattern.Pattern)).Toggle();
+        }
+        await Task.Delay(300);
+    }
+
+    private static async Task ExpandAsync(AutomationElement element)
+    {
+        var pattern = (ExpandCollapsePattern)element.GetCurrentPattern(ExpandCollapsePattern.Pattern);
+        if (pattern.Current.ExpandCollapseState == ExpandCollapseState.Expanded)
+        {
+            pattern.Collapse();
+            await Task.Delay(100);
+        }
+
+        pattern.Expand();
+        await Task.Delay(100);
+    }
+
+    private static void BringToForeground(AutomationElement window)
+    {
+        var handle = new IntPtr(window.Current.NativeWindowHandle);
+        var foreground = GetForegroundWindow();
+        var currentThread = GetCurrentThreadId();
+        var foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, IntPtr.Zero);
+        var attached = foregroundThread != 0
+            && foregroundThread != currentThread
+            && AttachThreadInput(currentThread, foregroundThread, true);
+        try
+        {
+            _ = SetForegroundWindow(handle);
+        }
+        finally
+        {
+            if (attached)
+            {
+                _ = AttachThreadInput(currentThread, foregroundThread, false);
+            }
+        }
+    }
+
+    private static AutomationElement? ProcessElement(Process process, string name, ControlType type) =>
+        AutomationElement.RootElement.FindFirst(TreeScope.Descendants, new AndCondition(
+            new PropertyCondition(AutomationElement.ProcessIdProperty, process.Id),
+            new PropertyCondition(AutomationElement.NameProperty, name),
+            new PropertyCondition(AutomationElement.ControlTypeProperty, type)));
+
+    private static List<AutomationElement> ProcessWindows(Process process) =>
+        AutomationElement.RootElement.FindAll(TreeScope.Children, new AndCondition(
+            new PropertyCondition(AutomationElement.ProcessIdProperty, process.Id),
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window)))
+            .Cast<AutomationElement>().ToList();
+
+    private static async Task WaitForFileAsync(string path, string value, bool expected = true)
+    {
+        await WaitForAsync(
+            () =>
+            {
+                if (!File.Exists(path))
+                {
+                    return null;
+                }
+                var contains = File.ReadAllText(path).Contains(value, StringComparison.Ordinal);
+                return contains == expected ? new object() : null;
+            },
+            expected ? $"{value} in preferences" : $"{value} absent from preferences");
+    }
+
     private static ProcessStartInfo CreateStartInfo(string capturePath, string dataDirectory, int? port)
     {
         var startInfo = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "SazViewer.App.exe")) { UseShellExecute = false };
@@ -175,6 +371,10 @@ public sealed class AppSmokeTests
             }
             catch (ElementNotAvailableException)
             {
+            }
+            catch (InvalidOperationException)
+            {
+                // UIA can transiently invalidate a menu popup while another invocation is closing it.
             }
             await Task.Delay(200);
         }
@@ -267,4 +467,21 @@ public sealed class AppSmokeTests
         throw new TimeoutException("The report page did not load. Pages: "
             + string.Join(", ", context.Pages.Select(p => (p.IsClosed ? "closed:" : "") + p.Url)));
     }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, IntPtr processId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachThreadInput(uint sourceThread, uint targetThread, bool attach);
 }

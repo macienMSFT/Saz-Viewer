@@ -40,6 +40,7 @@ internal partial class CaptureView : UserControl
     {
         if (model is not null)
         {
+            model.PropertyChanged -= OnModelPropertyChanged;
             model.Inspector.PropertyChanged -= OnInspectorPropertyChanged;
             model.Inspector.Loaded -= OnInspectorLoaded;
         }
@@ -52,10 +53,19 @@ internal partial class CaptureView : UserControl
         {
             Inspector.DataContext = model.Inspector;
         }
+        model.PropertyChanged += OnModelPropertyChanged;
         model.Inspector.PropertyChanged += OnInspectorPropertyChanged;
         model.Inspector.Loaded += OnInspectorLoaded;
         FitColumns(model.Rows);
         UpdateInspectorLayout();
+    }
+
+    private void OnModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(CaptureViewModel.SessionViewerLocation) or "" or null)
+        {
+            UpdateInspectorLayout();
+        }
     }
 
     private void OnInspectorPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -70,20 +80,28 @@ internal partial class CaptureView : UserControl
     {
         if (model?.Inspector.Row is { } row)
         {
+            if (!ReferenceEquals(SessionGrid.SelectedItem, row))
+            {
+                SessionGrid.SelectedItem = row;
+            }
             SessionGrid.ScrollIntoView(row);
         }
     }
 
     private void UpdateInspectorLayout()
     {
-        var open = model?.Inspector.IsOpen == true;
+        var open = model is { Inspector.IsOpen: true, SessionViewerLocation: SessionViewerLocation.BottomPane };
         if (open == (InspectorHost.Visibility == Visibility.Visible))
         {
             return;
         }
         if (open)
         {
-            EnsureInspector();
+            EnsureInspector().DataContext = model?.Inspector;
+        }
+        else if (model?.SessionViewerLocation == SessionViewerLocation.NewWindow && Inspector is not null)
+        {
+            Inspector.DataContext = null;
         }
         InspectorHost.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
         InspectorSplitter.Visibility = InspectorHost.Visibility;
@@ -161,7 +179,7 @@ internal partial class CaptureView : UserControl
         {
             model.Inspector.Load(row);
         }
-        if (focus)
+        if (focus && model.SessionViewerLocation == SessionViewerLocation.BottomPane)
         {
             Dispatcher.BeginInvoke(EnsureInspector().FocusContent, System.Windows.Threading.DispatcherPriority.Input);
         }

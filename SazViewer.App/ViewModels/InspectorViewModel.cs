@@ -53,6 +53,7 @@ internal sealed class InspectorViewModel : ObservableObject
     private bool isOpen;
     private LayoutWidthClass widthClass = LayoutWidthClass.Wide;
     private InspectorLayout layout;
+    private bool hasTemporaryLayoutOverride;
 
     /// <param name="followsGrid">
     /// True for the inspector docked under the grid (loading a row selects it in the grid); false for a pop-out
@@ -64,7 +65,7 @@ internal sealed class InspectorViewModel : ObservableObject
         this.clipboard = clipboard;
         this.followsGrid = followsGrid;
         this.preferences = preferences ?? UiPreferences.Current;
-        layout = this.preferences.GetLayout(widthClass);
+        layout = this.preferences.GetDefaultLayout(widthClass);
         PreviousCommand = new RelayCommand(() => Navigate(-1), () => list.Neighbor(row, -1) is not null);
         NextCommand = new RelayCommand(() => Navigate(1), () => list.Neighbor(row, 1) is not null);
         CloseCommand = new RelayCommand(Close);
@@ -120,7 +121,10 @@ internal sealed class InspectorViewModel : ObservableObject
             if (SetProperty(ref widthClass, value))
             {
                 OnPropertyChanged(nameof(IsNarrow));
-                ApplyLayout(preferences.GetLayout(value));
+                if (!hasTemporaryLayoutOverride)
+                {
+                    ApplyLayout(preferences.GetDefaultLayout(value));
+                }
             }
         }
     }
@@ -260,8 +264,22 @@ internal sealed class InspectorViewModel : ObservableObject
     private void ToggleLayout()
     {
         var next = layout == InspectorLayout.Split ? InspectorLayout.Single : InspectorLayout.Split;
-        preferences.SetLayout(widthClass, next);
+        if (preferences.DefaultInspectorLayout == InspectorLayoutMode.Automatic)
+        {
+            preferences.SetLayout(widthClass, next);
+        }
+        else
+        {
+            hasTemporaryLayoutOverride = true;
+        }
         ApplyLayout(next);
+    }
+
+    /// <summary>Re-applies the app default, clearing a temporary override made by this inspector's toggle.</summary>
+    public void ApplyDefaultLayoutPreference()
+    {
+        hasTemporaryLayoutOverride = false;
+        ApplyLayout(preferences.GetDefaultLayout(widthClass));
     }
 
     private void ApplyLayout(InspectorLayout next)

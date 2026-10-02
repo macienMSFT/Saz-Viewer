@@ -7,15 +7,19 @@ namespace SazViewer.App.ViewModels;
 /// <summary>Root view-model of one native capture tab: the session grid and the inspector.</summary>
 internal sealed class CaptureViewModel : ObservableObject
 {
+    private SessionViewerLocation sessionViewerLocation;
+
     public CaptureViewModel(SazReport report, IClipboardService? clipboard = null, UiPreferences? preferences = null)
     {
         Preferences = preferences ?? UiPreferences.Current;
         Report = report;
         Rows = BuildRows(report);
         Sessions = new SessionListViewModel(Rows);
+        Sessions.HideConnect = Preferences.HideConnectOnOpen;
         Clipboard = clipboard ?? WpfClipboardService.Instance;
         Inspector = new InspectorViewModel(Sessions, Clipboard, preferences: Preferences);
         ScrubBanner = report.AuthScrub is { } scrub ? new ScrubBannerViewModel(scrub, Preferences) : null;
+        sessionViewerLocation = Preferences.SessionViewer;
     }
 
     public IClipboardService Clipboard { get; }
@@ -40,6 +44,19 @@ internal sealed class CaptureViewModel : ObservableObject
     public SessionListViewModel Sessions { get; }
 
     public InspectorViewModel Inspector { get; }
+
+    public SessionViewerLocation SessionViewerLocation
+    {
+        get => sessionViewerLocation;
+        private set => SetProperty(ref sessionViewerLocation, value);
+    }
+
+    /// <summary>Applies app-wide options to this open capture without changing its tab-local filters.</summary>
+    public void ApplyPreferences()
+    {
+        Inspector.ApplyDefaultLayoutPreference();
+        SessionViewerLocation = Preferences.SessionViewer;
+    }
 
     /// <summary>Rows in the report's order (archive/chronological), each with its WebSocket messages.</summary>
     public static IReadOnlyList<SessionRow> BuildRows(SazReport report)

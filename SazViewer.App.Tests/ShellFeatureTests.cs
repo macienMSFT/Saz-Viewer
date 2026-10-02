@@ -18,6 +18,9 @@ public sealed class ShellFeatureTests
         Assert.Equal(InspectorLayout.Split, preferences.GetLayout(LayoutWidthClass.Wide));
         Assert.Equal(InspectorLayout.Single, preferences.GetLayout(LayoutWidthClass.Narrow));
         Assert.Null(preferences.Theme);
+        Assert.Equal(InspectorLayoutMode.Automatic, preferences.DefaultInspectorLayout);
+        Assert.Equal(SessionViewerLocation.BottomPane, preferences.SessionViewer);
+        Assert.False(preferences.HideConnectOnOpen);
         Assert.False(preferences.ScrubBannerExpanded);
         Assert.Equal(LayoutWidthClass.Narrow, UiPreferences.WidthClassFor(899.5));
         Assert.Equal(LayoutWidthClass.Wide, UiPreferences.WidthClassFor(900));
@@ -32,6 +35,9 @@ public sealed class ShellFeatureTests
         first.SetLayout(LayoutWidthClass.Narrow, InspectorLayout.Split);
         first.Theme = "dark";
         first.ScrubBannerExpanded = true;
+        first.DefaultInspectorLayout = InspectorLayoutMode.AlwaysSingle;
+        first.SessionViewer = SessionViewerLocation.NewWindow;
+        first.HideConnectOnOpen = true;
 
         var reloaded = new UiPreferences(path);
 
@@ -39,10 +45,42 @@ public sealed class ShellFeatureTests
         Assert.Equal(InspectorLayout.Split, reloaded.GetLayout(LayoutWidthClass.Wide));
         Assert.Equal("dark", reloaded.Theme);
         Assert.True(reloaded.ScrubBannerExpanded);
+        Assert.Equal(InspectorLayoutMode.AlwaysSingle, reloaded.DefaultInspectorLayout);
+        Assert.Equal(SessionViewerLocation.NewWindow, reloaded.SessionViewer);
+        Assert.True(reloaded.HideConnectOnOpen);
         Assert.False(File.Exists(path + ".tmp"));
 
         reloaded.Theme = "system";
         Assert.Null(new UiPreferences(path).Theme);
+    }
+
+    [Fact]
+    public void ExistingPreferencesMigrateWithoutLosingFields()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.File("preferences.json");
+        File.WriteAllText(path,
+            """
+            {
+              "Version": 1,
+              "Theme": "dark",
+              "HttpLayoutWide": "single",
+              "HttpLayoutNarrow": "split",
+              "ScrubBanner": "expanded"
+            }
+            """);
+
+        var preferences = new UiPreferences(path);
+        preferences.SessionViewer = SessionViewerLocation.NewWindow;
+
+        var migrated = new UiPreferences(path);
+        Assert.Equal("dark", migrated.Theme);
+        Assert.Equal(InspectorLayout.Single, migrated.GetLayout(LayoutWidthClass.Wide));
+        Assert.Equal(InspectorLayout.Split, migrated.GetLayout(LayoutWidthClass.Narrow));
+        Assert.True(migrated.ScrubBannerExpanded);
+        Assert.Equal(InspectorLayoutMode.Automatic, migrated.DefaultInspectorLayout);
+        Assert.Equal(SessionViewerLocation.NewWindow, migrated.SessionViewer);
+        Assert.Contains("\"Version\": 2", File.ReadAllText(path), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -112,6 +150,50 @@ public sealed class ShellFeatureTests
         Assert.Equal(InspectorLayout.Single, preferences.GetLayout(LayoutWidthClass.Wide));
         inspector.WidthClass = LayoutWidthClass.Wide;
         Assert.True(inspector.IsSingle);
+    }
+
+    [Fact]
+    public void ForcedLayoutAppliesImmediatelyAndToggleIsTemporary()
+    {
+        var preferences = new UiPreferences(null)
+        {
+            DefaultInspectorLayout = InspectorLayoutMode.AlwaysSplit
+        };
+        var model = MediaCaptures.Open(out _, preferences);
+        var inspector = model.Inspector;
+        inspector.WidthClass = LayoutWidthClass.Narrow;
+        inspector.Load(model.Sessions.VisibleRows[0]);
+
+        Assert.True(inspector.IsSplit);
+        inspector.ToggleLayoutCommand.Execute(null);
+        Assert.True(inspector.IsSingle);
+        Assert.Equal(InspectorLayoutMode.AlwaysSplit, preferences.DefaultInspectorLayout);
+        Assert.Equal(InspectorLayout.Single, preferences.GetLayout(LayoutWidthClass.Narrow));
+
+        inspector.WidthClass = LayoutWidthClass.Wide;
+        Assert.True(inspector.IsSingle);
+        preferences.DefaultInspectorLayout = InspectorLayoutMode.AlwaysSingle;
+        model.ApplyPreferences();
+        Assert.True(inspector.IsSingle);
+        preferences.DefaultInspectorLayout = InspectorLayoutMode.AlwaysSplit;
+        model.ApplyPreferences();
+        Assert.True(inspector.IsSplit);
+    }
+
+    [Fact]
+    public void HideConnectPreferenceOnlySetsNewCaptureInitialState()
+    {
+        var preferences = new UiPreferences(null) { HideConnectOnOpen = true };
+        var first = new CaptureViewModel(NativeCaptures.Mixed(), new FakeClipboard(), preferences);
+        Assert.True(first.Sessions.HideConnect);
+
+        first.Sessions.HideConnect = false;
+        preferences.HideConnectOnOpen = true;
+        first.ApplyPreferences();
+        Assert.False(first.Sessions.HideConnect);
+
+        var second = new CaptureViewModel(NativeCaptures.Mixed(), new FakeClipboard(), preferences);
+        Assert.True(second.Sessions.HideConnect);
     }
 
     [Fact]

@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
 
 namespace SazViewer.App.Tests;
@@ -98,12 +100,90 @@ public sealed class InspectorWindowTests
                 Assert.Empty(tab.PopOuts);
                 Assert.False(closing.IsVisible);
             }
+
             finally
             {
                 if (!tab.IsDisposed)
                 {
                     tab.Dispose();
                 }
+                hostWindow.Close();
+                StaRunner.DoEvents();
+            }
+        });
+    }
+
+    [Fact]
+    public void NewWindowViewerFollowsGridSelectionReusesWindowAndSwitchesBackToPane()
+    {
+        using var temp = new TempDirectory();
+        var path = TestCaptures.WritePlain(temp.File("capture.saz"));
+        var document = ReportBuilder.Build(path, false, new QueuePasswordProvider());
+        var preferences = new UiPreferences(null) { SessionViewer = SessionViewerLocation.NewWindow };
+
+        StaRunner.Run(() =>
+        {
+            var hostWindow = new Window { Width = 1100, Height = 760, ShowInTaskbar = false };
+            var host = new FakeTabHost(hostWindow);
+            var tab = new CaptureTab(document, null, host, preferences);
+            hostWindow.Content = tab.View;
+            try
+            {
+                hostWindow.Show();
+                _ = tab.ActivateAsync();
+                StaRunner.DoEvents();
+                var grid = (DataGrid)tab.NativeView!.FindName("SessionGrid");
+                Assert.True(grid.Focus());
+                StaRunner.DoEvents();
+                var gridFocus = Keyboard.FocusedElement;
+                Assert.NotNull(gridFocus);
+                grid.SelectedIndex = 0;
+                StaRunner.DoEvents();
+
+                var firstWindow = Assert.IsType<InspectorWindow>(tab.SessionViewerWindow);
+                Assert.True(firstWindow.IsVisible);
+                Assert.False(firstWindow.ShowActivated);
+                Assert.Null(firstWindow.Owner);
+                Assert.Same(tab.ViewModel!.Sessions.VisibleRows[0], firstWindow.Model.Row);
+                Assert.Same(gridFocus, Keyboard.FocusedElement);
+                var firstHandle = new WindowInteropHelper(firstWindow).Handle;
+                Assert.Equal(IntPtr.Zero, GetWindow(firstHandle, GetWindowOwner));
+
+                grid.SelectedIndex = 1;
+                StaRunner.DoEvents();
+
+                Assert.Same(firstWindow, tab.SessionViewerWindow);
+                Assert.Same(tab.ViewModel.Sessions.VisibleRows[1], firstWindow.Model.Row);
+                Assert.Same(gridFocus, Keyboard.FocusedElement);
+
+                firstWindow.Model.Navigate(-1);
+                StaRunner.DoEvents();
+                Assert.Same(tab.ViewModel.Sessions.VisibleRows[0], grid.SelectedItem);
+                Assert.Same(firstWindow, tab.SessionViewerWindow);
+
+                firstWindow.Close();
+                StaRunner.DoEvents();
+                Assert.Null(tab.SessionViewerWindow);
+                Assert.False(tab.ViewModel.Inspector.IsOpen);
+
+                grid.SelectedIndex = 1;
+                StaRunner.DoEvents();
+                var reopened = Assert.IsType<InspectorWindow>(tab.SessionViewerWindow);
+                Assert.NotSame(firstWindow, reopened);
+
+                preferences.SessionViewer = SessionViewerLocation.BottomPane;
+                tab.ApplyPreferences();
+                StaRunner.DoEvents();
+
+                Assert.Null(tab.SessionViewerWindow);
+                Assert.True(tab.ViewModel.Inspector.IsOpen);
+                var inspectorHost = (FrameworkElement)tab.NativeView.FindName("InspectorHost");
+                Assert.True(inspectorHost.IsVisible);
+                Assert.Same(gridFocus, Keyboard.FocusedElement);
+            }
+            finally
+            {
+                tab.Dispose();
                 hostWindow.Close();
                 StaRunner.DoEvents();
             }

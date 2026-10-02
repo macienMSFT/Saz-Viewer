@@ -16,6 +16,19 @@ internal enum LayoutWidthClass
     Narrow
 }
 
+internal enum InspectorLayoutMode
+{
+    Automatic,
+    AlwaysSplit,
+    AlwaysSingle
+}
+
+internal enum SessionViewerLocation
+{
+    BottomPane,
+    NewWindow
+}
+
 /// <summary>
 /// Small per-user UI preferences persisted as JSON (the native counterpart of the report's localStorage keys):
 /// the explicit theme choice, the HTTP inspector layout per width class and the scrub banner state. A missing or
@@ -67,6 +80,46 @@ internal sealed class UiPreferences
         }
     }
 
+    public InspectorLayoutMode DefaultInspectorLayout
+    {
+        get => document.DefaultInspectorLayout switch
+        {
+            "split" => InspectorLayoutMode.AlwaysSplit,
+            "single" => InspectorLayoutMode.AlwaysSingle,
+            _ => InspectorLayoutMode.Automatic
+        };
+        set
+        {
+            document.DefaultInspectorLayout = value switch
+            {
+                InspectorLayoutMode.AlwaysSplit => "split",
+                InspectorLayoutMode.AlwaysSingle => "single",
+                _ => "automatic"
+            };
+            Save();
+        }
+    }
+
+    public SessionViewerLocation SessionViewer
+    {
+        get => document.SessionViewer == "window" ? SessionViewerLocation.NewWindow : SessionViewerLocation.BottomPane;
+        set
+        {
+            document.SessionViewer = value == SessionViewerLocation.NewWindow ? "window" : "bottom";
+            Save();
+        }
+    }
+
+    public bool HideConnectOnOpen
+    {
+        get => document.HideConnectOnOpen == true;
+        set
+        {
+            document.HideConnectOnOpen = value;
+            Save();
+        }
+    }
+
     public bool ScrubBannerExpanded
     {
         get => document.ScrubBanner == "expanded";
@@ -80,6 +133,13 @@ internal sealed class UiPreferences
     public InspectorLayout GetLayout(LayoutWidthClass widthClass) =>
         Parse(widthClass == LayoutWidthClass.Wide ? document.HttpLayoutWide : document.HttpLayoutNarrow)
         ?? DefaultLayout(widthClass);
+
+    public InspectorLayout GetDefaultLayout(LayoutWidthClass widthClass) => DefaultInspectorLayout switch
+    {
+        InspectorLayoutMode.AlwaysSplit => InspectorLayout.Split,
+        InspectorLayoutMode.AlwaysSingle => InspectorLayout.Single,
+        _ => GetLayout(widthClass)
+    };
 
     public void SetLayout(LayoutWidthClass widthClass, InspectorLayout layout)
     {
@@ -115,7 +175,9 @@ internal sealed class UiPreferences
                 return new Document();
             }
             using var stream = File.OpenRead(path);
-            return JsonSerializer.Deserialize<Document>(stream) ?? new Document();
+            var loaded = JsonSerializer.Deserialize<Document>(stream) ?? new Document();
+            loaded.Version = 2;
+            return loaded;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -147,7 +209,7 @@ internal sealed class UiPreferences
 
     private sealed class Document
     {
-        public int Version { get; set; } = 1;
+        public int Version { get; set; } = 2;
 
         public string? Theme { get; set; }
 
@@ -156,5 +218,11 @@ internal sealed class UiPreferences
         public string? HttpLayoutNarrow { get; set; }
 
         public string? ScrubBanner { get; set; }
+
+        public string? DefaultInspectorLayout { get; set; }
+
+        public string? SessionViewer { get; set; }
+
+        public bool? HideConnectOnOpen { get; set; }
     }
 }

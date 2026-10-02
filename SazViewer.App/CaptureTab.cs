@@ -34,18 +34,21 @@ internal sealed class CaptureTab : ICaptureTab
     private readonly CaptureFileWatcher watcher;
     private readonly FileChangeTracker tracker;
     private readonly TextBlock headerTitle;
+    private readonly UiPreferences preferences;
     private ReportDocument? document;
     private Views.CaptureView? nativeView;
     private ViewModels.CaptureViewModel? viewModel;
+    private InspectorWindow? sessionViewerWindow;
     private FileChangeNotice notice;
     private string? reloadError;
     private bool reloading;
     private bool disposed;
 
-    public CaptureTab(ReportDocument document, FileFingerprint? fingerprint, ICaptureTabHost host)
+    public CaptureTab(ReportDocument document, FileFingerprint? fingerprint, ICaptureTabHost host, UiPreferences? preferences = null)
     {
         this.document = document;
         this.host = host;
+        this.preferences = preferences ?? UiPreferences.Current;
         SourcePath = document.SourcePath;
         tracker = new FileChangeTracker(fingerprint);
         View = new CaptureTabView { Visibility = Visibility.Collapsed };
@@ -82,6 +85,9 @@ internal sealed class CaptureTab : ICaptureTab
 
     /// <summary>Open "Open in new window" inspector windows.</summary>
     public IReadOnlyList<InspectorWindow> PopOuts => popOuts;
+
+    /// <summary>The reusable grid-following viewer window, when that option is active and a row is selected.</summary>
+    internal InspectorWindow? SessionViewerWindow => sessionViewerWindow;
 
     public string Status { get; private set; } = "";
 
@@ -128,6 +134,28 @@ internal sealed class CaptureTab : ICaptureTab
         RenderNotice();
     }
 
+    /// <summary>Applies app-wide viewer and inspector-layout options to this open capture.</summary>
+    internal void ApplyPreferences()
+    {
+        if (viewModel is null || disposed)
+        {
+            return;
+        }
+        viewModel.ApplyPreferences();
+        foreach (var popOut in popOuts)
+        {
+            popOut.Model.ApplyDefaultLayoutPreference();
+        }
+        if (viewModel.SessionViewerLocation == SessionViewerLocation.NewWindow)
+        {
+            EnsureSessionViewerWindow();
+        }
+        else
+        {
+            CloseSessionViewerWindow(preserveInspector: true);
+        }
+    }
+
     public void Dispose()
     {
         if (disposed)
@@ -152,9 +180,11 @@ internal sealed class CaptureTab : ICaptureTab
     private void Attach(ReportDocument source)
     {
         Detach();
-        viewModel = new ViewModels.CaptureViewModel(source.Report);
+        viewModel = new ViewModels.CaptureViewModel(source.Report, preferences: preferences);
         viewModel.Inspector.PopOutRequested += OnPopOutRequested;
+        viewModel.Inspector.Loaded += OnInspectorLoaded;
         nativeView!.DataContext = viewModel;
+        ApplyPreferences();
         UpdateHeader();
     }
 
@@ -163,8 +193,56 @@ internal sealed class CaptureTab : ICaptureTab
         if (viewModel is not null)
         {
             viewModel.Inspector.PopOutRequested -= OnPopOutRequested;
+            viewModel.Inspector.Loaded -= OnInspectorLoaded;
             viewModel.Inspector.Close();
             viewModel = null;
+        }
+    }
+
+    private void OnInspectorLoaded(object? sender, EventArgs e)
+    {
+        if (viewModel?.SessionViewerLocation == SessionViewerLocation.NewWindow)
+        {
+            EnsureSessionViewerWindow();
+        }
+    }
+
+    private void EnsureSessionViewerWindow()
+    {
+        if (sessionViewerWindow is not null || viewModel is not { Inspector.IsOpen: true } current)
+        {
+            return;
+        }
+        var window = new InspectorWindow(
+            FileName + (IsScrubbed ? " (scrubbed)" : ""),
+            current.Inspector,
+            activateOnShow: false);
+        window.PositionRelativeTo(host.HostWindow, 0);
+        sessionViewerWindow = window;
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(sessionViewerWindow, window))
+            {
+                sessionViewerWindow = null;
+            }
+        };
+        window.Show();
+    }
+
+    private void CloseSessionViewerWindow(bool preserveInspector)
+    {
+        if (sessionViewerWindow is not { } window)
+        {
+            return;
+        }
+        sessionViewerWindow = null;
+        if (preserveInspector)
+        {
+            window.ClosePreservingInspector();
+        }
+        else
+        {
+            window.Close();
         }
     }
 
@@ -175,7 +253,7 @@ internal sealed class CaptureTab : ICaptureTab
             return;
         }
         var window = new InspectorWindow(FileName + (IsScrubbed ? " (scrubbed)" : ""), viewModel.CreatePopOutInspector(row));
-        window.PositionRelativeTo(host.HostWindow, popOuts.Count);
+        window.PositionRelativeTo(host.HostWindow, popOuts.Count + (sessionViewerWindow is null ? 0 : 1));
         popOuts.Add(window);
         window.Closed += (_, _) => popOuts.Remove(window);
         // The report's "Open in new tab" moves the inspector: close it in the main window.
@@ -185,6 +263,7 @@ internal sealed class CaptureTab : ICaptureTab
 
     private void CloseAllPopOuts()
     {
+        CloseSessionViewerWindow(preserveInspector: false);
         foreach (var window in popOuts.ToArray())
         {
             window.Close();

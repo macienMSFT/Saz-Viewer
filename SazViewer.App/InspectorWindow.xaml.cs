@@ -18,25 +18,41 @@ internal partial class InspectorWindow : Window
     private const double CascadeOffset = 28;
     private readonly string fileName;
     private readonly InspectorViewModel model;
+    private bool closeInspectorOnClose;
 
-    public InspectorWindow(string fileName, InspectorViewModel model)
+    public InspectorWindow(string fileName, InspectorViewModel model, bool activateOnShow = true)
     {
         InitializeComponent();
         this.fileName = fileName;
         this.model = model;
+        closeInspectorOnClose = true;
+        ShowActivated = activateOnShow;
         Inspector.DataContext = model;
         model.PropertyChanged += OnModelPropertyChanged;
         Closed += (_, _) =>
         {
             model.PropertyChanged -= OnModelPropertyChanged;
-            model.Close();
+            if (closeInspectorOnClose)
+            {
+                model.Close();
+            }
         };
         SourceInitialized += (_, _) => ThemeManager.ApplyTitleBar(this);
-        Loaded += (_, _) => Inspector.FocusContent();
+        if (activateOnShow)
+        {
+            Loaded += (_, _) => Inspector.FocusContent();
+        }
         UpdateTitle();
     }
 
     public InspectorViewModel Model => model;
+
+    /// <summary>Closes the window while leaving its inspector open for rehosting in the bottom pane.</summary>
+    internal void ClosePreservingInspector()
+    {
+        closeInspectorOnClose = false;
+        Close();
+    }
 
     /// <summary>Centers the independent pop-out over the main window, cascading and clamping it to that monitor.</summary>
     internal void PositionRelativeTo(Window anchor, int cascadeIndex)

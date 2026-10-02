@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
+using SazViewer.App.Themes;
 using SazViewer.Core;
 
 namespace SazViewer.App;
@@ -402,6 +403,87 @@ public partial class MainWindow : Window, ICaptureTabHost
     {
         RecentMenu.IsEnabled = !Busy;
         UpdateChrome();
+    }
+
+    private void OnOptionsMenuOpened(object sender, RoutedEventArgs e) => SyncOptionsMenu();
+
+    private void SyncOptionsMenu()
+    {
+        var preferences = UiPreferences.Current;
+        ThemeSystemMenuItem.IsChecked = preferences.Theme is null;
+        ThemeLightMenuItem.IsChecked = preferences.Theme == "light";
+        ThemeDarkMenuItem.IsChecked = preferences.Theme == "dark";
+        LayoutAutomaticMenuItem.IsChecked = preferences.DefaultInspectorLayout == InspectorLayoutMode.Automatic;
+        LayoutSplitMenuItem.IsChecked = preferences.DefaultInspectorLayout == InspectorLayoutMode.AlwaysSplit;
+        LayoutSingleMenuItem.IsChecked = preferences.DefaultInspectorLayout == InspectorLayoutMode.AlwaysSingle;
+        ViewerBottomMenuItem.IsChecked = preferences.SessionViewer == SessionViewerLocation.BottomPane;
+        ViewerWindowMenuItem.IsChecked = preferences.SessionViewer == SessionViewerLocation.NewWindow;
+        HideConnectOnOpenMenuItem.IsChecked = preferences.HideConnectOnOpen;
+    }
+
+    private static void SetTheme(string? theme)
+    {
+        UiPreferences.Current.Theme = theme;
+        ThemeManager.Refresh();
+    }
+
+    private void SetDefaultInspectorLayout(InspectorLayoutMode layout)
+    {
+        UiPreferences.Current.DefaultInspectorLayout = layout;
+        foreach (var tab in tabs.Tabs)
+        {
+            tab.ApplyPreferences();
+        }
+        SyncOptionsMenu();
+    }
+
+    private void SetSessionViewerLocation(SessionViewerLocation location)
+    {
+        UiPreferences.Current.SessionViewer = location;
+        foreach (var tab in tabs.Tabs)
+        {
+            tab.ApplyPreferences();
+        }
+        SyncOptionsMenu();
+    }
+
+    private void OnThemeSystem(object sender, RoutedEventArgs e)
+    {
+        SetTheme(null);
+        SyncOptionsMenu();
+    }
+
+    private void OnThemeLight(object sender, RoutedEventArgs e)
+    {
+        SetTheme("light");
+        SyncOptionsMenu();
+    }
+
+    private void OnThemeDark(object sender, RoutedEventArgs e)
+    {
+        SetTheme("dark");
+        SyncOptionsMenu();
+    }
+
+    private void OnLayoutAutomatic(object sender, RoutedEventArgs e) =>
+        SetDefaultInspectorLayout(InspectorLayoutMode.Automatic);
+
+    private void OnLayoutSplit(object sender, RoutedEventArgs e) =>
+        SetDefaultInspectorLayout(InspectorLayoutMode.AlwaysSplit);
+
+    private void OnLayoutSingle(object sender, RoutedEventArgs e) =>
+        SetDefaultInspectorLayout(InspectorLayoutMode.AlwaysSingle);
+
+    private void OnViewerBottom(object sender, RoutedEventArgs e) =>
+        SetSessionViewerLocation(SessionViewerLocation.BottomPane);
+
+    private void OnViewerWindow(object sender, RoutedEventArgs e) =>
+        SetSessionViewerLocation(SessionViewerLocation.NewWindow);
+
+    private void OnHideConnectOnOpen(object sender, RoutedEventArgs e)
+    {
+        UiPreferences.Current.HideConnectOnOpen = HideConnectOnOpenMenuItem.IsChecked;
+        SyncOptionsMenu();
     }
 
     private void CanOpen(object sender, CanExecuteRoutedEventArgs e) => e.CanExecute = !Busy;
