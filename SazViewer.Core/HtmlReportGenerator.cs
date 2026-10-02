@@ -94,7 +94,7 @@ public sealed partial class HtmlReportGenerator
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; connect-src 'none'; worker-src 'none'; media-src 'none'; font-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src blob:">
-<title>SAZ capture</title>
+<title>Capture report</title>
 <script>
 (()=>{try{const value=localStorage.getItem('saz-viewer-theme');if(value==='light'||value==='dark')document.documentElement.dataset.theme=value}catch{}})();
 </script>
@@ -108,6 +108,7 @@ public sealed partial class HtmlReportGenerator
 body.inspector-open{overflow:hidden}
 body.inspector-only main{display:none}
 main{width:100%;padding:4px}h2,h3,h4{margin:.25em 0}.muted,.format-status{color:var(--muted)}
+.capture-header{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:3px 4px 6px}.capture-header h1{margin:0;font-size:18px}.capture-header dl{display:flex;gap:8px;flex-wrap:wrap;margin:0;color:var(--muted)}.capture-header dt{font-weight:700}.capture-header dd{margin:0}
 .controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:0 0 4px}input,select,button{background:var(--panel);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:7px 10px}
 input{min-width:280px;flex:1}button{cursor:pointer}.filter-toggle{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}.filter-toggle input{width:16px;height:16px;min-width:0;flex:none;margin:0;padding:0}
 .theme-toggle{flex:0 0 36px;display:inline-flex;align-items:center;justify-content:center;width:36px;min-width:36px;height:36px;padding:6px;color:var(--text)}.theme-toggle svg{display:block;width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.theme-toggle .theme-bulb-core{fill:transparent;stroke:none}.theme-toggle[aria-pressed=true]{color:var(--syn-number);border-color:var(--accent)}.theme-toggle[aria-pressed=true] .theme-bulb-core{fill:currentColor}.theme-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -182,6 +183,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 </head>
 <body><main>
 """);
+        AppendCaptureHeader(html, report);
         if (report.AuthScrub is not null)
         {
             AppendAuthScrubBanner(html, report.AuthScrub);

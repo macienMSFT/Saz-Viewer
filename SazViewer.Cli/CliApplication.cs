@@ -47,9 +47,10 @@ internal sealed class CliApplication(ICliConsole console)
                 ? Path.GetFullPath(parsed.OutputPath)
                 : Path.ChangeExtension(inputPath, ".html");
 
-            if (!inputPath.EndsWith(".saz", StringComparison.OrdinalIgnoreCase))
+            if (!inputPath.EndsWith(".saz", StringComparison.OrdinalIgnoreCase)
+                && !inputPath.EndsWith(".har", StringComparison.OrdinalIgnoreCase))
             {
-                console.WriteErrorLine($"Warning: input does not use the .saz extension: {inputPath}");
+                console.WriteErrorLine($"Warning: input does not use the .saz or .har extension: {inputPath}");
             }
 
             if (string.Equals(inputPath, outputPath, StringComparison.OrdinalIgnoreCase))
@@ -58,10 +59,18 @@ internal sealed class CliApplication(ICliConsole console)
                 return 2;
             }
 
-            ISazPasswordProvider passwordProvider = parsed.PasswordFromStandardInput
-                ? new StandardInputPasswordProvider(console)
-                : new InteractivePasswordProvider(console);
-            var report = new SazParser().Parse(inputPath, passwordProvider);
+            var format = CaptureParser.DetectFormat(inputPath);
+            if (format == CaptureFormat.Har && parsed.PasswordFromStandardInput)
+            {
+                console.WriteErrorLine("Error: --password-stdin applies only to encrypted SAZ archives, not HAR files.");
+                return 2;
+            }
+            ISazPasswordProvider? passwordProvider = format == CaptureFormat.Saz
+                ? parsed.PasswordFromStandardInput
+                    ? new StandardInputPasswordProvider(console)
+                    : new InteractivePasswordProvider(console)
+                : null;
+            var report = new CaptureParser().Parse(inputPath, passwordProvider);
             if (parsed.ScrubAuth)
             {
                 AuthScrubber.Scrub(report);
@@ -172,7 +181,7 @@ internal sealed class CliApplication(ICliConsole console)
         if (positional.Count is < 1 or > 2)
         {
             parsed = default;
-            error = "expected an input .saz path and, optionally, an output .html path.";
+            error = "expected an input .saz or .har path and, optionally, an output .html path.";
             return false;
         }
 
@@ -189,10 +198,10 @@ internal sealed class CliApplication(ICliConsole console)
     {
         console.WriteLine(
             """
-            SAZ Viewer - create a portable, local HTML report from a Fiddler SAZ archive.
+            SAZ Viewer - create a portable, local HTML report from a Fiddler SAZ or HTTP Archive file.
 
             Usage:
-              saz-viewer [--password-stdin] [--scrub-auth] <input.saz> [output.html]
+              saz-viewer [--password-stdin] [--scrub-auth] <input.saz|input.har> [output.html]
               saz-viewer --help
 
             Encrypted SAZ archives are detected automatically. When necessary, the tool
@@ -201,6 +210,7 @@ internal sealed class CliApplication(ICliConsole console)
             characters) from standard input and does not retry. Leading and trailing
             password spaces are preserved. A password command-line option is intentionally
             not supported because process arguments can leak secrets.
+            --password-stdin applies only to SAZ input; HAR files are not password-protected.
 
             --scrub-auth (also -ScrubAuth) replaces credentials, tokens, cookies,
             secret query/body fields, WebSocket values, and MAPI authentication values
@@ -208,7 +218,7 @@ internal sealed class CliApplication(ICliConsole console)
             cannot be safely rewritten are omitted. The report and CLI show replacement
             counts but never print the captured secret values.
 
-            If output.html is omitted, the report is written beside the archive using
+            If output.html is omitted, the report is written beside the capture using
             the same base name. The tool never executes captured content or accesses
             the network.
             """);

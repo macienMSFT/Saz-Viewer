@@ -11,6 +11,28 @@ namespace SazViewer.Core;
 
 public sealed partial class HtmlReportGenerator
 {
+    private static void AppendCaptureHeader(StringBuilder html, SazReport report)
+    {
+        html.Append("<header class=\"capture-header\"><h1>");
+        Text(html, report.Format == CaptureFormat.Har ? "HAR capture" : "SAZ capture");
+        html.Append("</h1><dl><dt>File</dt><dd>");
+        Text(html, report.SourceName);
+        html.Append("</dd>");
+        if (!string.IsNullOrWhiteSpace(report.Creator))
+        {
+            html.Append("<dt>Creator</dt><dd>");
+            Text(html, report.Creator);
+            html.Append("</dd>");
+        }
+        if (!string.IsNullOrWhiteSpace(report.Browser))
+        {
+            html.Append("<dt>Browser</dt><dd>");
+            Text(html, report.Browser);
+            html.Append("</dd>");
+        }
+        html.Append("</dl></header>");
+    }
+
     private static void AppendAuthScrubBanner(StringBuilder html, AuthScrubSummary summary)
     {
         var total = summary.Total;
