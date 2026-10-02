@@ -212,6 +212,59 @@ public sealed class InspectorWindowTests
                 Assert.True(inspectorHost.IsVisible);
                 Assert.Same(gridFocus, Keyboard.FocusedElement);
             }
+
+            finally
+            {
+                tab.Dispose();
+                hostWindow.Close();
+                StaRunner.DoEvents();
+            }
+        });
+    }
+
+    [Fact]
+    public void AdvancedFilterWindowIsIndependentReusedAndClosedWithCapture()
+    {
+        using var temp = new TempDirectory();
+        var path = TestCaptures.WritePlain(temp.File("capture.saz"));
+        var first = ReportBuilder.Build(path, false, new QueuePasswordProvider());
+        var replacement = ReportBuilder.Build(path, false, new QueuePasswordProvider());
+
+        StaRunner.Run(() =>
+        {
+            var hostWindow = new Window { Width = 1100, Height = 760, ShowInTaskbar = false };
+            var tab = new CaptureTab(first, null, new FakeTabHost(hostWindow), new UiPreferences(null));
+            hostWindow.Content = tab.View;
+            try
+            {
+                hostWindow.Show();
+                _ = tab.ActivateAsync();
+                tab.NativeView!.ShowAdvancedFilter();
+                StaRunner.DoEvents();
+
+                var firstWindow = Assert.IsType<AdvancedFilterWindow>(tab.AdvancedFilterWindow);
+                Assert.True(firstWindow.IsVisible);
+                Assert.True(firstWindow.ShowInTaskbar);
+                Assert.Null(firstWindow.Owner);
+
+                tab.NativeView.ShowAdvancedFilter();
+                StaRunner.DoEvents();
+                Assert.Same(firstWindow, tab.AdvancedFilterWindow);
+
+                firstWindow.Close();
+                StaRunner.DoEvents();
+                Assert.Null(tab.AdvancedFilterWindow);
+
+                tab.NativeView.ShowAdvancedFilter();
+                StaRunner.DoEvents();
+                var replacementWindow = Assert.IsType<AdvancedFilterWindow>(tab.AdvancedFilterWindow);
+                Assert.NotSame(firstWindow, replacementWindow);
+
+                tab.ReplaceDocument(replacement, null);
+                StaRunner.DoEvents();
+                Assert.Null(tab.AdvancedFilterWindow);
+                Assert.False(replacementWindow.IsVisible);
+            }
             finally
             {
                 tab.Dispose();

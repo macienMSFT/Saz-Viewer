@@ -27,6 +27,7 @@ public sealed class ShellFeatureTests
         Assert.Equal(.50, preferences.RightPaneHttpSplitFraction);
         Assert.False(preferences.HideConnectOnOpen);
         Assert.False(preferences.SearchPayloads);
+        Assert.Null(preferences.FilterWindowBounds);
         Assert.False(preferences.ScrubBannerExpanded);
         Assert.Equal(
             ["time", "id", "result", "method", "url", "elapsed", "request-size", "response-size"],
@@ -51,6 +52,7 @@ public sealed class ShellFeatureTests
         first.RightPaneHttpSplitFraction = .60;
         first.HideConnectOnOpen = true;
         first.SearchPayloads = true;
+        first.FilterWindowBounds = new Rect(120, 80, 960, 520);
 
         var reloaded = new UiPreferences(path);
 
@@ -65,6 +67,7 @@ public sealed class ShellFeatureTests
         Assert.Equal(.60, reloaded.RightPaneHttpSplitFraction);
         Assert.True(reloaded.HideConnectOnOpen);
         Assert.True(reloaded.SearchPayloads);
+        Assert.Equal(new Rect(120, 80, 960, 520), reloaded.FilterWindowBounds);
         Assert.False(File.Exists(path + ".tmp"));
 
         reloaded.SessionViewer = SessionViewerLocation.NewWindow;

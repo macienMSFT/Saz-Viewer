@@ -14,7 +14,6 @@
             <ResourceDictionary.MergedDictionaries>
                 <views:SharedResourceDictionary Source="pack://application:,,,/SazViewer.App;component/Views/ViewResources.xaml" />
             </ResourceDictionary.MergedDictionaries>
-
         </ResourceDictionary>
     </UserControl.Resources>
 
@@ -32,217 +31,87 @@
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Grid.ColumnSpan="3">
-        <!-- Toolbar: search, filter, Hide CONNECT, count, theme. -->
-        <Border Background="{DynamicResource Saz.Panel}" BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,0,0,1" Padding="10,8">
-            <Grid DataContext="{Binding Sessions}">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <DockPanel Grid.Row="0">
-                    <controls:ThemeToggleButton x:Name="ThemeButton" DockPanel.Dock="Right" Margin="12,0,0,0" />
-                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountText}" Foreground="{DynamicResource Saz.Muted}" VerticalAlignment="Center"
-                               Margin="12,0,0,0" AutomationProperties.LiveSetting="Polite" />
-                    <CheckBox DockPanel.Dock="Right" Content="Hide CONNECT" IsChecked="{Binding HideConnect}" Margin="12,0,0,0"
-                              AutomationProperties.Name="Hide CONNECT sessions" />
-                    <ComboBox x:Name="FilterBox" DockPanel.Dock="Right" Width="170" Margin="8,0,0,0"
-                              ItemsSource="{x:Static vm:SessionListViewModel.FilterOptions}"
-                              SelectedItem="{Binding Filter}"
-                              DisplayMemberPath="Label"
-                              AutomationProperties.Name="Filter HTTP status or protocol" />
-                    <CheckBox x:Name="SearchPayloadsCheckBox" DockPanel.Dock="Right" Content="Search payloads"
-                              IsChecked="{Binding SearchPayloads}" Margin="8,0,0,0" VerticalAlignment="Center"
-                              AutomationProperties.Name="Search request, response, WebSocket, and MAPI payloads"
-                              AutomationProperties.HelpText="Runs a cancellable background search over bounded decoded payload content"
-                              ToolTip="Include decoded headers, bodies, WebSocket payloads, and available MAPI text" />
-                    <Button x:Name="AdvancedFilterButton" DockPanel.Dock="Right" Content="_Filter" Margin="8,0,0,0"
-                            Padding="8,3" Click="OnToggleAdvancedFilter"
-                            AutomationProperties.Name="Show advanced filter builder"
-                            AutomationProperties.HelpText="Build typed rules; shortcut Ctrl+Shift+F" />
-                    <TextBox x:Name="GridSearchBox" Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=120}"
-                             Tag="Search method, URL, result, elapsed time, content type, endpoints..."
-                             AutomationProperties.Name="Search HTTP sessions" />
-                </DockPanel>
-                <DockPanel Grid.Row="1" Margin="0,5,0,0"
-                           Visibility="{Binding PayloadSearchStatus, Converter={StaticResource NotNullToVisibility}}">
-                    <Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelPayloadSearchCommand}"
-                            Visibility="{Binding IsPayloadSearching, Converter={StaticResource BoolToVisibility}}"
-                            Padding="7,1" AutomationProperties.Name="Cancel payload search" />
-                    <TextBlock Text="{Binding PayloadSearchStatus}" Foreground="{DynamicResource Saz.Muted}"
-                               VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
-                </DockPanel>
-            </Grid>
-        </Border>
-        <Border x:Name="AdvancedFilterPanel" DataContext="{Binding Filters}"
-                Visibility="{Binding IsPanelOpen, Converter={StaticResource BoolToVisibility}}"
-                Background="{DynamicResource Saz.Panel}" BorderBrush="{DynamicResource Saz.Line}"
-                BorderThickness="0,0,0,1" Padding="10,8"
-                AutomationProperties.Name="Advanced session filter">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <DockPanel Grid.Row="0" Margin="0,0,0,6">
-                    <Button DockPanel.Dock="Right" Content="Collapse" Padding="7,2" Click="OnToggleAdvancedFilter"
-                            AutomationProperties.Name="Collapse advanced filter builder" />
-                    <TextBlock Text="Advanced filter" FontWeight="SemiBold" VerticalAlignment="Center" />
-                    <TextBlock Text="  AND binds tighter than OR; parentheses override precedence."
-                               Foreground="{DynamicResource Saz.Muted}" VerticalAlignment="Center" />
-                </DockPanel>
-                <ScrollViewer Grid.Row="1" MaxHeight="250" VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Auto" CanContentScroll="True">
-                    <ItemsControl x:Name="FilterRuleList" ItemsSource="{Binding Rules}"
-                                  AutomationProperties.Name="Advanced filter rules">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,0,0,1" Padding="0,3">
-                                    <Grid>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                        </Grid.RowDefinitions>
-                                        <StackPanel Grid.Row="0" Orientation="Horizontal">
-                                            <Button Content="&#x00D7;" Width="27" Height="27" Padding="0"
-                                                    Command="{Binding DataContext.Filters.RemoveRuleCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding}"
-                                                    AutomationProperties.Name="Remove filter rule" />
-                                            <CheckBox IsChecked="{Binding Enabled}" Margin="7,0" VerticalAlignment="Center"
-                                                      AutomationProperties.Name="Enable filter rule" />
-                                            <ComboBox Width="64" Margin="0,0,6,0"
-                                                      ItemsSource="{x:Static vm:AdvancedFilterViewModel.OpenParenthesisOptions}"
-                                                      DisplayMemberPath="Label" SelectedValuePath="Value"
-                                                      SelectedValue="{Binding OpenParentheses}"
-                                                      AutomationProperties.Name="Opening parentheses" />
-                                            <ComboBox Width="205" Margin="0,0,6,0"
-                                                      ItemsSource="{Binding DataContext.Filters.FieldOptions, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                      DisplayMemberPath="Label" SelectedItem="{Binding FieldOption}"
-                                                      SelectionChanged="OnFilterFieldChanged"
-                                                      AutomationProperties.Name="Filter field" />
-                                            <ComboBox Width="170" Margin="0,0,6,0"
-                                                      ItemsSource="{Binding Operators}" DisplayMemberPath="Label"
-                                                      SelectedValuePath="Value" SelectedValue="{Binding Operator}"
-                                                      AutomationProperties.Name="Filter operator" />
-                                            <Grid Width="225" Margin="0,0,6,0">
-                                                <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
-                                                         Tag="{Binding ValueHint}"
-                                                         AcceptsReturn="True" MaxHeight="68"
-                                                         VerticalScrollBarVisibility="Auto"
-                                                         AutomationProperties.Name="Filter comparison value">
-                                                    <TextBox.Style>
-                                                        <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-                                                            <Setter Property="Visibility" Value="Visible" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsMethod}" Value="True">
-                                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                                </DataTrigger>
-                                                                <DataTrigger Binding="{Binding HasValueEditor}" Value="False">
-                                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBox.Style>
-                                                </TextBox>
-                                                <ComboBox ItemsSource="{x:Static vm:AdvancedFilterViewModel.Methods}"
-                                                          IsEditable="True" Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
-                                                          AutomationProperties.Name="HTTP method value">
-                                                    <ComboBox.Style>
-                                                        <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
-                                                            <Setter Property="Visibility" Value="Collapsed" />
-                                                            <Style.Triggers>
-                                                                <MultiDataTrigger>
-                                                                    <MultiDataTrigger.Conditions>
-                                                                        <Condition Binding="{Binding IsMethod}" Value="True" />
-                                                                        <Condition Binding="{Binding HasValueEditor}" Value="True" />
-                                                                    </MultiDataTrigger.Conditions>
-                                                                    <Setter Property="Visibility" Value="Visible" />
-                                                                </MultiDataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </ComboBox.Style>
-                                                </ComboBox>
-                                            </Grid>
-                                            <ToggleButton Content="Aa" Width="34" Margin="0,0,6,0"
-                                                          IsChecked="{Binding CaseSensitive}"
-                                                          Visibility="{Binding SupportsCaseSensitivity, Converter={StaticResource BoolToVisibility}}"
-                                                          ToolTip="Case-sensitive string comparison"
-                                                          AutomationProperties.Name="Case-sensitive comparison" />
-                                            <ComboBox Width="64" Margin="0,0,6,0"
-                                                      ItemsSource="{x:Static vm:AdvancedFilterViewModel.CloseParenthesisOptions}"
-                                                      DisplayMemberPath="Label" SelectedValuePath="Value"
-                                                      SelectedValue="{Binding CloseParentheses}"
-                                                      AutomationProperties.Name="Closing parentheses" />
-                                            <ComboBox Width="74"
-                                                      ItemsSource="{x:Static vm:AdvancedFilterViewModel.JoinOptions}"
-                                                      DisplayMemberPath="Label" SelectedValuePath="Value"
-                                                      SelectedValue="{Binding Join}"
-                                                      AutomationProperties.Name="Join to next rule" />
-                                        </StackPanel>
-                                        <TextBlock Grid.Row="1" Text="{Binding Error}" Margin="69,3,0,0"
-                                                   Foreground="{DynamicResource Saz.SynRed}"
-                                                   Visibility="{Binding Error, Converter={StaticResource NotNullToVisibility}}"
-                                                   AutomationProperties.LiveSetting="Assertive" />
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-                <WrapPanel Grid.Row="2" Margin="0,8,0,0">
-                    <Button Content="_Add rule" Command="{Binding AddRuleCommand}" Padding="8,3" Margin="0,0,6,0"
-                            AutomationProperties.Name="Add advanced filter rule" />
-                    <Button Content="_Apply" Padding="10,3" Margin="0,0,6,0" Click="OnApplyAdvancedFilter"
-                            AutomationProperties.Name="Apply advanced filter" />
-                    <Button Content="_Clear filter" Command="{Binding ClearCommand}" Padding="8,3" Margin="0,0,12,0"
-                            AutomationProperties.Name="Clear advanced filter" />
-                    <Button Content="Restore _last" Command="{Binding RestoreLastCommand}" Padding="8,3" Margin="0,0,16,0"
-                            ToolTip="Restore the last filter applied during this app session" />
-                    <ComboBox x:Name="SavedFilterBox" Width="180" ItemsSource="{Binding SavedFilters}"
-                              DisplayMemberPath="Name" SelectedItem="{Binding SelectedSavedFilter}"
-                              AutomationProperties.Name="Saved filters" />
-                    <Button Content="_Load" Padding="8,3" Margin="6,0,4,0" Click="OnLoadAdvancedFilter" />
-                    <Button Content="_Save as…" Padding="8,3" Margin="0,0,4,0" Click="OnSaveAdvancedFilter" />
-                    <Button Content="_Delete" Padding="8,3" Margin="0,0,4,0" Click="OnDeleteAdvancedFilter" />
-                    <Button Content="_Import…" Padding="8,3" Margin="0,0,4,0" Click="OnImportAdvancedFilter" />
-                    <Button Content="E_xport…" Padding="8,3" Click="OnExportAdvancedFilter" />
-                </WrapPanel>
-                <DockPanel Grid.Row="3" Margin="0,6,0,0">
-                    <Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelCommand}" Padding="7,1"
-                            Visibility="{Binding IsApplying, Converter={StaticResource BoolToVisibility}}"
-                            AutomationProperties.Name="Cancel advanced filter" />
-                    <TextBlock Text="{Binding Status}" Foreground="{DynamicResource Saz.Muted}"
-                               AutomationProperties.LiveSetting="Polite" />
-                </DockPanel>
-            </Grid>
-        </Border>
-        <!-- Credential scrub banner (captures opened with "View scrubbed"); details collapsed by default. -->
-        <Border x:Name="ScrubBanner" DataContext="{Binding ScrubBanner}" Style="{StaticResource Saz.Warning}" Margin="10,4,10,2"
-                Visibility="{Binding Converter={StaticResource NotNullToVisibility}}"
-                AutomationProperties.Name="{Binding Summary}">
-            <DockPanel>
-                <Button x:Name="ScrubDetailsButton" DockPanel.Dock="Right" Content="Details" Command="{Binding ToggleCommand}" Padding="7,1"
-                        VerticalAlignment="Top" AutomationProperties.Name="{Binding ToggleLabel}" ToolTip="{Binding ToggleLabel}" />
-                <StackPanel>
-                    <TextBlock Text="{Binding Summary}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
-                               AutomationProperties.LiveSetting="Polite" />
-                    <StackPanel x:Name="ScrubDetails" Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVisibility}}" Margin="0,2,0,0">
-                        <TextBlock Text="{Binding Details}" TextWrapping="Wrap" />
-                        <ItemsControl ItemsSource="{Binding Counts}" Focusable="False" Margin="24,2,0,0">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Orientation="Horizontal">
+            <!-- Toolbar: search, filter, Hide CONNECT, count, theme. -->
+            <Border Background="{DynamicResource Saz.Panel}" BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,0,0,1" Padding="10,8">
+                <Grid DataContext="{Binding Sessions}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <DockPanel Grid.Row="0">
+                        <controls:ThemeToggleButton x:Name="ThemeButton" DockPanel.Dock="Right" Margin="12,0,0,0" />
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding CountText}" Foreground="{DynamicResource Saz.Muted}" VerticalAlignment="Center"
+                                   Margin="12,0,0,0" AutomationProperties.LiveSetting="Polite" />
+                        <CheckBox DockPanel.Dock="Right" Content="Hide CONNECT" IsChecked="{Binding HideConnect}" Margin="12,0,0,0"
+                                  AutomationProperties.Name="Hide CONNECT sessions" />
+                        <ComboBox x:Name="FilterBox" DockPanel.Dock="Right" Width="170" Margin="8,0,0,0"
+                                  ItemsSource="{x:Static vm:SessionListViewModel.FilterOptions}"
+                                  SelectedItem="{Binding Filter}"
+                                  DisplayMemberPath="Label"
+                                  AutomationProperties.Name="Filter HTTP status or protocol" />
+                        <CheckBox x:Name="SearchPayloadsCheckBox" DockPanel.Dock="Right" Content="Search payloads"
+                                  IsChecked="{Binding SearchPayloads}" Margin="8,0,0,0" VerticalAlignment="Center"
+                                  AutomationProperties.Name="Search request, response, WebSocket, and MAPI payloads"
+                                  AutomationProperties.HelpText="Runs a cancellable background search over bounded decoded payload content"
+                                  ToolTip="Include decoded headers, bodies, WebSocket payloads, and available MAPI text" />
+                        <TextBlock DockPanel.Dock="Right" Margin="8,0,0,0" VerticalAlignment="Center"
+                                   Text="{Binding DataContext.Filters.Status, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                   Foreground="{DynamicResource Saz.Muted}"
+                                   Visibility="{Binding DataContext.Filters.HasAppliedFilter, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolToVisibility}}"
+                                   AutomationProperties.LiveSetting="Polite" />
+                        <Button x:Name="AdvancedFilterButton" DockPanel.Dock="Right" Margin="8,0,0,0"
+                                Width="32" Height="28" Padding="6,5" Click="OnToggleAdvancedFilter"
+                                ToolTip="Advanced filter (Ctrl+Shift+F)"
+                                AutomationProperties.Name="Advanced filter"
+                                AutomationProperties.HelpText="Build typed rules; shortcut Ctrl+Shift+F">
+                            <Grid Width="16" Height="16">
+                                <Path Data="M1,2 L15,2 L10,8 L10,13 L6,15 L6,8 Z"
+                                      Fill="{DynamicResource Saz.Text}" Stretch="Uniform" />
+                                <Ellipse Width="6" Height="6" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                         Fill="{DynamicResource Saz.Accent}" Stroke="{DynamicResource Saz.Panel}" StrokeThickness="1"
+                                         Visibility="{Binding DataContext.Filters.HasAppliedFilter, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolToVisibility}}" />
+                            </Grid>
+                        </Button>
+                        <TextBox x:Name="GridSearchBox" Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=120}"
+                                 Tag="Search method, URL, result, elapsed time, content type, endpoints..."
+                                 AutomationProperties.Name="Search HTTP sessions" />
+                    </DockPanel>
+                    <DockPanel Grid.Row="1" Margin="0,5,0,0"
+                               Visibility="{Binding PayloadSearchStatus, Converter={StaticResource NotNullToVisibility}}">
+                        <Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelPayloadSearchCommand}"
+                                Visibility="{Binding IsPayloadSearching, Converter={StaticResource BoolToVisibility}}"
+                                Padding="7,1" AutomationProperties.Name="Cancel payload search" />
+                        <TextBlock Text="{Binding PayloadSearchStatus}" Foreground="{DynamicResource Saz.Muted}"
+                                   VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                    </DockPanel>
+                </Grid>
+            </Border>
+            <!-- Credential scrub banner (captures opened with "View scrubbed"); details collapsed by default. -->
+            <Border x:Name="ScrubBanner" DataContext="{Binding ScrubBanner}" Style="{StaticResource Saz.Warning}" Margin="10,4,10,2"
+                    Visibility="{Binding Converter={StaticResource NotNullToVisibility}}"
+                    AutomationProperties.Name="{Binding Summary}">
+                <DockPanel>
+                    <Button x:Name="ScrubDetailsButton" DockPanel.Dock="Right" Content="Details" Command="{Binding ToggleCommand}" Padding="7,1"
+                            VerticalAlignment="Top" AutomationProperties.Name="{Binding ToggleLabel}" ToolTip="{Binding ToggleLabel}" />
+                    <StackPanel>
+                        <TextBlock Text="{Binding Summary}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                   AutomationProperties.LiveSetting="Polite" />
+                        <StackPanel x:Name="ScrubDetails" Visibility="{Binding IsExpanded, Converter={StaticResource BoolToVisibility}}" Margin="0,2,0,0">
+                            <TextBlock Text="{Binding Details}" TextWrapping="Wrap" />
+                            <ItemsControl ItemsSource="{Binding Counts}" Focusable="False" Margin="24,2,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
                                             <Ellipse Width="4" Height="4" Fill="{DynamicResource Saz.Text}" Margin="0,0,8,0" VerticalAlignment="Center" />
                                             <TextBlock Text="{Binding}" />
                                         </StackPanel>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
                     </StackPanel>
-                </StackPanel>
-            </DockPanel>
-        </Border>
+                </DockPanel>
+            </Border>
         </StackPanel>
 
         <DataGrid x:Name="SessionGrid" Grid.Row="1"

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Windows;
 
 namespace SazViewer.App;
 
@@ -223,6 +224,45 @@ internal sealed class UiPreferences
         }
     }
 
+    public Rect? FilterWindowBounds
+    {
+        get
+        {
+            if (document.FilterWindowLeft is not { } left
+                || document.FilterWindowTop is not { } top
+                || document.FilterWindowWidth is not { } width
+                || document.FilterWindowHeight is not { } height
+                || !double.IsFinite(left)
+                || !double.IsFinite(top)
+                || !double.IsFinite(width)
+                || !double.IsFinite(height)
+                || width < 1
+                || height < 1)
+            {
+                return null;
+            }
+            return new Rect(left, top, width, height);
+        }
+        set
+        {
+            if (value is not { } bounds || bounds.IsEmpty)
+            {
+                document.FilterWindowLeft = null;
+                document.FilterWindowTop = null;
+                document.FilterWindowWidth = null;
+                document.FilterWindowHeight = null;
+            }
+            else
+            {
+                document.FilterWindowLeft = bounds.Left;
+                document.FilterWindowTop = bounds.Top;
+                document.FilterWindowWidth = Math.Clamp(bounds.Width, 680, 4000);
+                document.FilterWindowHeight = Math.Clamp(bounds.Height, 320, 2400);
+            }
+            Save();
+        }
+    }
+
     public bool ScrubBannerExpanded
     {
         get => document.ScrubBanner == "expanded";
@@ -383,6 +423,14 @@ internal sealed class UiPreferences
         public double? RightPaneGridFraction { get; set; }
 
         public double? RightPaneHttpSplitFraction { get; set; }
+
+        public double? FilterWindowLeft { get; set; }
+
+        public double? FilterWindowTop { get; set; }
+
+        public double? FilterWindowWidth { get; set; }
+
+        public double? FilterWindowHeight { get; set; }
 
         public List<SessionColumnSetting>? GridColumns { get; set; }
     }

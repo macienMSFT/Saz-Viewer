@@ -39,6 +39,7 @@ internal sealed class CaptureTab : ICaptureTab
     private Views.CaptureView? nativeView;
     private ViewModels.CaptureViewModel? viewModel;
     private InspectorWindow? sessionViewerWindow;
+    private AdvancedFilterWindow? advancedFilterWindow;
     private FileChangeNotice notice;
     private string? reloadError;
     private bool reloading;
@@ -57,6 +58,7 @@ internal sealed class CaptureTab : ICaptureTab
         headerTitle = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MaxWidth = 260, TextTrimming = TextTrimming.CharacterEllipsis };
         TabItem = CreateTabItem();
         nativeView = new Views.CaptureView();
+        nativeView.AdvancedFilterRequested += OnAdvancedFilterRequested;
         View.Host.Children.Add(nativeView);
         Attach(document);
         watcher = new CaptureFileWatcher(SourcePath, CaptureFileWatcher.DefaultQuietPeriod, TimeProvider.System);
@@ -90,6 +92,8 @@ internal sealed class CaptureTab : ICaptureTab
 
     /// <summary>The reusable grid-following viewer window, when that option is active and a row is selected.</summary>
     internal InspectorWindow? SessionViewerWindow => sessionViewerWindow;
+
+    internal AdvancedFilterWindow? AdvancedFilterWindow => advancedFilterWindow;
 
     public string Status { get; private set; } = "";
 
@@ -171,6 +175,7 @@ internal sealed class CaptureTab : ICaptureTab
         Detach();
         if (nativeView is not null)
         {
+            nativeView.AdvancedFilterRequested -= OnAdvancedFilterRequested;
             nativeView.DataContext = null;
             View.Host.Children.Remove(nativeView);
             nativeView = null;
@@ -192,6 +197,7 @@ internal sealed class CaptureTab : ICaptureTab
 
     private void Detach()
     {
+        CloseAdvancedFilterWindow();
         if (viewModel is not null)
         {
             viewModel.Inspector.PopOutRequested -= OnPopOutRequested;
@@ -264,8 +270,48 @@ internal sealed class CaptureTab : ICaptureTab
         window.Show();
     }
 
+    private void OnAdvancedFilterRequested(object? sender, EventArgs e)
+    {
+        if (advancedFilterWindow is { } existing)
+        {
+            if (existing.WindowState == WindowState.Minimized)
+            {
+                existing.WindowState = WindowState.Normal;
+            }
+            existing.Show();
+            existing.Activate();
+            return;
+        }
+        if (viewModel is null || disposed)
+        {
+            return;
+        }
+        var window = new AdvancedFilterWindow(DisplayName, viewModel.Filters, preferences, host.HostWindow);
+        advancedFilterWindow = window;
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(advancedFilterWindow, window))
+            {
+                advancedFilterWindow = null;
+            }
+        };
+        window.Show();
+        window.Activate();
+    }
+
+    private void CloseAdvancedFilterWindow()
+    {
+        if (advancedFilterWindow is not { } window)
+        {
+            return;
+        }
+        advancedFilterWindow = null;
+        window.Close();
+    }
+
     private void CloseAllPopOuts()
     {
+        CloseAdvancedFilterWindow();
         CloseSessionViewerWindow(preserveInspector: false);
         foreach (var window in popOuts.ToArray())
         {

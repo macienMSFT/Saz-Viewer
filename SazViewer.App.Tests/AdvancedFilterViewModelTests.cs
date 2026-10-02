@@ -122,7 +122,7 @@ public sealed class AdvancedFilterViewModelTests
     }
 
     [Fact]
-    public void CaptureViewExposesCollapsedKeyboardAccessibleFilterBuilder()
+    public void CaptureViewExposesAccessibleFilterIconAndPopupEditor()
     {
         var preferences = new UiPreferences(null);
         var model = new CaptureViewModel(NativeCaptures.Mixed(), new FakeClipboard(), preferences);
@@ -131,23 +131,27 @@ public sealed class AdvancedFilterViewModelTests
         {
             var view = new CaptureView { DataContext = model };
             var host = new Window { Content = view, Width = 1400, Height = 850, ShowInTaskbar = false };
+            AdvancedFilterWindow? popup = null;
             try
             {
                 host.Show();
                 StaRunner.DoEvents();
-                var panel = (Border)view.FindName("AdvancedFilterPanel");
                 var button = (Button)view.FindName("AdvancedFilterButton");
-                Assert.Equal(Visibility.Collapsed, panel.Visibility);
-                Assert.Equal("Show advanced filter builder", AutomationProperties.GetName(button));
+                Assert.Null(view.FindName("AdvancedFilterPanel"));
+                Assert.Equal("Advanced filter", AutomationProperties.GetName(button));
+                Assert.Equal("Advanced filter (Ctrl+Shift+F)", button.ToolTip);
 
-                view.ShowAdvancedFilter();
+                popup = new AdvancedFilterWindow("capture.saz", model.Filters, preferences, host);
+                popup.Show();
                 StaRunner.DoEvents();
 
-                Assert.Equal(Visibility.Visible, panel.Visibility);
-                var list = (ItemsControl)view.FindName("FilterRuleList");
+                Assert.Null(popup.Owner);
+                Assert.True(popup.ShowInTaskbar);
+                Assert.Equal("Filter sessions \u2013 capture.saz", popup.Title);
+                var list = (ItemsControl)popup.FilterView.FindName("FilterRuleList");
                 Assert.Single(list.Items);
                 Assert.Equal("Advanced filter rules", AutomationProperties.GetName(list));
-                var names = Descendants<Control>(panel)
+                var names = Descendants<Control>(popup.FilterView)
                     .Select(AutomationProperties.GetName)
                     .Where(name => !string.IsNullOrEmpty(name))
                     .ToHashSet(StringComparer.Ordinal);
@@ -163,6 +167,7 @@ public sealed class AdvancedFilterViewModelTests
             }
             finally
             {
+                popup?.Close();
                 host.Close();
                 model.Dispose();
                 StaRunner.DoEvents();
@@ -260,7 +265,6 @@ public sealed class AdvancedFilterViewModelTests
         second.RestoreLastCommand.Execute(null);
 
         Assert.Equal("restore-me", second.Rules[0].Value);
-        Assert.True(second.IsPanelOpen);
         Assert.Contains("last filter", second.Status, StringComparison.OrdinalIgnoreCase);
     }
 

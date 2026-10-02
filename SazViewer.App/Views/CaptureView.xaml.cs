@@ -29,6 +29,8 @@ internal partial class CaptureView : UserControl
     private bool rebuildingColumns;
     private bool widthSavePending;
 
+    internal event EventHandler? AdvancedFilterRequested;
+
     public CaptureView()
     {
         InitializeComponent();
@@ -439,174 +441,15 @@ internal partial class CaptureView : UserControl
 
     internal void ShowAdvancedFilter()
     {
-        if (model is null)
+        if (model is not null)
         {
-            return;
+            AdvancedFilterRequested?.Invoke(this, EventArgs.Empty);
         }
-        model.Filters.IsPanelOpen = true;
-        Dispatcher.BeginInvoke(() =>
-        {
-            if (FilterRuleList.ItemContainerGenerator.ContainerFromIndex(0) is UIElement first)
-            {
-                first.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
-            }
-            else
-            {
-                AdvancedFilterButton.Focus();
-            }
-        }, System.Windows.Threading.DispatcherPriority.Input);
     }
 
     private void OnToggleAdvancedFilter(object sender, RoutedEventArgs e)
     {
-        if (model is null)
-        {
-            return;
-        }
-        model.Filters.IsPanelOpen = !model.Filters.IsPanelOpen;
-        if (model.Filters.IsPanelOpen)
-        {
-            ShowAdvancedFilter();
-        }
-        else
-        {
-            AdvancedFilterButton.Focus();
-        }
-    }
-
-    private async void OnApplyAdvancedFilter(object sender, RoutedEventArgs e)
-    {
-        if (model is not null)
-        {
-            await model.Filters.ApplyAsync();
-        }
-    }
-
-    private void OnFilterFieldChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (model is null
-            || sender is not ComboBox { DataContext: FilterRuleViewModel rule }
-            || e.AddedItems.OfType<FilterFieldOption>().FirstOrDefault() is not { Prompt: not FilterFieldPrompt.None } selected)
-        {
-            return;
-        }
-        var (kind, title, label) = selected.Prompt switch
-        {
-            FilterFieldPrompt.RequestHeader => (SessionColumnSetting.RequestHeaderKind, "Request header filter", "Header name"),
-            FilterFieldPrompt.ResponseHeader => (SessionColumnSetting.ResponseHeaderKind, "Response header filter", "Header name"),
-            _ => (SessionColumnSetting.SessionFlagKind, "Session flag filter", "Session flag name")
-        };
-        var dialog = new CustomColumnWindow(title, label) { Owner = Window.GetWindow(this) };
-        if (dialog.ShowDialog() == true)
-        {
-            rule.FieldOption = model.Filters.AddCustomField(kind, dialog.SourceName, dialog.ColumnHeader);
-        }
-        else
-        {
-            rule.CancelFieldPrompt();
-        }
-    }
-
-    private void OnLoadAdvancedFilter(object sender, RoutedEventArgs e) => model?.Filters.LoadSelected();
-
-    private void OnSaveAdvancedFilter(object sender, RoutedEventArgs e)
-    {
-        if (model is null)
-        {
-            return;
-        }
-        var dialog = new FilterNameWindow(model.Filters.SelectedSavedFilter?.Name) { Owner = Window.GetWindow(this) };
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-        try
-        {
-            model.Filters.SaveAs(dialog.FilterName);
-        }
-        catch (InvalidDataException exception)
-        {
-            MessageBox.Show(Window.GetWindow(this), exception.Message, "Save named filter",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-    }
-
-    private void OnDeleteAdvancedFilter(object sender, RoutedEventArgs e)
-    {
-        if (model?.Filters.SelectedSavedFilter is not { } selected
-            || MessageBox.Show(Window.GetWindow(this), $"Delete the named filter \u201c{selected.Name}\u201d?",
-                "Delete named filter", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
-        {
-            return;
-        }
-        model.Filters.DeleteSelected();
-    }
-
-    private void OnImportAdvancedFilter(object sender, RoutedEventArgs e)
-    {
-        if (model is null)
-        {
-            return;
-        }
-        var dialog = new OpenFileDialog
-        {
-            Title = "Import named filters",
-            Filter = "SAZ Viewer filters (*.sazfilter.json)|*.sazfilter.json|JSON files (*.json)|*.json",
-            CheckFileExists = true,
-            Multiselect = false
-        };
-        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
-        {
-            return;
-        }
-        try
-        {
-            model.Filters.Import(dialog.FileName);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
-        {
-            MessageBox.Show(Window.GetWindow(this), exception.Message, "Import named filters",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-    }
-
-    private void OnExportAdvancedFilter(object sender, RoutedEventArgs e)
-    {
-        if (model?.Filters.SelectedSavedFilter is not { } selected)
-        {
-            MessageBox.Show(Window.GetWindow(this), "Choose a saved filter to export.", "Export named filter",
-                MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-        var dialog = new SaveFileDialog
-        {
-            Title = "Export named filter",
-            FileName = SafeFileName(selected.Name) + ".sazfilter.json",
-            DefaultExt = ".sazfilter.json",
-            Filter = "SAZ Viewer filters (*.sazfilter.json)|*.sazfilter.json|JSON files (*.json)|*.json",
-            AddExtension = true,
-            OverwritePrompt = true
-        };
-        if (dialog.ShowDialog(Window.GetWindow(this)) != true)
-        {
-            return;
-        }
-        try
-        {
-            model.Filters.ExportSelected(dialog.FileName);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
-        {
-            MessageBox.Show(Window.GetWindow(this), exception.Message, "Export named filter",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-    }
-
-    private static string SafeFileName(string value)
-    {
-        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
-        var sanitized = new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
-        return sanitized.Length == 0 ? "filter" : sanitized;
+        ShowAdvancedFilter();
     }
 
     private void FocusSelectedRow()

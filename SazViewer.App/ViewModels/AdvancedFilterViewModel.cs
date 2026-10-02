@@ -54,7 +54,6 @@ internal sealed class AdvancedFilterViewModel : ObservableObject, IDisposable
     private readonly UiPreferences preferences;
     private readonly AdvancedFilterStore store;
     private CancellationTokenSource? cancellation;
-    private bool isPanelOpen;
     private bool isApplying;
     private string status = "No advanced filter applied.";
     private SavedAdvancedFilter? selectedSavedFilter;
@@ -104,12 +103,6 @@ internal sealed class AdvancedFilterViewModel : ObservableObject, IDisposable
     public RelayCommand CancelCommand { get; }
 
     public RelayCommand RestoreLastCommand { get; }
-
-    public bool IsPanelOpen
-    {
-        get => isPanelOpen;
-        set => SetProperty(ref isPanelOpen, value);
-    }
 
     public bool IsApplying
     {
@@ -368,7 +361,6 @@ internal sealed class AdvancedFilterViewModel : ObservableObject, IDisposable
         {
             AddRule();
         }
-        IsPanelOpen = true;
     }
 
     private FilterFieldOption FindOrAddField(AdvancedFilterField field)
