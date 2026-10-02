@@ -1,5 +1,4 @@
 using System.Windows.Controls;
-using System.Windows.Data;
 using System.Windows.Input;
 using SazViewer.App.ViewModels;
 
@@ -37,12 +36,6 @@ internal partial class ActiveSearchBar : UserControl
             {
                 search.Move(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -1 : 1);
             }
-            e.Handled = true;
-        }
-        else if (e.Key == Key.Escape && QueryBox.Text.Length > 0)
-        {
-            QueryBox.Clear();
-            BindingOperations.GetBindingExpression(QueryBox, TextBox.TextProperty)?.UpdateSource();
             e.Handled = true;
         }
     }

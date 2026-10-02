@@ -54,11 +54,12 @@
                 <DockPanel DockPanel.Dock="Top" Margin="6">
                     <TextBlock DockPanel.Dock="Right" Text="{Binding SearchStatus}" Foreground="{DynamicResource Saz.Muted}" FontSize="12"
                                VerticalAlignment="Center" Margin="8,0,0,0" AutomationProperties.LiveSetting="Polite" />
-                    <TextBox x:Name="FilterBox" Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=120}" MaxLength="4096"
-                             Tag="Search WebSocket payloads..." ToolTip="{Binding SearchHelp}"
-                             AutomationProperties.Name="Search WebSocket payloads"
-                             AutomationProperties.HelpText="{Binding SearchHelp}"
-                             PreviewKeyDown="OnFilterKeyDown" />
+                    <views:SearchBox x:Name="FilterBox"
+                                     Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=120}" MaxLength="4096"
+                                     Tag="Search WebSocket payloads..." ToolTip="{Binding SearchHelp}"
+                                     AutomationProperties.Name="Search WebSocket payloads"
+                                     AutomationProperties.HelpText="{Binding SearchHelp}"
+                                     PreviewKeyDown="OnFilterKeyDown" />
                 </DockPanel>
                 <Grid>
                     <DataGrid x:Name="MessageGrid"

@@ -12,10 +12,10 @@
                 AutomationProperties.Name="Previous active-view search match" ToolTip="Previous match (Shift+Enter)" />
         <TextBlock DockPanel.Dock="Right" Text="{Binding Status}" Foreground="{DynamicResource Saz.Muted}" VerticalAlignment="Center"
                    Margin="8,0,0,0" MinWidth="70" AutomationProperties.LiveSetting="Polite" />
-        <TextBox x:Name="QueryBox"
-                 Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=150}"
-                 Tag="{Binding Placeholder}"
-                 AutomationProperties.Name="{Binding AccessibleName}"
-                 PreviewKeyDown="OnQueryKeyDown" />
+        <views:SearchBox x:Name="QueryBox"
+                         Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=150}"
+                         Tag="{Binding Placeholder}"
+                         AutomationProperties.Name="{Binding AccessibleName}"
+                         PreviewKeyDown="OnQueryKeyDown" />
     </DockPanel>
 </UserControl>

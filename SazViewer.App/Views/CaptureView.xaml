@@ -72,9 +72,10 @@
                                          Visibility="{Binding DataContext.Filters.HasAppliedFilter, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolToVisibility}}" />
                             </Grid>
                         </Button>
-                        <TextBox x:Name="GridSearchBox" Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=120}"
-                                 Tag="Search method, URL, result, elapsed time, content type, endpoints..."
-                                 AutomationProperties.Name="Search HTTP sessions" />
+                        <views:SearchBox x:Name="GridSearchBox"
+                                         Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=120}"
+                                         Tag="Search method, URL, result, elapsed time, content type, endpoints..."
+                                         AutomationProperties.Name="Search HTTP sessions" />
                     </DockPanel>
                     <DockPanel Grid.Row="1" Margin="0,5,0,0"
                                Visibility="{Binding PayloadSearchStatus, Converter={StaticResource NotNullToVisibility}}">

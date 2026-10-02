@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using SazViewer.App.ViewModels;
@@ -93,12 +92,6 @@ internal partial class WebSocketInspectorView : UserControl
             {
                 model.SelectRelative(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? -1 : 1);
             }
-            e.Handled = true;
-        }
-        else if (e.Key == Key.Escape && FilterBox.Text.Length > 0)
-        {
-            FilterBox.Clear();
-            BindingOperations.GetBindingExpression(FilterBox, TextBox.TextProperty)?.UpdateSource();
             e.Handled = true;
         }
     }
