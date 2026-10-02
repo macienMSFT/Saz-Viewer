@@ -1806,6 +1806,13 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("let desiredExpanded=true", html, StringComparison.Ordinal);
         Assert.Contains("safeProtocolText(node.name)", html, StringComparison.Ordinal);
         Assert.Contains("code===0x061C||code===0x200E||code===0x200F||code===0x2028||code===0x2029", html, StringComparison.Ordinal);
+        Assert.Contains("const isHighSurrogate=code>=0xD800&&code<=0xDBFF;", html, StringComparison.Ordinal);
+        Assert.Contains("const isLowSurrogate=code>=0xDC00&&code<=0xDFFF;", html, StringComparison.Ordinal);
+        Assert.Contains("if(hasLowSurrogate)result+=value[++index];", html, StringComparison.Ordinal);
+        Assert.Contains("if(character.charCodeAt(0)===0x5C){", html, StringComparison.Ordinal);
+        Assert.Contains("source.slice(index,index+4)", html, StringComparison.Ordinal);
+        Assert.Contains("if(current.charCodeAt(0)!==0x5C)continue;", html, StringComparison.Ordinal);
+        Assert.Contains("if(/^[0-9A-Fa-f]{4}$/.test(hex))index+=4;", html, StringComparison.Ordinal);
         Assert.Contains("protocolDisplayValue(node)", html, StringComparison.Ordinal);
         Assert.Contains("Binary (${node.length} byte", html, StringComparison.Ordinal);
         Assert.Contains("--protocol-kind:#d2a8ff", html, StringComparison.Ordinal);

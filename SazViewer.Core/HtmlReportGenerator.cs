@@ -474,6 +474,9 @@ function safeProtocolText(value){
   let result='';
   for(let index=0;index<value.length;index++){
     const code=value.charCodeAt(index);
+    const isHighSurrogate=code>=0xD800&&code<=0xDBFF;
+    const isLowSurrogate=code>=0xDC00&&code<=0xDFFF;
+    const hasLowSurrogate=isHighSurrogate&&index+1<value.length&&value.charCodeAt(index+1)>=0xDC00&&value.charCodeAt(index+1)<=0xDFFF;
     if(code===0){result+='\\0';continue}
     if(code===9){result+='\\t';continue}
     if(code===10){result+='\\n';continue}
@@ -484,12 +487,12 @@ function safeProtocolText(value){
     }
     if(code===0x061C||code===0x200E||code===0x200F||code===0x2028||code===0x2029
       ||code===0xFEFF||(code>=0x202A&&code<=0x202E)||(code>=0x2066&&code<=0x2069)
-      ||(code>=0xD800&&code<=0xDFFF&&!((code<=0xDBFF)&&index+1<value.length&&value.charCodeAt(index+1)>=0xDC00&&value.charCodeAt(index+1)<=0xDFFF))){
+      ||(isHighSurrogate&&!hasLowSurrogate)||isLowSurrogate){
       result+=`\\u${code.toString(16).toUpperCase().padStart(4,'0')}`;
       continue;
     }
     result+=value[index];
-    if(code>=0xD800&&code<=0xDBFF)result+=value[++index];
+    if(hasLowSurrogate)result+=value[++index];
   }
   return result;
 }
@@ -912,12 +915,15 @@ function parseCanonicalJson(source){
     const start=index++;
     while(index<source.length){
       const character=source[index++];
-      if(character==='"\\'){
+      if(character.charCodeAt(0)===0x5C){
         if(index>=source.length)throw new Error('invalid JSON escape');
-        if(source[index]==='u'){
-          if(!/^[0-9A-Fa-f]{4}$/.test(source.slice(index+1,index+5)))throw new Error('invalid JSON Unicode escape');
-          index+=5;
-        }else index++;
+        const escape=source[index++];
+        if(escape==='u'){
+          if(!/^[0-9A-Fa-f]{4}$/.test(source.slice(index,index+4)))throw new Error('invalid JSON Unicode escape');
+          index+=4;
+        }else if(escape.charCodeAt(0)!==0x22&&escape.charCodeAt(0)!==0x5C&&escape.charCodeAt(0)!==0x2F&&!['b','f','n','r','t'].includes(escape)){
+          throw new Error('invalid JSON escape');
+        }
       }else if(character==='"') {
         const raw=source.slice(start,index);
         return{raw,value:JSON.parse(raw)};
@@ -970,7 +976,7 @@ function dotNetJsonString(value){
   let result='"';
   for(let index=0;index<value.length;index++){
     const character=value[index],code=value.charCodeAt(index);
-    if(character==='"')result+='\\"';
+    if(character==='"')result+='\\u0022';
     else if(character==='\\')result+='\\\\';
     else if(character==='\b')result+='\\b';
     else if(character==='\f')result+='\\f';
@@ -2483,11 +2489,17 @@ function highlightJson(pre){
   while(index<value.length){
     const start=index,character=value[index];
     if(character==='"'){
-      index++;let escaped=false;
+      index++;
       while(index<value.length){
         const current=value[index++];
-        if(current==='"'&&!escaped)break;
-        escaped=current==='\\'&&!escaped;if(current!=='\\')escaped=false;
+        if(current==='"')break;
+        if(current.charCodeAt(0)!==0x5C)continue;
+        if(index>=value.length)break;
+        const escape=value[index++];
+        if(escape==='u'){
+          const hex=value.slice(index,index+4);
+          if(/^[0-9A-Fa-f]{4}$/.test(hex))index+=4;
+        }
       }
       let lookahead=index;while(lookahead<value.length&&/\s/.test(value[lookahead]))lookahead++;
       appendSpan(fragment,lookahead<value.length&&value[lookahead]===':'?'syn-key':'syn-string',value.slice(start,index));

@@ -12,7 +12,7 @@ namespace SazViewer.Tests;
 public sealed class HtmlReportBrowserTests
 {
     private const string InjectionText = "<img src=x onerror=globalThis.pwned=true>";
-    private const string RequestBody = """{"payload":{"enabled":true},"items":[1,2],"emptyObject":{},"emptyArray":[],"attack":"</script><svg onload=globalThis.pwned=true>"}""";
+    private const string RequestBody = """{"payload":{"enabled":true},"items":[1,2],"emptyObject":{},"emptyArray":[],"escapedQuote":"a\"b","trailingBackslash":"x\\","unicodeEscape":"\u263A","emoji":"😀","attack":"</script><svg onload=globalThis.pwned=true>"}""";
     private const string ResponseBody = "<root><value>safe</value></root>";
     private static readonly string WebSocketJson = JsonSerializer.Serialize(new
     {
@@ -33,7 +33,8 @@ public sealed class HtmlReportBrowserTests
         try
         {
             Directory.CreateDirectory(tempDirectory);
-            await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(CreateReport()));
+            var report = CreateReport();
+            await File.WriteAllTextAsync(reportPath, new HtmlReportGenerator().Generate(report));
 
             using var playwright = await Playwright.CreateAsync();
             await using var browser = await playwright.Chromium.LaunchAsync(new()
@@ -45,6 +46,7 @@ public sealed class HtmlReportBrowserTests
             await VerifyHttpSessionTableLayoutAsync(browser, tempDirectory);
             await VerifyInspectorAsync(browser, reportPath, 1440, exerciseAllControls: true);
             await VerifyInspectorAsync(browser, reportPath, 480, exerciseAllControls: false);
+            await VerifyUnpairedSurrogatesAsync(browser, reportPath);
             await VerifyThemePersistenceAsync(browser, reportPath);
             await VerifyHttpActiveViewSearchAsync(browser, reportPath);
             await VerifyHttpLayoutDefaultsAndMigrationAsync(browser, reportPath);
@@ -66,6 +68,54 @@ public sealed class HtmlReportBrowserTests
             {
                 Directory.Delete(tempDirectory, recursive: true);
             }
+        }
+    }
+
+    private static async Task VerifyUnpairedSurrogatesAsync(IBrowser browser, string reportPath)
+    {
+        var errors = new List<string>();
+        var page = await browser.NewPageAsync();
+        CaptureErrors(page, errors);
+        try
+        {
+            await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
+            await page.EvaluateAsync(
+                """
+                async()=>{
+                  const host=document.getElementById('http-detail-0').content.querySelector('[data-payload-type="http-session"]');
+                  const compressed=Uint8Array.from(atob(host.dataset.compressedPayload),character=>character.charCodeAt(0));
+                  const sourceStream=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
+                  const model=JSON.parse(await new Response(sourceStream).text());
+                  const body=String.raw`{"emoji":"😀","loneHigh":"\uD800","loneLow":"\uDC00"}`;
+                  model.request.body.fallbackText=body;
+                  model.request.body.length=new TextEncoder().encode(body).length;
+                  model.request.body.capturedLength=model.request.body.length;
+                  const encoded=new TextEncoder().encode(JSON.stringify(model));
+                  const reader=new Blob([encoded]).stream().pipeThrough(new CompressionStream('gzip')).getReader();
+                  const chunks=[];let length=0;
+                  while(true){
+                    const result=await reader.read();
+                    if(result.done)break;
+                    chunks.push(result.value);length+=result.value.length;
+                  }
+                  const replacement=new Uint8Array(length);let offset=0;
+                  for(const chunk of chunks){replacement.set(chunk,offset);offset+=chunk.length}
+                  let binary='';for(const value of replacement)binary+=String.fromCharCode(value);
+                  host.dataset.compressedPayload=btoa(binary);
+                  host.dataset.payloadDecodedBytes=String(encoded.length);
+                }
+                """);
+            await page.Locator("#httpTable tbody tr").First.ClickAsync();
+            var labels = page.Locator("#request-panel-json .tree-label");
+            await Assertions.Expect(labels.Filter(new() { HasText = "emoji: 😀" })).ToHaveCountAsync(1);
+            await Assertions.Expect(labels.Filter(new() { HasText = @"loneHigh: \uD800" })).ToHaveCountAsync(1);
+            await Assertions.Expect(labels.Filter(new() { HasText = @"loneLow: \uDC00" })).ToHaveCountAsync(1);
+            Assert.DoesNotContain('\uFFFD', await page.Locator("#request-panel-json .json-tree").InnerTextAsync());
+            Assert.Empty(errors);
+        }
+        finally
+        {
+            await page.CloseAsync();
         }
     }
 
@@ -822,6 +872,10 @@ public sealed class HtmlReportBrowserTests
                     "items[1]: 2",
                     "emptyObject",
                     "emptyArray",
+                    "escapedQuote: a\"b",
+                    "trailingBackslash: x\\",
+                    "unicodeEscape: ☺",
+                    "emoji: 😀",
                     "attack: </script><svg onload=globalThis.pwned=true>"
                 ],
                 await jsonTree.Locator(".tree-label").AllTextContentsAsync());
@@ -849,6 +903,11 @@ public sealed class HtmlReportBrowserTests
             Assert.True(await search.EvaluateAsync<bool>("input=>document.activeElement===input"));
 
             await page.Locator("#request-panel-json [data-view=pretty]").ClickAsync();
+            var formattedStrings = await page.Locator("#request-panel-json .formatted-view .syn-string").AllTextContentsAsync();
+            Assert.Contains(@"""a\u0022b""", formattedStrings);
+            Assert.Contains(@"""x\\""", formattedStrings);
+            Assert.Contains(@"""\u263A""", formattedStrings);
+            Assert.Contains(@"""\uD83D\uDE00""", formattedStrings);
             Assert.Equal("", await search.InputValueAsync());
             Assert.Equal("0 matches", await status.InnerTextAsync());
             Assert.Equal("false", await jsonRoot.GetAttributeAsync("aria-expanded"));
@@ -967,7 +1026,7 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal(7, await page.Locator("#request-panel-mapi .tree-item[aria-expanded=true]").CountAsync());
             await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-value").Filter(new() { HasText = "RopLogon = 0xFE" }))
                 .ToHaveCountAsync(1);
-            await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-value").Filter(new() { HasText = "Straße雪" }))
+            await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-value").Filter(new() { HasText = "Straße雪😀" }))
                 .ToHaveCountAsync(1);
             await Assertions.Expect(page.Locator("#request-panel-mapi .protocol-value").Filter(new() { HasText = @"line\0\x1B\r\n" }))
                 .ToHaveCountAsync(1);
@@ -1709,8 +1768,8 @@ public sealed class HtmlReportBrowserTests
                 request.Y < 300 && request.Height > 500 && request.Y + request.Height <= 901,
                 $"Request content did not fill the visible inspector: y={request.Y}, height={request.Height}.");
             Assert.Equal("true", await page.Locator("#primary-tab-request").GetAttributeAsync("aria-selected"));
-            Assert.Contains("payload", await page.Locator("#primary-panel-request").InnerTextAsync());
             await page.Locator("#request-panel-json .tree-item").First.WaitForAsync();
+            Assert.Contains("payload", await page.Locator("#primary-panel-request").InnerTextAsync());
             Assert.Null(await page.Locator("#request-panel-json .tree-subview")
                 .GetAttributeAsync("data-compressed-payload"));
             Assert.Null(await page.Locator("#response-panel-xml .tree-subview")
@@ -2820,8 +2879,8 @@ public sealed class HtmlReportBrowserTests
         new BodyFormatter().Format(
             new BodyPreview
             {
-                Length = RequestBody.Length,
-                CapturedLength = RequestBody.Length,
+                Length = Encoding.UTF8.GetByteCount(RequestBody),
+                CapturedLength = Encoding.UTF8.GetByteCount(RequestBody),
                 Preview = RequestBody,
             },
             "application/json").Formatted;
@@ -2847,7 +2906,7 @@ public sealed class HtmlReportBrowserTests
         "            RopsList [Array] @0 +8\n" +
         "              PropertyValue [Property] @4 +4 = safe\n" +
         "              RopId [Field] @4 +1 = 0xFE (RopLogon)\n" +
-        "              UnicodeText [Field] @5 +2 = Straße雪\n" +
+        "              UnicodeText [Field] @5 +2 = Straße雪😀\n" +
         "              ControlledText [Field] @6 +2 = line\0\u001B\r\n\u061C\u200E\u200F\u2028\u2029\u202A\u2066\n" +
         "              RawBytes [Raw] @8 +6 = 00FF1B7F ... [2 more bytes]";
 
@@ -2855,7 +2914,7 @@ public sealed class HtmlReportBrowserTests
         "Original headers\n" +
         "POST /formatted HTTP/1.1\n" +
         "Content-Type: application/json\n\n" +
-        $"Body ({RequestBody.Length} B)\n" +
+        $"Body ({Encoding.UTF8.GetByteCount(RequestBody)} B)\n" +
         "Format: JSON\n" +
         "Status: Parsed as JSON from Content-Type and body content.\n" +
         RequestBody;
@@ -3116,7 +3175,7 @@ public sealed class HtmlReportBrowserTests
                                                             [
                                                                 MapiNode.Leaf("PropertyValue", MapiNodeKind.Property, 4, 4, "safe"),
                                                                 MapiNode.Leaf("RopId", MapiNodeKind.Field, 4, 1, "0xFE (RopLogon)"),
-                                                                MapiNode.Leaf("UnicodeText", MapiNodeKind.Field, 5, 2, "Straße雪"),
+                                                                MapiNode.Leaf("UnicodeText", MapiNodeKind.Field, 5, 2, "Straße雪😀"),
                                                                 MapiNode.Leaf("ControlledText", MapiNodeKind.Field, 6, 2, "line\0\u001B\r\n\u061C\u200E\u200F\u2028\u2029\u202A\u2066"),
                                                                 MapiNode.Leaf("RawBytes", MapiNodeKind.Raw, 8, 6, "00FF1B7F ... [2 more bytes]")
                                                             ])
@@ -3309,13 +3368,14 @@ public sealed class HtmlReportBrowserTests
 
     private static HttpMessage Message(string startLine, string contentType, string body)
     {
+        var byteLength = Encoding.UTF8.GetByteCount(body);
         var message = new HttpMessage
         {
             StartLine = startLine,
             Body = new BodyPreview
             {
-                Length = body.Length,
-                CapturedLength = body.Length,
+                Length = byteLength,
+                CapturedLength = byteLength,
                 Preview = body,
             },
         };
