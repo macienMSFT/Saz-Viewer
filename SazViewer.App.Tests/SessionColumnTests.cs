@@ -230,9 +230,9 @@ public sealed class SessionColumnTests
     }
 
     [Fact]
-    public void RightPaneKeepsFixedColumnWidthsAndUsesHorizontalOverflow()
+    public void RightPaneMatchesBottomPaneColumnWidthsAndUsesHorizontalOverflow()
     {
-        var preferences = new UiPreferences(null) { SessionViewer = SessionViewerLocation.RightPane };
+        var preferences = new UiPreferences(null);
         var model = new CaptureViewModel(NativeCaptures.Mixed(), new FakeClipboard(), preferences);
 
         StaRunner.Run(() =>
@@ -248,17 +248,43 @@ public sealed class SessionColumnTests
                 StaRunner.DoEvents();
 
                 var url = Assert.Single(grid.Columns, column => Equals(column.Header, "URL"));
+                Assert.True(url.Width.IsStar);
+                var bottomWidths = grid.Columns.ToDictionary(
+                    column => column.Header?.ToString() ?? "",
+                    column => column.ActualWidth);
+
+                preferences.SessionViewer = SessionViewerLocation.RightPane;
+                model.ApplyPreferences();
+                StaRunner.DoEvents();
+
                 Assert.True(url.Width.IsAbsolute);
-                Assert.Equal(400, url.Width.Value);
-                var widths = grid.Columns.ToDictionary(column => column.Header?.ToString() ?? "", column => column.ActualWidth);
+                Assert.True(grid.Columns.Sum(column => column.ActualWidth) > grid.ActualWidth);
+                Assert.All(bottomWidths, pair =>
+                    Assert.Equal(pair.Value, grid.Columns.Single(column => Equals(column.Header, pair.Key)).ActualWidth, 1));
 
                 host.Width = 700;
                 StaRunner.DoEvents();
 
-                Assert.Equal(400, url.ActualWidth);
-                Assert.True(grid.Columns.Sum(column => column.ActualWidth) > grid.ActualWidth);
-                Assert.All(widths, pair =>
+                Assert.All(bottomWidths, pair =>
                     Assert.Equal(pair.Value, grid.Columns.Single(column => Equals(column.Header, pair.Key)).ActualWidth, 1));
+
+                preferences.SessionViewer = SessionViewerLocation.BottomPane;
+                model.ApplyPreferences();
+                StaRunner.DoEvents();
+                url = Assert.Single(grid.Columns, column => Equals(column.Header, "URL"));
+                Assert.True(url.Width.IsStar);
+                url.Width = 275;
+                typeof(CaptureView).GetMethod("SaveColumnLayout", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(view, null);
+                StaRunner.DoEvents();
+
+                preferences.SessionViewer = SessionViewerLocation.RightPane;
+                model.ApplyPreferences();
+                StaRunner.DoEvents();
+
+                url = Assert.Single(grid.Columns, column => Equals(column.Header, "URL"));
+                Assert.True(url.Width.IsAbsolute);
+                Assert.Equal(275, url.ActualWidth);
             }
             finally
             {

@@ -32,7 +32,7 @@ public sealed class ShellFeatureTests
         Assert.Equal(
             ["time", "id", "result", "method", "url", "elapsed", "request-size", "response-size"],
             preferences.GridColumns.Select(column => column.Id));
-        Assert.Equal(400, preferences.GridColumns.Single(column => column.Id == "url").Width);
+        Assert.Null(preferences.GridColumns.Single(column => column.Id == "url").Width);
         Assert.Equal(LayoutWidthClass.Narrow, UiPreferences.WidthClassFor(899.5));
         Assert.Equal(LayoutWidthClass.Wide, UiPreferences.WidthClassFor(900));
     }

@@ -134,6 +134,14 @@ internal partial class CaptureView : UserControl
         }
         InspectorHost.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
         InspectorSplitter.Visibility = InspectorHost.Visibility;
+        if (open && location == SessionViewerLocation.RightPane)
+        {
+            LockResponsiveUrlWidth();
+        }
+        else
+        {
+            RestoreResponsiveUrlWidth();
+        }
         if (!open)
         {
             ShowGridOnly();
@@ -145,6 +153,28 @@ internal partial class CaptureView : UserControl
         else
         {
             ShowBottomPane();
+        }
+    }
+
+    private void LockResponsiveUrlWidth()
+    {
+        foreach (var (column, definition) in columnDefinitions)
+        {
+            if (definition.Id == "url" && definition.Setting.Width is null && column.Width.IsStar)
+            {
+                column.Width = Math.Max(column.MinWidth, column.ActualWidth);
+            }
+        }
+    }
+
+    private void RestoreResponsiveUrlWidth()
+    {
+        foreach (var (column, definition) in columnDefinitions)
+        {
+            if (definition.Id == "url" && definition.Setting.Width is null && !column.Width.IsStar)
+            {
+                column.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
+            }
         }
     }
 
@@ -576,7 +606,9 @@ internal partial class CaptureView : UserControl
         {
             if (definition.Setting.Width is null)
             {
-                column.Width = Fit(column, definition);
+                column.Width = definition.Id == "url"
+                    ? new DataGridLength(1, DataGridLengthUnitType.Star)
+                    : Fit(column, definition);
             }
         }
     }
