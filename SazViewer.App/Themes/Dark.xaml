@@ -20,6 +20,10 @@
     <SolidColorBrush x:Key="Saz.ProtocolKind" Color="#D2A8FF" />
     <SolidColorBrush x:Key="Saz.Selected" Color="#551F6FEB" />
     <SolidColorBrush x:Key="Saz.SelectedText" Color="#E6EDF3" />
+    <SolidColorBrush x:Key="Saz.ScrollBarCorner" Color="#161B22" />
+    <SolidColorBrush x:Key="Saz.ScrollBarThumb" Color="#6E7681" />
+    <SolidColorBrush x:Key="Saz.ScrollBarThumbHover" Color="#B1BAC4" />
+    <SolidColorBrush x:Key="Saz.ScrollBarTrack" Color="#000D1117" />
     <SolidColorBrush x:Key="Saz.SynBlue" Color="#79C0FF" />
     <SolidColorBrush x:Key="Saz.SynGreen" Color="#7EE787" />
     <SolidColorBrush x:Key="Saz.SynNumber" Color="#FFA657" />

@@ -24,7 +24,7 @@ flowchart TD
 - **Model** (`SazViewer.App\Model`): UI-free ports of the report's payload construction and helpers. `SessionRow` mirrors the grid cells and filter data; `MessageContent` mirrors the per-message payload and its Headers/Raw text; `StructuredData` builds JSON/XML value trees and formatted text; `ImageSafety` validates and decodes images; `WebPreviewPolicy` is the WebView sandbox policy.
 - **View-models** (`SazViewer.App\ViewModels`): one small class per view, built on `ObservableObject`/`RelayCommand` (`SazViewer.App\Mvvm`). They don't reference WPF controls, so the tests drive them directly.
 - **Views** (`SazViewer.App\Views`): XAML with minimal code-behind for focus, keyboard and scrolling. Lists and trees are virtualized (`VirtualizingStackPanel` with recycling). Trees are flattened into rows (`LineDocumentView`, `ValueTreeView`), so expand/collapse changes a list instead of building a deep visual tree.
-- **Themes** (`SazViewer.App\Themes`): `Light.xaml`, `Dark.xaml` and a code-built high-contrast palette with identical keys; every view uses `DynamicResource`. `Controls.xaml` restyles the standard controls.
+- **Themes** (`SazViewer.App\Themes`): `Light.xaml`, `Dark.xaml` and a code-built high-contrast palette with identical keys; every view uses `DynamicResource`. `Controls.xaml` restyles the standard controls, including shared slim, arrowless scrollbars with themed tracks, thumbs and corners. Transparent track buttons retain native paging, and the standard `ScrollViewer` content presenter preserves keyboard/wheel scrolling and virtualization.
 
 ## View-model map
 

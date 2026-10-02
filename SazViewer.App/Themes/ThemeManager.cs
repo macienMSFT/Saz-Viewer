@@ -155,20 +155,25 @@ internal static class ThemeManager
             brush.Freeze();
             palette[key] = brush;
         }
-        foreach (var key in new[] { "Saz.Bg", "Saz.Panel", "Saz.Panel2", "Saz.Hover", "Saz.InfoBg", "Saz.WarningBg" })
+        foreach (var key in new[]
+        {
+            "Saz.Bg", "Saz.Panel", "Saz.Panel2", "Saz.Hover", "Saz.InfoBg", "Saz.WarningBg",
+            "Saz.ScrollBarCorner", "Saz.ScrollBarTrack"
+        })
         {
             Set(key, window);
         }
         foreach (var key in new[]
         {
             "Saz.Text", "Saz.Muted", "Saz.Line", "Saz.Warn", "Saz.DirClient", "Saz.DirServer", "Saz.ProtocolBinary",
-            "Saz.ProtocolKind", "Saz.SynBlue", "Saz.SynGreen", "Saz.SynNumber", "Saz.SynPunct", "Saz.SynPurple",
+            "Saz.ProtocolKind", "Saz.ScrollBarThumb", "Saz.SynBlue", "Saz.SynGreen", "Saz.SynNumber", "Saz.SynPunct", "Saz.SynPurple",
             "Saz.SynRed", "Saz.SynString"
         })
         {
             Set(key, text);
         }
         Set("Saz.Accent", hot);
+        Set("Saz.ScrollBarThumbHover", highlight);
         Set("Saz.AccentText", window);
         Set("Saz.Selected", highlight);
         Set("Saz.SelectedText", highlightText);

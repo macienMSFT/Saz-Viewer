@@ -30,6 +30,150 @@
         <Setter Property="Foreground" Value="{DynamicResource Saz.Muted}" />
     </Style>
 
+    <!-- Slim arrowless scrollbars. Transparent page buttons preserve click-on-track paging. -->
+    <Style x:Key="Saz.ScrollBarPageButton" TargetType="RepeatButton">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RepeatButton">
+                    <Border Background="Transparent" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <ControlTemplate x:Key="Saz.VerticalScrollBar" TargetType="ScrollBar">
+        <Grid Width="12" Background="{DynamicResource Saz.ScrollBarTrack}">
+            <Track x:Name="PART_Track" Orientation="Vertical" IsDirectionReversed="True"
+                   Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                   Value="{TemplateBinding Value}" ViewportSize="{TemplateBinding ViewportSize}">
+                <Track.DecreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource Saz.ScrollBarPageButton}"
+                                  Command="{x:Static ScrollBar.PageUpCommand}" />
+                </Track.DecreaseRepeatButton>
+                <Track.Thumb>
+                    <Thumb Width="6" MinHeight="24" HorizontalAlignment="Center">
+                        <Thumb.Template>
+                            <ControlTemplate TargetType="Thumb">
+                                <Border x:Name="ThumbChrome" Background="{DynamicResource Saz.ScrollBarThumb}"
+                                        CornerRadius="4" SnapsToDevicePixels="True" />
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Width" Value="8" />
+                                        <Setter TargetName="ThumbChrome" Property="Background" Value="{DynamicResource Saz.ScrollBarThumbHover}" />
+                                    </Trigger>
+                                    <Trigger Property="IsDragging" Value="True">
+                                        <Setter Property="Width" Value="8" />
+                                        <Setter TargetName="ThumbChrome" Property="Background" Value="{DynamicResource Saz.ScrollBarThumbHover}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Thumb.Template>
+                    </Thumb>
+                </Track.Thumb>
+                <Track.IncreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource Saz.ScrollBarPageButton}"
+                                  Command="{x:Static ScrollBar.PageDownCommand}" />
+                </Track.IncreaseRepeatButton>
+            </Track>
+        </Grid>
+    </ControlTemplate>
+
+    <ControlTemplate x:Key="Saz.HorizontalScrollBar" TargetType="ScrollBar">
+        <Grid Height="12" Background="{DynamicResource Saz.ScrollBarTrack}">
+            <Track x:Name="PART_Track" Orientation="Horizontal" IsDirectionReversed="False"
+                   Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                   Value="{TemplateBinding Value}" ViewportSize="{TemplateBinding ViewportSize}">
+                <Track.DecreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource Saz.ScrollBarPageButton}"
+                                  Command="{x:Static ScrollBar.PageLeftCommand}" />
+                </Track.DecreaseRepeatButton>
+                <Track.Thumb>
+                    <Thumb Height="6" MinWidth="24" VerticalAlignment="Center">
+                        <Thumb.Template>
+                            <ControlTemplate TargetType="Thumb">
+                                <Border x:Name="ThumbChrome" Background="{DynamicResource Saz.ScrollBarThumb}"
+                                        CornerRadius="4" SnapsToDevicePixels="True" />
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Height" Value="8" />
+                                        <Setter TargetName="ThumbChrome" Property="Background" Value="{DynamicResource Saz.ScrollBarThumbHover}" />
+                                    </Trigger>
+                                    <Trigger Property="IsDragging" Value="True">
+                                        <Setter Property="Height" Value="8" />
+                                        <Setter TargetName="ThumbChrome" Property="Background" Value="{DynamicResource Saz.ScrollBarThumbHover}" />
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Thumb.Template>
+                    </Thumb>
+                </Track.Thumb>
+                <Track.IncreaseRepeatButton>
+                    <RepeatButton Style="{StaticResource Saz.ScrollBarPageButton}"
+                                  Command="{x:Static ScrollBar.PageRightCommand}" />
+                </Track.IncreaseRepeatButton>
+            </Track>
+        </Grid>
+    </ControlTemplate>
+
+    <Style TargetType="ScrollBar">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Width" Value="12" />
+        <Setter Property="MinWidth" Value="12" />
+        <Setter Property="Template" Value="{StaticResource Saz.VerticalScrollBar}" />
+        <Style.Triggers>
+            <Trigger Property="Orientation" Value="Horizontal">
+                <Setter Property="Width" Value="Auto" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="Height" Value="12" />
+                <Setter Property="MinHeight" Value="12" />
+                <Setter Property="Template" Value="{StaticResource Saz.HorizontalScrollBar}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style TargetType="ScrollViewer">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollViewer">
+                    <Grid Background="{TemplateBinding Background}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" Grid.Row="0" Grid.Column="0"
+                                                Margin="{TemplateBinding Padding}"
+                                                Content="{TemplateBinding Content}"
+                                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                CanContentScroll="{TemplateBinding CanContentScroll}"
+                                                SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                        <ScrollBar x:Name="PART_VerticalScrollBar" Grid.Row="0" Grid.Column="1"
+                                   Orientation="Vertical"
+                                   Maximum="{TemplateBinding ScrollableHeight}"
+                                   ViewportSize="{TemplateBinding ViewportHeight}"
+                                   Value="{TemplateBinding VerticalOffset}"
+                                   Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}" />
+                        <ScrollBar x:Name="PART_HorizontalScrollBar" Grid.Row="1" Grid.Column="0"
+                                   Orientation="Horizontal"
+                                   Maximum="{TemplateBinding ScrollableWidth}"
+                                   ViewportSize="{TemplateBinding ViewportWidth}"
+                                   Value="{TemplateBinding HorizontalOffset}"
+                                   Visibility="{TemplateBinding ComputedHorizontalScrollBarVisibility}" />
+                        <Border x:Name="ScrollBarCorner" Grid.Row="1" Grid.Column="1"
+                                Background="{DynamicResource Saz.ScrollBarCorner}" />
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style x:Key="Saz.ButtonBase" TargetType="ButtonBase">
         <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
         <Setter Property="Background" Value="{DynamicResource Saz.Panel}" />
