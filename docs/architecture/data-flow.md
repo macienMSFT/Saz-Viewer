@@ -6,27 +6,33 @@
 sequenceDiagram
     actor User
     participant CLI as CliApplication
-    participant Archive as SazArchiveFactory
-    participant Parser as SazParser
+    participant Detect as CaptureParser
+    participant Archive as SazArchiveFactory / SazParser
+    participant Har as HarParser
     participant Body as HTTP/WS/MAPI parsers
     participant Generator as HtmlReportGenerator
     participant Disk as Output HTML
 
-    User->>CLI: saz-viewer capture.saz [report.html]
-    CLI->>Archive: Open archive
-    alt unencrypted ZIP
-        Archive->>Archive: Validate entries and use ZipArchive
-    else supported encrypted ZIP
-        Archive->>User: Request password through provider
-        Archive->>Archive: Authenticate and cache plaintext entry
+    User->>CLI: saz-viewer capture.saz|capture.har [report.html]
+    CLI->>Detect: Sniff ZIP signature or JSON log
+    alt SAZ capture
+        Detect->>Archive: Open archive
+        alt unencrypted ZIP
+            Archive->>Archive: Validate entries and use ZipArchive
+        else supported encrypted ZIP
+            Archive->>User: Request password through provider
+            Archive->>Archive: Authenticate and cache plaintext entry
+        end
+        Archive->>Archive: Discover sparse raw/<id> entries
+        Archive->>Body: Parse metadata, request, response, WebSocket
+        Archive-->>Detect: Shared sessions
+    else HAR capture
+        Detect->>Har: Parse bounded log.entries JSON
+        Har->>Body: Map decoded HTTP bodies, timings, flags, WebSocket messages
+        Har-->>Detect: Shared sessions
     end
-    CLI->>Parser: Parse archive
-    Parser->>Parser: Discover sparse raw/<id> entries
-    loop archive order
-        Parser->>Body: Parse metadata, request, response, WebSocket
-    end
-    Parser->>Body: Parse MAPI sessions chronologically
-    Parser-->>CLI: SazReport
+    Body->>Body: Parse MAPI sessions chronologically
+    Detect-->>CLI: Shared SazReport
     CLI->>Generator: Generate(report)
     Generator-->>CLI: Self-contained HTML
     CLI->>Disk: UTF-8 without BOM
@@ -143,7 +149,7 @@ sequenceDiagram
         Pipe->>A: Request
         A->>A: Strict decode (header, version, size, JSON schema)
         alt well-formed request
-            A->>A: Keep only existing, normalized .saz paths (others counted as ignored)
+            A->>A: Keep only existing, normalized .saz/.har paths (others counted as ignored)
             A-->>B: 0x00 Accepted
             A->>Win: Dispatcher: open each path as a tab (dedupe), bring window to front
             B->>B: Exit 0
@@ -169,6 +175,10 @@ The forwarding client finds the server process with `GetNamedPipeServerProcessId
 | `raw/<id>_w.txt` | Fiddler WebSocket record stream |
 
 Entries are grouped case-insensitively. The first duplicate wins and produces a warning. Each group remembers its first archive position for stable fallback ordering. HTTP sessions are sorted by the best parsed Fiddler timestamp, then by archive order or numeric ID fallback. WebSocket messages use timestamp and stable source order.
+
+## HAR mapping
+
+`HarParser` reads a bounded HTTP Archive 1.2 JSON document and maps each `log.entries` item to the same `HttpSession` model. `startedDateTime` provides chronological order; original entry index supplies stable IDs and fallback order. HAR `content.text` is already decoded, including base64 decoding when `content.encoding` is `base64`, so `Content-Encoding` is never applied again and original wire bytes remain explicitly unavailable. HAR timing values populate typed timer metadata (`wait` → TTFB, `receive` → download, plus DNS/connect/SSL), while creator/browser, page, initiator, resource type, priority, connection, and server address remain available through report metadata and desktop columns. Chrome/Edge `_webSocketMessages` map to the shared WebSocket model.
 
 ## HTTP path
 
@@ -207,4 +217,3 @@ The generated report has two data layers:
 - **independently compressed envelopes** for HTTP sessions, MAPI trees, and WebSocket sessions.
 
 Every HTTP session stores one versioned canonical request/response envelope. Headers, Raw, JSON/XML, Auth, Image, WebView, HexView, search, and copy text are derived in the browser only when needed. This keeps report size and initial browser work proportional to the session list rather than every possible view.
-

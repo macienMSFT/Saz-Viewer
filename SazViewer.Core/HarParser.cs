@@ -188,7 +188,7 @@ public sealed class HarParser
     private static HttpMessage ParseRequest(JsonElement request, HttpSession session)
     {
         session.Method = String(request, "method") ?? "GET";
-        session.Url = String(request, "url") ?? string.Empty;
+        session.Url = RequestUrl(request);
         var version = NormalizeHttpVersion(String(request, "httpVersion"));
         var headers = Headers(request, "headers", session.Warnings, "request");
         AddCookieHeader(request, headers, "Cookie", "request", session.Warnings);
@@ -198,6 +198,33 @@ public sealed class HarParser
         var message = Message(startLine, headers, body);
         session.RequestBytes = MessageBytes(request, body.Length);
         return message;
+    }
+
+    private static string RequestUrl(JsonElement request)
+    {
+        var url = String(request, "url") ?? string.Empty;
+        if (url.Contains('?')
+            || !request.TryGetProperty("queryString", out var values)
+            || values.ValueKind != JsonValueKind.Array)
+        {
+            return url;
+        }
+
+        var query = values.EnumerateArray()
+            .Where(value => value.ValueKind == JsonValueKind.Object)
+            .Select(value =>
+                $"{Uri.EscapeDataString(String(value, "name") ?? string.Empty)}="
+                + Uri.EscapeDataString(String(value, "value") ?? string.Empty))
+            .ToArray();
+        if (query.Length == 0)
+        {
+            return url;
+        }
+        var suffix = string.Join("&", query);
+        var fragment = url.IndexOf('#');
+        return fragment < 0
+            ? $"{url}?{suffix}"
+            : $"{url[..fragment]}?{suffix}{url[fragment..]}";
     }
 
     private static HttpMessage ParseResponse(JsonElement response, HttpSession session)

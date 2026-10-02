@@ -18,7 +18,7 @@ flowchart TD
     PANE --> SEARCH["ActiveSearchViewModel"]
     TAB --> CONTENT["TabContentViewModel<br/>(created on first display)"]
     WSI --> WSD["WebSocketMessageDetailViewModel<br/>JSON · Text · Raw"]
-    DOC --> CORE["SazViewer.Core<br/>parser · decoders · MAPI · AuthScrubber"]
+    DOC --> CORE["SazViewer.Core<br/>CaptureParser (SAZ/HAR) · decoders · MAPI · AuthScrubber"]
     CONTENT --> CORE
 ```
 
@@ -57,15 +57,15 @@ sequenceDiagram
     actor User
     participant Win as MainWindow
     participant Builder as ReportBuilder (worker thread)
-    participant Core as SazParser
+    participant Core as CaptureParser
     participant Tab as CaptureTab / CaptureViewModel
     participant Pane as MessagePaneViewModel
     participant Content as TabContentViewModel
 
     User->>Win: Open capture
     Win->>Builder: Build(path, scrub) off the UI thread
-    Builder->>Core: Parse archive, sessions in parallel batches
-    Core-->>Builder: SazReport (bodies not yet decoded are deferred)
+    Builder->>Core: Detect and parse SAZ archive or HAR document
+    Core-->>Builder: Shared SazReport (SAZ bodies may be deferred)
     Builder-->>Win: ReportDocument (no HTML generated)
     Win->>Tab: Add tab, build SessionRow list
     Tab-->>User: Interactive grid
@@ -79,7 +79,7 @@ sequenceDiagram
     Win->>Builder: ReportDocument.Utf8 (HtmlReportGenerator on first use)
 ```
 
-- The grid needs only start lines, headers, metadata timers and sizes. Body decoding that isn't needed for the grid is deferred (`SazReport.HasDeferredWork`), then completed in the background so the status bar can show the final warning count. A view that needs a body decodes it immediately regardless.
+- The grid needs only start lines, headers, metadata timers and sizes. SAZ body decoding that isn't needed for the grid is deferred (`SazReport.HasDeferredWork`), then completed in the background so the status bar can show the final warning count. HAR bodies arrive as already-decoded content and never pass through HTTP content decoding. A view that needs a deferred SAZ body decodes it immediately regardless.
 - **Search payloads** remains off by default. When enabled, `SessionListViewModel` waits 250 ms after a query change, cancels the prior generation, then asks `PayloadSearchCache` to extract/search sessions on at most eight worker threads. HTTP headers and decoded bodies (including chunked/compressed content), WebSocket text and valid UTF-8 binary payloads, and already-built MAPI node names/values are folded with the same literal case-insensitive semantics as column search. Search-only HTTP decoding can retain up to the decoder's existing 4 MiB safety ceiling temporarily without hydrating the 64 KiB display body. A per-capture 256 MiB LRU owns the folded text; each session is additionally capped at 32 Mi characters. Progress and cancellation are marshalled back to the UI, and filtering/sorting is applied after the payload result is published. Scrubbed reports contain eager scrubbed messages, so the search-only decoder can never reach their original captured bytes.
 - Tab content is created the first time the tab is shown and dropped when the session changes. Expensive work (image decode, WebView2) runs only while its tab is visible.
 - Core's existing caps and budgets are unchanged: the 64 KiB display body limit, the MAPI node/depth budgets, the JSON/XML tree budgets, the 1,024-byte HexView prefix and the 5,000-match search cap.
@@ -95,7 +95,7 @@ sequenceDiagram
 
 ## Shell features
 
-- **Capture tabs.** `CaptureTabCollection` always owns the open/active captures, but the WPF tab strip is visible only with two or more. With one capture the collapsed strip reclaims its row and the window title uses `CaptureTab.DisplayName` (`file.saz (scrubbed) – SAZ Viewer`); the capture's own notice bar remains inside `CaptureTabView`. File › Close tab and Ctrl+W continue to close the active capture, while tab cycling is already a no-op below two items. Closing back to zero restores the welcome panel.
+- **Capture tabs.** `CaptureTabCollection` always owns the open/active `.saz` and `.har` captures, but the WPF tab strip is visible only with two or more. With one capture the collapsed strip reclaims its row and the window title uses `CaptureTab.DisplayName` (`file.har (scrubbed) – SAZ Viewer`); the capture's own notice bar remains inside `CaptureTabView`. File › Close tab and Ctrl+W continue to close the active capture, while tab cycling is already a no-op below two items. Closing back to zero restores the welcome panel.
 - **Options.** The top-level **Options** menu exposes mutually exclusive, checkable choices with access keys. Changes are written immediately through `UiPreferences` and applied to every open capture where relevant.
 - **Session columns.** `UiPreferences` version 3 stores a bounded list of `SessionColumnSetting` records (stable ID, kind/source, label, visibility, width); a missing version-3 field migrates to the original eight-column order without changing any older preference. `SessionColumnCatalog` maps built-ins and repeatable custom request-header/response-header/session-flag settings to cheap typed extractors. `SessionRow` caches each extracted cell by ID/kind/source. Header and metadata fields are read directly; decoded body size and compression ratio stay blank until that body was decoded for some other reason. Sensitive custom headers are masked before display/search unless the in-memory scrubbed model already contains its redaction marker. `SessionListViewModel` searches visible column display values and compares timestamps, durations, sizes, numeric IDs/ports, IP addresses, and text using their native type, with blanks always last and chronological order as the stable tie-breaker. `CaptureView` builds virtualized WPF columns from the shared preference, persists header drag/resize changes, and offers the themed/UIA-labelled chooser from Options or the header context menu. The HTML generator remains fixed; a future implementation can pass an explicit column schema into export, but should not read per-machine desktop preferences from a portable report.
 - **Grid sizing.** An uncustomized URL column uses star sizing only while the grid spans the full window, matching the original Bottom-pane behavior. Immediately before entering Right pane mode, `CaptureView` converts that current full-grid `ActualWidth` to a temporary pixel width; the other columns already use saved or bounded measured pixel widths. The narrower left grid therefore preserves the exact Bottom-pane widths and uses horizontal overflow. Leaving Right pane restores responsive star sizing, while a user-resized URL has a persisted pixel width and is never converted.
@@ -107,7 +107,8 @@ sequenceDiagram
 - **Hide CONNECT on open.** The preference seeds `SessionListViewModel.HideConnect` only when a capture view-model is constructed. Tab-local checkbox changes are intentionally not written back.
 - **Open in new window.** `InspectorWindow` hosts a second `InspectorViewModel` that navigates the tab's visible rows independently of the grid selection. It closes with Close/Esc, when its tab closes, or when the capture is reloaded.
 - **View scrubbed.** **File › View scrubbed (redact credentials)** reopens the active capture with `AuthScrubber` applied, the same pass as `--scrub-auth`. The views then show `[REDACTED:…]` markers, and the banner lists per-type counts.
-- **Icon.** `Assets\SazViewer.ico` (generated by `Assets\Generate-Icon.ps1`) is the `ApplicationIcon`, so it is embedded in the exe and used for Explorer and the `.saz` association's `DefaultIcon` (`"<exe>",0`). It is also a WPF resource set as the `Icon` of `MainWindow` and `InspectorWindow`.
+- **File types.** Open, drag/drop, command-line launch, single-instance forwarding, recent files, watching/reload, scrubbed view, and Export HTML all use the same shared capture path for `.saz` and `.har`. The per-user registration adds the shared ProgID to both extensions' `OpenWithProgids` without changing either default and removes only owned values.
+- **Icon.** `Assets\SazViewer.ico` (generated by `Assets\Generate-Icon.ps1`) is the `ApplicationIcon`, so it is embedded in the exe and used for Explorer and the `.saz`/`.har` associations' `DefaultIcon` (`"<exe>",0`). It is also a WPF resource set as the `Icon` of `MainWindow` and `InspectorWindow`.
 - **Preferences.** `UiPreferences` stores the theme, layout mode and per-width automatic choices, session-viewer location and splitter proportions, Hide CONNECT-on-open, payload-search choice, grid-column schema, and banner state in `%LOCALAPPDATA%\SazViewer\preferences.json`, written atomically. Version 1 and 2 fields are retained while the document is upgraded to version 3. Missing, unknown, or corrupt values fall back independently to defaults.
 - **Accessibility.** Every control is reachable by keyboard. Tab strips support arrow keys with a fixed order, and splitters are focusable and keyboard-resizable. Interactive elements carry UIA names. Focus returns to the grid row when the inspector closes.
 

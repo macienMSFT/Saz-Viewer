@@ -273,29 +273,48 @@ public sealed class AppSmokeTests
     private static async Task InvokeOptionAsync(Process process, string? groupName, string optionName)
     {
         var window = await WaitForAsync(() => MainWindow(process), "main window for Options");
-        BringToForeground(window);
-        window.SetFocus();
-        await Task.Delay(100);
-        var options = await WaitForAsync(() => ProcessElement(process, "Options", ControlType.MenuItem), "Options menu");
-        options.SetFocus();
-        await ExpandAsync(options);
-        if (groupName is not null)
+        for (var attempt = 0; attempt < 10; attempt++)
         {
-            var group = await WaitForAsync(() => ProcessElement(process, groupName, ControlType.MenuItem), groupName);
-            Assert.False(string.IsNullOrWhiteSpace(group.Current.AccessKey));
-            await ExpandAsync(group);
+            BringToForeground(window);
+            window.SetFocus();
+            await Task.Delay(100);
+            var options = ProcessElement(process, "Options", ControlType.MenuItem);
+            if (options is null)
+            {
+                continue;
+            }
+            options.SetFocus();
+            await ExpandAsync(options);
+
+            if (groupName is not null)
+            {
+                var group = ProcessElement(process, groupName, ControlType.MenuItem);
+                if (group is null)
+                {
+                    continue;
+                }
+                Assert.False(string.IsNullOrWhiteSpace(group.Current.AccessKey));
+                await ExpandAsync(group);
+            }
+
+            var option = ProcessElement(process, optionName, ControlType.MenuItem);
+            if (option is null)
+            {
+                continue;
+            }
+            Assert.False(string.IsNullOrWhiteSpace(option.Current.AccessKey));
+            if (option.TryGetCurrentPattern(InvokePattern.Pattern, out var invoke))
+            {
+                ((InvokePattern)invoke).Invoke();
+            }
+            else
+            {
+                ((TogglePattern)option.GetCurrentPattern(TogglePattern.Pattern)).Toggle();
+            }
+            await Task.Delay(300);
+            return;
         }
-        var option = await WaitForAsync(() => ProcessElement(process, optionName, ControlType.MenuItem), optionName);
-        Assert.False(string.IsNullOrWhiteSpace(option.Current.AccessKey));
-        if (option.TryGetCurrentPattern(InvokePattern.Pattern, out var invoke))
-        {
-            ((InvokePattern)invoke).Invoke();
-        }
-        else
-        {
-            ((TogglePattern)option.GetCurrentPattern(TogglePattern.Pattern)).Toggle();
-        }
-        await Task.Delay(300);
+        throw new TimeoutException($"Timed out waiting for {optionName}.");
     }
 
     private static async Task ExpandAsync(AutomationElement element)

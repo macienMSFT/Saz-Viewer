@@ -57,6 +57,7 @@ public sealed class HarParserTests
 
         var early = report.Sessions[0];
         Assert.Equal("GET", early.Method);
+        Assert.Equal("https://example.test/early?access_token=secret", early.Url);
         Assert.Equal(200, early.StatusCode);
         Assert.Equal([0, 1, 2, 255], early.Response!.Body.DecodedBytes.ToArray());
         Assert.True(early.Response.Body.IsBinary);
