@@ -83,6 +83,14 @@ sequenceDiagram
 - Core's existing caps and budgets are unchanged: the 64 KiB display body limit, the MAPI node/depth budgets, the JSON/XML tree budgets, the 1,024-byte HexView prefix and the 5,000-match search cap.
 - The HTML is generated only for Export HTML, through the same `HtmlReportGenerator` call as the CLI (`SazParser.CompleteDeferred` runs first), so the exported bytes are identical.
 
+### Startup
+
+- **Prefetch.** When the app is launched with a capture path, `App` starts `CapturePrefetch` (the same `ReportBuilder.Build` on a worker thread) right after the single-instance check, before the main window is built. Window creation and the parse then overlap, and `MainWindow.OpenCaptureAsync` takes over the running parse and its pre-parse fingerprint for the first matching path. A password prompt for an encrypted capture is marshalled to the UI thread and owned by the main window once it is visible.
+- **No WebView2 at startup.** The WebView2 environment is created only when a WebView tab is first shown.
+- **Lean grid rows.** Session grid rows use a minimal template (no row header, details presenter or frozen-column grid), and column widths are fitted from a sample of rows, not all of them. Only the visible rows are realized.
+- **ReadyToRun.** Publishing for a runtime identifier (`-r win-x64`) precompiles the app and Core (`PublishReadyToRun`), which removes most JIT time from the first parse and first render.
+- **Measuring.** Set `SAZVIEWER_STARTUP_TRACE` to a fully qualified file path, and the app appends `milliseconds-since-process-start<TAB>phase` lines for `OnStartup`, `single-instance`, `parse-start`/`parse-end`, `window-created`, `window-shown`, `tab-added` and `grid-idle` (the first idle after the grid's first render). Tracing is off when the variable is unset.
+
 ## Shell features
 
 - **Layout.** At 900 px and wider the HTTP inspector defaults to split Request/Response panes side by side with a resizable splitter. Below 900 px it defaults to the single-side view, and panes stack vertically. The toggle next to Previous/Next switches modes, and the choice is remembered separately per width class. Split mode hides the Request/Response tabs and gives each pane a labeled header and its own search. Returning to single view restores the last side.

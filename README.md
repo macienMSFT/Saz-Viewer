@@ -56,6 +56,8 @@ If a session has associated `_w.txt` traffic, the same row opens a WebSocket ins
 dotnet run --project .\SazViewer.App
 dotnet run --project .\SazViewer.App -- .\capture.saz .\other.saz
 dotnet build .\SazViewer.App -c Release   # framework-dependent SazViewer.App.exe in bin\Release\net8.0-windows
+# Faster startup: ReadyToRun-precompiled, framework-dependent build in .\publish-app
+dotnet publish .\SazViewer.App\SazViewer.App.csproj -c Release -r win-x64 --self-contained false -o .\publish-app
 ```
 
 Features:
@@ -96,7 +98,7 @@ dotnet publish .\SazViewer.Cli\SazViewer.Cli.csproj -c Release -r win-x64 --self
 .\publish\saz-viewer.exe .\capture.saz .\capture.html
 ```
 
-Use `win-arm64` instead of `win-x64` for Windows on ARM. The published executable includes the .NET runtime; only the generated executable is required to run the tool. The desktop app is currently built framework-dependent only; MSIX and single-file packaging are not provided yet.
+Use `win-arm64` instead of `win-x64` for Windows on ARM. The published executable includes the .NET runtime; only the generated executable is required to run the tool. The desktop app is built framework-dependent only (publishing it with `-r` enables ReadyToRun for faster startup; see [Startup](docs/architecture/desktop-app.md#startup)); MSIX and single-file packaging are not provided yet.
 
 ## Capture handling
 
