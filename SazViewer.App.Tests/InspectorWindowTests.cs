@@ -39,7 +39,7 @@ public sealed class InspectorWindowTests
         });
     }
 
-    [Fact]
+    [ForegroundFact]
     public void PopOutIsIndependentPositionedAndEitherWindowCanBecomeForeground()
     {
         StaRunner.Run(() =>

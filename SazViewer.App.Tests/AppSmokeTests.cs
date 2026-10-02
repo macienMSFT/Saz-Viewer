@@ -158,7 +158,7 @@ public sealed class AppSmokeTests
         }
     }
 
-    [Fact]
+    [ForegroundFact]
     public async Task OptionsMenu_AppliesAndPersistsEveryChoice_AndWindowViewerFollowsSelection()
     {
         using var temp = new TempDirectory();
