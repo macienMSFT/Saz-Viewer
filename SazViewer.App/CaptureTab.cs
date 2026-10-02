@@ -9,7 +9,7 @@ namespace SazViewer.App;
 /// <summary>Services a <see cref="CaptureTab"/> needs from its window.</summary>
 internal interface ICaptureTabHost
 {
-    Window Owner { get; }
+    Window HostWindow { get; }
 
     /// <summary>Opens dropped captures (each in its own tab).</summary>
     Task OpenCapturesAsync(IReadOnlyList<string> paths);
@@ -174,10 +174,8 @@ internal sealed class CaptureTab : ICaptureTab
         {
             return;
         }
-        var window = new InspectorWindow(FileName + (IsScrubbed ? " (scrubbed)" : ""), viewModel.CreatePopOutInspector(row))
-        {
-            Owner = host.Owner
-        };
+        var window = new InspectorWindow(FileName + (IsScrubbed ? " (scrubbed)" : ""), viewModel.CreatePopOutInspector(row));
+        window.PositionRelativeTo(host.HostWindow, popOuts.Count);
         popOuts.Add(window);
         window.Closed += (_, _) => popOuts.Remove(window);
         // The report's "Open in new tab" moves the inspector: close it in the main window.

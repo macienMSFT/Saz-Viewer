@@ -34,7 +34,7 @@ public partial class MainWindow : Window, ICaptureTabHost
         Closed += (_, _) => tabs.CloseAll();
     }
 
-    Window ICaptureTabHost.Owner => this;
+    Window ICaptureTabHost.HostWindow => this;
 
     internal CaptureTabCollection<CaptureTab> Tabs => tabs;
 

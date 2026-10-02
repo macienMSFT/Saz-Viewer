@@ -6,8 +6,8 @@
         Background="{DynamicResource Saz.Bg}"
         Foreground="{DynamicResource Saz.Text}"
         FontFamily="Segoe UI" FontSize="13"
-        WindowStartupLocation="CenterOwner"
-        Icon="pack://application:,,,/Assets/SazViewer.ico"
+        WindowStartupLocation="Manual"
+        Icon="pack://application:,,,/SazViewer.App;component/Assets/SazViewer.ico"
         ShowInTaskbar="True">
     <views:InspectorView x:Name="Inspector" />
 </Window>
