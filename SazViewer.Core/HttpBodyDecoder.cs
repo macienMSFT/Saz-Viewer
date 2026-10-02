@@ -8,7 +8,7 @@ namespace SazViewer.Core;
 internal static class HttpBodyDecoder
 {
     private const int MaxCodingLayers = 8;
-    private const int MaxDecodedBytes = 4 * 1024 * 1024;
+    internal const int MaxDecodedBytes = 4 * 1024 * 1024;
     private const int MinimumDecodedLimit = 1024 * 1024;
     private const int MaxExpansionRatio = 100;
     private const int MaxChunkLineBytes = 8 * 1024;
@@ -30,8 +30,10 @@ internal static class HttpBodyDecoder
         IReadOnlyList<HttpHeader> headers,
         string label,
         List<string> warnings,
-        bool retainNormalizedBody)
+        bool retainNormalizedBody,
+        int retainedDecodedBytesLimit = DecodedPresentationBytesLimit)
     {
+        retainedDecodedBytesLimit = Math.Clamp(retainedDecodedBytesLimit, 0, MaxDecodedBytes);
         var contentType = HeaderValues(headers, "Content-Type").FirstOrDefault();
         if (capturedLength == 0)
         {
@@ -60,7 +62,12 @@ internal static class HttpBodyDecoder
                 capturedLength,
                 capturedLength,
                 contentType);
-            return WithNormalizedBytes(direct, availableBody, capturedLength, retainNormalizedBody);
+            return WithNormalizedBytes(
+                direct,
+                availableBody,
+                capturedLength,
+                retainNormalizedBody,
+                retainedDecodedBytesLimit);
         }
 
         var totalCodingCount = transferResult.Codings.Count + contentResult.Codings.Count;
@@ -173,7 +180,7 @@ internal static class HttpBodyDecoder
             RemovedEncodings = removed,
             DecodingStatus = $"Decoded in wire-removal order: {string.Join(" -> ", removed)}.",
             CapturedBytes = original.AsMemory(0, Math.Min(original.Length, CapturedBytesPreviewLimit)),
-            DecodedBytes = current.AsMemory(0, Math.Min(current.Length, DecodedPresentationBytesLimit)),
+            DecodedBytes = current.AsMemory(0, Math.Min(current.Length, retainedDecodedBytesLimit)),
             NormalizedBytes = retainNormalizedBody ? current : ReadOnlyMemory<byte>.Empty
         };
     }
@@ -182,9 +189,10 @@ internal static class HttpBodyDecoder
         BodyPreview preview,
         ReadOnlySpan<byte> availableBody,
         long capturedLength,
-        bool retainNormalizedBody)
+        bool retainNormalizedBody,
+        int retainedDecodedBytesLimit)
     {
-        var retained = availableBody[..Math.Min(availableBody.Length, DecodedPresentationBytesLimit)].ToArray();
+        var retained = availableBody[..Math.Min(availableBody.Length, retainedDecodedBytesLimit)].ToArray();
         var normalized = ReadOnlyMemory<byte>.Empty;
         if (retainNormalizedBody
             && capturedLength == availableBody.Length

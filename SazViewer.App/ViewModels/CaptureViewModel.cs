@@ -5,7 +5,7 @@ using SazViewer.Core;
 namespace SazViewer.App.ViewModels;
 
 /// <summary>Root view-model of one native capture tab: the session grid and the inspector.</summary>
-internal sealed class CaptureViewModel : ObservableObject
+internal sealed class CaptureViewModel : ObservableObject, IDisposable
 {
     private SessionViewerLocation sessionViewerLocation;
 
@@ -14,7 +14,7 @@ internal sealed class CaptureViewModel : ObservableObject
         Preferences = preferences ?? UiPreferences.Current;
         Report = report;
         Rows = BuildRows(report);
-        Sessions = new SessionListViewModel(Rows);
+        Sessions = new SessionListViewModel(Rows, Preferences);
         Sessions.HideConnect = Preferences.HideConnectOnOpen;
         Clipboard = clipboard ?? WpfClipboardService.Instance;
         Inspector = new InspectorViewModel(Sessions, Clipboard, preferences: Preferences);
@@ -72,4 +72,6 @@ internal sealed class CaptureViewModel : ObservableObject
         }
         return rows;
     }
+
+    public void Dispose() => Sessions.Dispose();
 }

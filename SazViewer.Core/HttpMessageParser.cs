@@ -39,19 +39,29 @@ internal static class HttpMessageParser
         if (deferred is not null)
         {
             var slot = deferred.Reserve();
-            var deferredMessage = new HttpMessage(lines[0], () =>
-            {
-                var bodyWarnings = new List<string>();
-                var preview = HttpBodyDecoder.CreatePreview(
+            var deferredMessage = new HttpMessage(
+                lines[0],
+                () =>
+                {
+                    var bodyWarnings = new List<string>();
+                    var preview = HttpBodyDecoder.CreatePreview(
+                        bytes.AsSpan(bodyOffset, Math.Max(0, bytes.Length - bodyOffset)),
+                        bodyLength,
+                        headers,
+                        label,
+                        bodyWarnings,
+                        retainNormalizedBody);
+                    deferred.Insert(slot, bodyWarnings);
+                    return preview;
+                },
+                retainedDecodedBytesLimit => HttpBodyDecoder.CreatePreview(
                     bytes.AsSpan(bodyOffset, Math.Max(0, bytes.Length - bodyOffset)),
                     bodyLength,
                     headers,
                     label,
-                    bodyWarnings,
-                    retainNormalizedBody);
-                deferred.Insert(slot, bodyWarnings);
-                return preview;
-            });
+                    [],
+                    retainNormalizedBody: false,
+                    retainedDecodedBytesLimit));
             deferredMessage.Headers.AddRange(headers);
             return deferredMessage;
         }

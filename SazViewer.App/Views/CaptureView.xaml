@@ -34,21 +34,40 @@
         <StackPanel Grid.Row="0" Grid.ColumnSpan="3">
         <!-- Toolbar: search, filter, Hide CONNECT, count, theme. -->
         <Border Background="{DynamicResource Saz.Panel}" BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,0,0,1" Padding="10,8">
-            <DockPanel DataContext="{Binding Sessions}">
-                <controls:ThemeToggleButton x:Name="ThemeButton" DockPanel.Dock="Right" Margin="12,0,0,0" />
-                <TextBlock DockPanel.Dock="Right" Text="{Binding CountText}" Foreground="{DynamicResource Saz.Muted}" VerticalAlignment="Center"
-                           Margin="12,0,0,0" AutomationProperties.LiveSetting="Polite" />
-                <CheckBox DockPanel.Dock="Right" Content="Hide CONNECT" IsChecked="{Binding HideConnect}" Margin="12,0,0,0"
-                          AutomationProperties.Name="Hide CONNECT sessions" />
-                <ComboBox x:Name="FilterBox" DockPanel.Dock="Right" Width="170" Margin="8,0,0,0"
-                          ItemsSource="{x:Static vm:SessionListViewModel.FilterOptions}"
-                          SelectedItem="{Binding Filter}"
-                          DisplayMemberPath="Label"
-                          AutomationProperties.Name="Filter HTTP status or protocol" />
-                <TextBox x:Name="GridSearchBox" Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=120}"
-                         Tag="Search method, URL, result, elapsed time, content type, endpoints..."
-                         AutomationProperties.Name="Search HTTP sessions" />
-            </DockPanel>
+            <Grid DataContext="{Binding Sessions}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <DockPanel Grid.Row="0">
+                    <controls:ThemeToggleButton x:Name="ThemeButton" DockPanel.Dock="Right" Margin="12,0,0,0" />
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountText}" Foreground="{DynamicResource Saz.Muted}" VerticalAlignment="Center"
+                               Margin="12,0,0,0" AutomationProperties.LiveSetting="Polite" />
+                    <CheckBox DockPanel.Dock="Right" Content="Hide CONNECT" IsChecked="{Binding HideConnect}" Margin="12,0,0,0"
+                              AutomationProperties.Name="Hide CONNECT sessions" />
+                    <ComboBox x:Name="FilterBox" DockPanel.Dock="Right" Width="170" Margin="8,0,0,0"
+                              ItemsSource="{x:Static vm:SessionListViewModel.FilterOptions}"
+                              SelectedItem="{Binding Filter}"
+                              DisplayMemberPath="Label"
+                              AutomationProperties.Name="Filter HTTP status or protocol" />
+                    <CheckBox x:Name="SearchPayloadsCheckBox" DockPanel.Dock="Right" Content="Search payloads"
+                              IsChecked="{Binding SearchPayloads}" Margin="8,0,0,0" VerticalAlignment="Center"
+                              AutomationProperties.Name="Search request, response, WebSocket, and MAPI payloads"
+                              AutomationProperties.HelpText="Runs a cancellable background search over bounded decoded payload content"
+                              ToolTip="Include decoded headers, bodies, WebSocket payloads, and available MAPI text" />
+                    <TextBox x:Name="GridSearchBox" Text="{Binding Query, UpdateSourceTrigger=PropertyChanged, Delay=120}"
+                             Tag="Search method, URL, result, elapsed time, content type, endpoints..."
+                             AutomationProperties.Name="Search HTTP sessions" />
+                </DockPanel>
+                <DockPanel Grid.Row="1" Margin="0,5,0,0"
+                           Visibility="{Binding PayloadSearchStatus, Converter={StaticResource NotNullToVisibility}}">
+                    <Button DockPanel.Dock="Right" Content="Cancel" Command="{Binding CancelPayloadSearchCommand}"
+                            Visibility="{Binding IsPayloadSearching, Converter={StaticResource BoolToVisibility}}"
+                            Padding="7,1" AutomationProperties.Name="Cancel payload search" />
+                    <TextBlock Text="{Binding PayloadSearchStatus}" Foreground="{DynamicResource Saz.Muted}"
+                               VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                </DockPanel>
+            </Grid>
         </Border>
         <!-- Credential scrub banner (captures opened with "View scrubbed"); details collapsed by default. -->
         <Border x:Name="ScrubBanner" DataContext="{Binding ScrubBanner}" Style="{StaticResource Saz.Warning}" Margin="10,4,10,2"

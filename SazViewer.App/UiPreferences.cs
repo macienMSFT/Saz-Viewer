@@ -164,6 +164,16 @@ internal sealed class UiPreferences
         }
     }
 
+    public bool SearchPayloads
+    {
+        get => document.SearchPayloads == true;
+        set
+        {
+            document.SearchPayloads = value;
+            Save();
+        }
+    }
+
     public bool ScrubBannerExpanded
     {
         get => document.ScrubBanner == "expanded";
@@ -271,6 +281,8 @@ internal sealed class UiPreferences
         public string? SessionViewer { get; set; }
 
         public bool? HideConnectOnOpen { get; set; }
+
+        public bool? SearchPayloads { get; set; }
 
         public double? BottomPaneGridFraction { get; set; }
 

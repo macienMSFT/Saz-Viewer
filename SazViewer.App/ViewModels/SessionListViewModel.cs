@@ -28,7 +28,7 @@ internal enum SessionSortColumn
 /// The session grid: chronological rows filtered by the search text, the result/protocol filter and the
 /// Hide CONNECT option, then sorted. Matches the report's <c>bindFilter</c> semantics.
 /// </summary>
-internal sealed class SessionListViewModel : ObservableObject
+internal sealed class SessionListViewModel : ObservableObject, IDisposable
 {
     public static readonly IReadOnlyList<SessionFilterOption> FilterOptions =
     [
@@ -43,17 +43,35 @@ internal sealed class SessionListViewModel : ObservableObject
     ];
 
     private readonly IReadOnlyList<SessionRow> rows;
+    private readonly UiPreferences? preferences;
+    private readonly PayloadSearchCache payloadCache;
+    private readonly TimeSpan payloadDebounce;
     private string query = "";
     private SessionFilterOption filter = FilterOptions[0];
     private bool hideConnect;
     private SessionSortColumn sortColumn = SessionSortColumn.Index;
     private ListSortDirection sortDirection = ListSortDirection.Ascending;
     private SessionRow? selectedRow;
+    private bool searchPayloads;
+    private bool isPayloadSearching;
+    private string? payloadSearchStatus;
+    private IReadOnlySet<SessionRow> payloadMatches = new HashSet<SessionRow>();
+    private string? payloadResultQuery;
+    private CancellationTokenSource? payloadSearchCancellation;
 
-    public SessionListViewModel(IReadOnlyList<SessionRow> rows)
+    public SessionListViewModel(
+        IReadOnlyList<SessionRow> rows,
+        UiPreferences? preferences = null,
+        PayloadSearchCache? payloadCache = null,
+        TimeSpan? payloadDebounce = null)
     {
         this.rows = rows;
+        this.preferences = preferences;
+        this.payloadCache = payloadCache ?? new PayloadSearchCache();
+        this.payloadDebounce = payloadDebounce ?? TimeSpan.FromMilliseconds(250);
+        searchPayloads = preferences?.SearchPayloads == true;
         VisibleRows = new BulkObservableCollection<SessionRow>(rows);
+        CancelPayloadSearchCommand = new RelayCommand(CancelPayloadSearch, () => IsPayloadSearching);
     }
 
     public IReadOnlyList<SessionRow> AllRows => rows;
@@ -63,6 +81,8 @@ internal sealed class SessionListViewModel : ObservableObject
     /// <summary>Raised after <see cref="VisibleRows"/> is recomputed.</summary>
     public event EventHandler? VisibleRowsChanged;
 
+    public RelayCommand CancelPayloadSearchCommand { get; }
+
     public string Query
     {
         get => query;
@@ -71,9 +91,47 @@ internal sealed class SessionListViewModel : ObservableObject
             if (SetProperty(ref query, value ?? ""))
             {
                 Refresh();
+                RestartPayloadSearch();
             }
         }
     }
+
+    public bool SearchPayloads
+    {
+        get => searchPayloads;
+        set
+        {
+            if (!SetProperty(ref searchPayloads, value))
+            {
+                return;
+            }
+            if (preferences is not null)
+            {
+                preferences.SearchPayloads = value;
+            }
+            RestartPayloadSearch();
+        }
+    }
+
+    public bool IsPayloadSearching
+    {
+        get => isPayloadSearching;
+        private set
+        {
+            if (SetProperty(ref isPayloadSearching, value))
+            {
+                CancelPayloadSearchCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public string? PayloadSearchStatus
+    {
+        get => payloadSearchStatus;
+        private set => SetProperty(ref payloadSearchStatus, value);
+    }
+
+    internal Task PendingPayloadSearch { get; private set; } = Task.CompletedTask;
 
     public SessionFilterOption Filter
     {
@@ -127,7 +185,11 @@ internal sealed class SessionListViewModel : ObservableObject
     {
         // The report lower-cases but does not trim the query.
         var folded = query.ToLowerInvariant();
-        if (folded.Length > 0 && !row.SearchText.Contains(folded, StringComparison.Ordinal))
+        if (folded.Length > 0
+            && !row.SearchText.Contains(folded, StringComparison.Ordinal)
+            && !(SearchPayloads
+                 && payloadResultQuery == folded
+                 && payloadMatches.Contains(row)))
         {
             return false;
         }
@@ -163,6 +225,95 @@ internal sealed class SessionListViewModel : ObservableObject
         VisibleRows.ReplaceAll(visible.ToList());
         OnPropertyChanged(nameof(CountText));
         VisibleRowsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void RestartPayloadSearch()
+    {
+        payloadSearchCancellation?.Cancel();
+        payloadSearchCancellation?.Dispose();
+        payloadSearchCancellation = null;
+        payloadMatches = new HashSet<SessionRow>();
+        payloadResultQuery = null;
+        IsPayloadSearching = false;
+
+        var folded = query.ToLowerInvariant();
+        if (!SearchPayloads || folded.Length == 0)
+        {
+            PayloadSearchStatus = null;
+            Refresh();
+            PendingPayloadSearch = Task.CompletedTask;
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        payloadSearchCancellation = cancellation;
+        IsPayloadSearching = true;
+        PayloadSearchStatus = "Waiting to search payloads\u2026";
+        PendingPayloadSearch = RunPayloadSearchAsync(folded, cancellation);
+    }
+
+    private async Task RunPayloadSearchAsync(string foldedQuery, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(payloadDebounce, cancellation.Token);
+            var progress = new Progress<PayloadSearchProgress>(value =>
+            {
+                if (ReferenceEquals(payloadSearchCancellation, cancellation))
+                {
+                    PayloadSearchStatus = $"Searching payloads\u2026 {value.Completed:N0}/{value.Total:N0}";
+                }
+            });
+            var result = await payloadCache.SearchAsync(rows, foldedQuery, progress, cancellation.Token);
+            if (!ReferenceEquals(payloadSearchCancellation, cancellation))
+            {
+                return;
+            }
+            payloadMatches = result.Matches;
+            payloadResultQuery = foldedQuery;
+            payloadSearchCancellation = null;
+            cancellation.Dispose();
+            IsPayloadSearching = false;
+            Refresh();
+            var truncated = result.TruncatedSessions > 0
+                ? $"; {result.TruncatedSessions:N0} sessions reached a scan limit"
+                : "";
+            var failed = result.FailedSessions > 0
+                ? $"; {result.FailedSessions:N0} sessions could not be decoded"
+                : "";
+            PayloadSearchStatus = $"{VisibleRows.Count:N0} matching sessions{truncated}{failed}.";
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            if (ReferenceEquals(payloadSearchCancellation, cancellation))
+            {
+                IsPayloadSearching = false;
+            }
+        }
+    }
+
+    private void CancelPayloadSearch()
+    {
+        if (payloadSearchCancellation is null)
+        {
+            return;
+        }
+        payloadSearchCancellation.Cancel();
+        payloadSearchCancellation.Dispose();
+        payloadSearchCancellation = null;
+        payloadMatches = new HashSet<SessionRow>();
+        payloadResultQuery = null;
+        IsPayloadSearching = false;
+        PayloadSearchStatus = "Payload search canceled.";
+        Refresh();
+    }
+
+    public void Dispose()
+    {
+        payloadSearchCancellation?.Cancel();
+        payloadSearchCancellation?.Dispose();
+        payloadSearchCancellation = null;
+        IsPayloadSearching = false;
     }
 
     /// <summary>Typed comparisons with chronological order as the tie-breaker in both directions; missing values sort first.</summary>

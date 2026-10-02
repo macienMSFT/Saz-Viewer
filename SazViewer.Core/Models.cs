@@ -56,6 +56,7 @@ public sealed class HttpMessage
 {
     private readonly BodyPreview? body;
     private readonly Lazy<BodyPreview>? deferredBody;
+    private readonly Func<int, BodyPreview>? deferredSearchBody;
 
     public HttpMessage()
     {
@@ -64,11 +65,15 @@ public sealed class HttpMessage
     /// <summary>Creates a message whose body is decoded on first access (see <see cref="SazParser.DeferBodyDecoding"/>).</summary>
     [System.Diagnostics.CodeAnalysis.SetsRequiredMembers]
 #pragma warning disable CS8618 // Body is provided by the deferred decoder.
-    internal HttpMessage(string startLine, Func<BodyPreview> decodeBody)
+    internal HttpMessage(
+        string startLine,
+        Func<BodyPreview> decodeBody,
+        Func<int, BodyPreview>? decodeSearchBody = null)
 #pragma warning restore CS8618
     {
         StartLine = startLine;
         deferredBody = new Lazy<BodyPreview>(decodeBody, LazyThreadSafetyMode.ExecutionAndPublication);
+        deferredSearchBody = decodeSearchBody;
     }
 
     public required string StartLine { get; init; }
@@ -82,6 +87,13 @@ public sealed class HttpMessage
 
     /// <summary>False until a deferred body has been decoded.</summary>
     public bool IsBodyDecoded => body is not null || deferredBody!.IsValueCreated;
+
+    /// <summary>
+    /// Decodes a bounded body specifically for desktop payload search without retaining the larger byte range
+    /// in the report model. Eager/scrubbed messages return their already-safe body so original bytes cannot leak.
+    /// </summary>
+    internal BodyPreview BodyForSearch(int retainedDecodedBytesLimit) =>
+        deferredSearchBody?.Invoke(retainedDecodedBytesLimit) ?? Body;
 
     public string? Header(string name) =>
         Headers.FirstOrDefault(h => h.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value;

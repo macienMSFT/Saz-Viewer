@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using SazViewer.App.ViewModels;
 using SazViewer.App.Views;
@@ -39,7 +40,12 @@ public sealed class NativeViewSmokeTests
             try
             {
                 var grid = (DataGrid)view.FindName("SessionGrid");
+                var searchPayloads = (CheckBox)view.FindName("SearchPayloadsCheckBox");
                 Assert.Equal(2, grid.Items.Count);
+                Assert.Equal(
+                    "Search request, response, WebSocket, and MAPI payloads",
+                    AutomationProperties.GetName(searchPayloads));
+                Assert.True(searchPayloads.Focusable);
                 grid.SelectedIndex = 0;
                 StaRunner.DoEvents();
                 Assert.True(model.Inspector.IsOpen);

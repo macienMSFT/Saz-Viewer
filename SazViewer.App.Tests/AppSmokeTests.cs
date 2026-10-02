@@ -34,6 +34,10 @@ public sealed class AppSmokeTests
         {
             var window = await WaitForAsync(() => MainWindow(process), "main window");
             var grid = await WaitForAsync(() => Find(window, "HTTP sessions", ControlType.DataGrid), "session grid");
+            var payloadSearch = await WaitForAsync(
+                () => Find(window, "Search request, response, WebSocket, and MAPI payloads", ControlType.CheckBox),
+                "payload search checkbox");
+            Assert.True(payloadSearch.TryGetCurrentPattern(TogglePattern.Pattern, out _));
             var rows = await WaitForAsync(() => DataRows(grid) is { Count: 2 } found ? found : null, "two session rows");
 
             // The WebView tab's WebView2 is created only when the tab is shown.

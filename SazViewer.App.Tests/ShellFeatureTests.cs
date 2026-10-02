@@ -26,6 +26,7 @@ public sealed class ShellFeatureTests
         Assert.Equal(.45, preferences.RightPaneGridFraction);
         Assert.Equal(.50, preferences.RightPaneHttpSplitFraction);
         Assert.False(preferences.HideConnectOnOpen);
+        Assert.False(preferences.SearchPayloads);
         Assert.False(preferences.ScrubBannerExpanded);
         Assert.Equal(LayoutWidthClass.Narrow, UiPreferences.WidthClassFor(899.5));
         Assert.Equal(LayoutWidthClass.Wide, UiPreferences.WidthClassFor(900));
@@ -46,6 +47,7 @@ public sealed class ShellFeatureTests
         first.RightPaneGridFraction = .55;
         first.RightPaneHttpSplitFraction = .60;
         first.HideConnectOnOpen = true;
+        first.SearchPayloads = true;
 
         var reloaded = new UiPreferences(path);
 
@@ -59,6 +61,7 @@ public sealed class ShellFeatureTests
         Assert.Equal(.55, reloaded.RightPaneGridFraction);
         Assert.Equal(.60, reloaded.RightPaneHttpSplitFraction);
         Assert.True(reloaded.HideConnectOnOpen);
+        Assert.True(reloaded.SearchPayloads);
         Assert.False(File.Exists(path + ".tmp"));
 
         reloaded.SessionViewer = SessionViewerLocation.NewWindow;

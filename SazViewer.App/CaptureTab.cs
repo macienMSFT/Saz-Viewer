@@ -195,6 +195,7 @@ internal sealed class CaptureTab : ICaptureTab
             viewModel.Inspector.PopOutRequested -= OnPopOutRequested;
             viewModel.Inspector.Loaded -= OnInspectorLoaded;
             viewModel.Inspector.Close();
+            viewModel.Dispose();
             viewModel = null;
         }
     }
