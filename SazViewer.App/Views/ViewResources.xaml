@@ -87,6 +87,17 @@
             <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
             <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
             <Setter Property="FocusVisualStyle" Value="{StaticResource Saz.InsetFocusVisual}" />
+            <!-- A lean row (no row header, details or frozen-column grid, none of which the session grid uses)
+                 keeps the first render of the grid fast. -->
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridRow">
+                        <Border Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+                            <DataGridCellsPresenter ItemsPanel="{TemplateBinding ItemsPanel}" SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="{DynamicResource Saz.Hover}" />
