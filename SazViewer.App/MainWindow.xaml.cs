@@ -21,6 +21,7 @@ public partial class MainWindow : Window, ICaptureTabHost
     private int busyCount;
     private string? busyMessage;
     private bool syncingSelection;
+    private CapturePrefetch? prefetch;
 
     internal MainWindow(RecentFilesStore recentFiles, FileAssociationService fileAssociation)
     {
@@ -82,11 +83,14 @@ public partial class MainWindow : Window, ICaptureTabHost
             }
 
             var name = Path.GetFileName(fullPath);
+            var prefetch = TakePrefetch(fullPath);
             // Read before parsing: a write during the parse then still shows up as a change.
-            var fingerprint = FileFingerprint.TryRead(fullPath);
-            var loaded = await RunBusyAsync(
+            var fingerprint = prefetch is not null ? prefetch.Fingerprint : FileFingerprint.TryRead(fullPath);
+            var loaded = await RunBusyAsync<ReportDocument>(
                 $"Opening {name}…",
-                () => ReportBuilder.Build(fullPath, scrubAuth: false, new DialogPasswordProvider(this, name, "to open it")));
+                prefetch is not null
+                    ? () => prefetch.Report.GetAwaiter().GetResult()
+                    : () => ReportBuilder.Build(fullPath, scrubAuth: false, new DialogPasswordProvider(this, name, "to open it")));
             if (loaded is null)
             {
                 return;
@@ -95,16 +99,32 @@ public partial class MainWindow : Window, ICaptureTabHost
             recentFiles.Add(fullPath);
             RebuildRecentMenu();
             var tab = new CaptureTab(loaded, fingerprint, this);
+            StartupTrace.Mark("tab-created");
             ContentHost.Children.Add(tab.View);
             syncingSelection = true;
             TabStrip.Items.Add(tab.TabItem);
             syncingSelection = false;
             tabs.Add(tab);
+            StartupTrace.Mark("tab-added");
+            if (StartupTrace.IsEnabled)
+            {
+                _ = Dispatcher.BeginInvoke(() => StartupTrace.Mark("grid-idle"), System.Windows.Threading.DispatcherPriority.ContextIdle);
+            }
         }
         finally
         {
             operationGate.Release();
         }
+    }
+
+    /// <summary>Hands over a parse <see cref="App"/> started before this window existed.</summary>
+    internal void SetPrefetch(CapturePrefetch prefetch) => this.prefetch = prefetch;
+
+    private CapturePrefetch? TakePrefetch(string fullPath)
+    {
+        var taken = prefetch;
+        prefetch = null;
+        return taken is not null && taken.Matches(fullPath) ? taken : null;
     }
 
     /// <summary>Handles paths forwarded by a second launch.</summary>

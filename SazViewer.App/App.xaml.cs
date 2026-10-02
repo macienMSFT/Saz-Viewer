@@ -9,10 +9,12 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        StartupTrace.Mark("OnStartup");
         base.OnStartup(e);
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         UiPreferences.Initialize(AppPaths.PreferencesPath);
         Themes.ThemeManager.Initialize();
+        StartupTrace.Mark("theme");
 
         var arguments = AppArguments.Parse(e.Args);
         if (arguments.Error is not null)
@@ -39,6 +41,7 @@ public partial class App : Application
         }
 
         var role = StartSingleInstance(paths);
+        StartupTrace.Mark("single-instance");
         if (role is InstanceRole.Forwarded or InstanceRole.ForwardRejected)
         {
             if (role == InstanceRole.ForwardRejected)
@@ -49,9 +52,17 @@ public partial class App : Application
             return;
         }
 
+        // Parse the first capture while the window is built and shown; the window takes the result over.
+        var prefetch = paths.Count > 0 ? CapturePrefetch.Start(paths[0], Dispatcher) : null;
         var window = new MainWindow(new RecentFilesStore(AppPaths.RecentFilesPath), FileAssociationService.ForCurrentUser());
+        if (prefetch is not null)
+        {
+            window.SetPrefetch(prefetch);
+        }
+        StartupTrace.Mark("window-created");
         MainWindow = window;
         window.Show();
+        StartupTrace.Mark("window-shown");
         if (unresolved.Count > 0)
         {
             MessageBox.Show(window, "Invalid capture path:\n" + string.Join("\n", unresolved), "SAZ Viewer", MessageBoxButton.OK, MessageBoxImage.Warning);

@@ -86,7 +86,9 @@ internal static class ReportBuilder
         var inputPath = Path.GetFullPath(capturePath);
         // Bodies are decoded on demand so the session list is available quickly; the completed report is identical
         // to the CLI's eager parse (ReportDocument.Html completes it before generating).
+        StartupTrace.Mark("parse-start");
         var report = new SazParser { DeferBodyDecoding = true }.Parse(inputPath, passwordProvider);
+        StartupTrace.Mark("parse-end");
         if (scrubAuth)
         {
             SazParser.CompleteDeferred(report);
