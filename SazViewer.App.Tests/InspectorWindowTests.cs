@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -8,6 +9,36 @@ namespace SazViewer.App.Tests;
 
 public sealed class InspectorWindowTests
 {
+    [Fact]
+    public void ScrubbedCaptureDisplayNameIncludesSuffix()
+    {
+        using var temp = new TempDirectory();
+        var path = TestCaptures.WritePlain(temp.File("capture.saz"));
+        var document = ReportBuilder.Build(path, true, new QueuePasswordProvider());
+
+        StaRunner.Run(() =>
+        {
+            var hostWindow = new Window { ShowInTaskbar = false };
+            var tab = new CaptureTab(document, null, new FakeTabHost(hostWindow));
+            try
+            {
+                Assert.Equal("capture.saz (scrubbed)", tab.DisplayName);
+                Assert.Equal("capture.saz (scrubbed)", AutomationProperties.GetName(tab.TabItem));
+                tab.ShowReloadError("The file no longer exists.");
+                Assert.Equal(Visibility.Visible, ((FrameworkElement)tab.View.FindName("NoticeBar")).Visibility);
+                Assert.Contains(
+                    "The file no longer exists.",
+                    ((TextBlock)tab.View.FindName("NoticeText")).Text);
+            }
+            finally
+            {
+                tab.Dispose();
+                hostWindow.Close();
+                StaRunner.DoEvents();
+            }
+        });
+    }
+
     [Fact]
     public void PopOutIsIndependentPositionedAndEitherWindowCanBecomeForeground()
     {

@@ -67,6 +67,8 @@ internal sealed class CaptureTab : ICaptureTab
 
     public string FileName => Path.GetFileName(SourcePath);
 
+    public string DisplayName => FileName + (IsScrubbed ? " (scrubbed)" : "");
+
     public ReportDocument? Document => disposed ? null : document;
 
     /// <summary>True when the capture is shown with credentials redacted (File › View scrubbed).</summary>
@@ -273,7 +275,7 @@ internal sealed class CaptureTab : ICaptureTab
 
     private void UpdateHeader()
     {
-        var name = IsScrubbed ? $"{FileName} (scrubbed)" : FileName;
+        var name = DisplayName;
         headerTitle.Text = name;
         AutomationProperties.SetName(TabItem, name);
     }

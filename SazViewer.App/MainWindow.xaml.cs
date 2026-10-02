@@ -262,8 +262,8 @@ public partial class MainWindow : Window, ICaptureTabHost
     private void UpdateChrome()
     {
         var active = tabs.Active;
-        Title = active is null ? AppTitle : $"{active.FileName} - {AppTitle}";
-        TabStrip.Visibility = tabs.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        Title = active is null ? AppTitle : $"{active.DisplayName} \u2013 {AppTitle}";
+        TabStrip.Visibility = tabs.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
         WelcomePanel.Visibility = tabs.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
         CloseTabMenuItem.IsEnabled = active is not null;
         ExportMenuItem.IsEnabled = !Busy && active?.Document is not null;

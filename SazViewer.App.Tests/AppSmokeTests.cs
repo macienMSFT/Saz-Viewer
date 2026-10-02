@@ -98,10 +98,13 @@ public sealed class AppSmokeTests
         try
         {
             var window = await WaitForAsync(() => MainWindow(process), "main window");
-            var strip = await WaitForAsync(() => Find(window, "Open captures", ControlType.Tab), "capture tabs");
-            await WaitForAsync(() => TabItems(strip) == 1 ? strip : null, "first tab");
+            await WaitForAsync(
+                () => window.Current.Name == "first.saz \u2013 SAZ Viewer" ? window : null,
+                "single-capture window title");
+            Assert.Null(VisibleCaptureStrip(window));
             var grid = await WaitForAsync(() => Find(window, "HTTP sessions", ControlType.DataGrid), "session grid");
             await WaitForAsync(() => DataRows(grid) is { Count: 2 } found ? found : null, "first capture rows");
+            var singleCaptureGridTop = grid.Current.BoundingRectangle.Top;
 
             // The second launch shares the data root (and thus the instance name) and must hand off, not start a UI.
             using (var forwarder = Process.Start(CreateStartInfo(second, dataDirectory, port: null))!)
@@ -111,6 +114,7 @@ public sealed class AppSmokeTests
                 Assert.Equal(0, forwarder.ExitCode);
             }
             Assert.False(process.HasExited);
+            var strip = await WaitForAsync(() => VisibleCaptureStrip(window), "capture tabs");
             await WaitForAsync(() => TabItems(strip) == 2 ? strip : null, "forwarded tab");
             // The forwarded tab becomes active and shows its own sessions.
             await WaitForAsync(
@@ -126,6 +130,27 @@ public sealed class AppSmokeTests
             }
             await Task.Delay(1500);
             Assert.Equal(2, TabItems(strip));
+
+            var closeSecond = await WaitForAsync(
+                () => ProcessElement(process, "Close second.saz", ControlType.Button),
+                "second capture close button");
+            ((InvokePattern)closeSecond.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            await WaitForAsync(
+                () => VisibleCaptureStrip(window) is null && window.Current.Name == "first.saz \u2013 SAZ Viewer"
+                    ? window
+                    : null,
+                "single remaining capture");
+            var remainingGrid = await WaitForAsync(
+                () => Find(window, "HTTP sessions", ControlType.DataGrid) is { Current.IsOffscreen: false } visible
+                    && DataRows(visible).Count == 2
+                    ? visible
+                    : null,
+                "remaining capture rows");
+            Assert.InRange(
+                Math.Abs(remainingGrid.Current.BoundingRectangle.Top - singleCaptureGridTop),
+                0,
+                1);
+
         }
         finally
         {
@@ -373,6 +398,12 @@ public sealed class AppSmokeTests
     private static int TabItems(AutomationElement strip) =>
         strip.FindAll(TreeScope.Children, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.TabItem)).Count;
 
+    private static AutomationElement? VisibleCaptureStrip(AutomationElement window)
+    {
+        var strip = Find(window, "Open captures", ControlType.Tab);
+        return strip is not null && !strip.Current.IsOffscreen ? strip : null;
+    }
+
     private static async Task<T> WaitForAsync<T>(Func<T?> probe, string what) where T : class
     {
         var deadline = DateTime.UtcNow.AddSeconds(60);
@@ -500,4 +531,5 @@ public sealed class AppSmokeTests
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool AttachThreadInput(uint sourceThread, uint targetThread, bool attach);
+
 }
