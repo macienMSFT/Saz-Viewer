@@ -13,7 +13,7 @@
 | FastTransfer | `FastTransferParserTests.cs` | lexical continuation, grammar phases, provenance, ICS state |
 | Report generator | `HtmlReportGeneratorTests.cs`, `HtmlReportPayloadCompressionTests.cs` | encoded markup, envelope schemas, limits, deterministic models |
 | Real browser | `HtmlReportBrowserTests.cs` | Edge layout, keyboard/ARIA, popup, theme, split view, lazy lifecycle, CSP/no-network |
-| Desktop app | `SazViewer.App.Tests\*` | Argument parsing, `recent.json` storage, byte-identical Export/Export scrubbed vs. CLI (plain and encrypted), password retries, WebView2 URI/menu policy, and `AppSmokeTests` (launches `SazViewer.App.exe`, connects over CDP, checks report load, blocked fetch/navigation/pop-ups, `localStorage`, and the app-hosted inspector popup) |
+| Desktop app | `SazViewer.App.Tests\*` | Argument parsing and forwarded-path validation (`AppArgumentsTests`, `ForwardedPathValidatorTests`); the single-instance wire format and rejection cases (`SingleInstanceProtocolTests`) and real pipe/mutex roles, ACL, and malformed or oversized clients (`SingleInstanceServiceTests`); registry key layout, ownership markers, stale paths, and unregister cleanup through `FakeRegistryStore` and a sandboxed HKCU key (`FileAssociationServiceTests`); debounce with a manual `TimeProvider`, change tracking, and real write/rename-replace/delete events (`CaptureFileWatcherTests`); tab de-duplication, activation, cycling, and close order (`CaptureTabCollectionTests`); `recent.json` storage; byte-identical Export/Export scrubbed vs. CLI (plain and encrypted); password retries; native view-models (`NativeViewModelTests` for the grid, filters, Result/Elapsed formatting, Prev/Next and Headers/Raw; `StructuredViewTests` for JSON/XML trees, labels, formatted text, search and copy; `MediaViewTests` for HexView, image validation, Auth reveal/reset and the WebView sandbox policy; `MapiViewTests`; `WebSocketViewTests`; `ShellFeatureTests` for preferences, theme resolution, split/single layout, pop-out navigation and the scrub banner); and UI Automation smoke tests (`AppSmokeTests`, `NativeViewSmokeTests`, `MediaViewSmokeTests`) that launch `SazViewer.App.exe` to check the grid, inspector, views, sandboxed WebView tab, and that a second launch forwards its path into a new tab of the running instance, with no duplicate when the same file is forwarded again. `NativePerformanceProbe` times open and session-view latency on a capture named by `SAZVIEWER_PERF_CAPTURE` (skipped otherwise). |
 
 Synthetic ZIP/SAZ fixtures are created during tests. Proprietary captures and generated reports stay outside git.
 
@@ -43,6 +43,7 @@ During development, run the narrowest relevant filter first, then the full suite
 5. Integrate copy and active-view search from the visible representation.
 6. Add teardown for Blob URLs, iframes, promises, or reveal state.
 7. Test single/split, desktop/narrow, popup, keyboard/ARIA, both themes, malformed envelopes, and zero console/network errors.
+8. Port it to the desktop app: add a `TabContentViewModel` and view (see the [view-model map](desktop-app.md#view-model-map)), register it in `MessagePaneViewModel` in the same fixed order with the same enablement, wire copy and active-view search, reset any transient state in `Deactivate`, and add view-model tests in `SazViewer.App.Tests`.
 
 ## Add an HTTP body decoder
 

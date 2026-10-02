@@ -62,14 +62,40 @@ internal partial class PasswordDialog : Window
 /// Up to three attempts, matching the CLI's interactive prompt. Cancel maps to
 /// <see cref="SazPasswordCancelledException"/> via a null return.
 /// </summary>
-internal sealed class DialogPasswordProvider(Window owner, string captureName, string purpose) : ISazPasswordProvider
+internal sealed class DialogPasswordProvider : ISazPasswordProvider
 {
+    private readonly System.Windows.Threading.Dispatcher dispatcher;
+    private readonly Func<Window?> owner;
+    private readonly string captureName;
+    private readonly string purpose;
+
+    public DialogPasswordProvider(Window owner, string captureName, string purpose)
+        : this(owner.Dispatcher, () => owner, captureName, purpose)
+    {
+    }
+
+    /// <summary>
+    /// For a parse that starts before its window exists: the owner is resolved when the prompt is shown and used
+    /// only if it is visible by then.
+    /// </summary>
+    public DialogPasswordProvider(System.Windows.Threading.Dispatcher dispatcher, Func<Window?> owner, string captureName, string purpose)
+    {
+        this.dispatcher = dispatcher;
+        this.owner = owner;
+        this.captureName = captureName;
+        this.purpose = purpose;
+    }
+
     public int MaximumAttempts => 3;
 
     public char[]? GetPassword(SazPasswordRequest request) =>
-        owner.Dispatcher.Invoke(() =>
+        dispatcher.Invoke(() =>
         {
-            var dialog = new PasswordDialog(captureName, purpose, request) { Owner = owner };
+            var dialog = new PasswordDialog(captureName, purpose, request);
+            if (owner() is { IsVisible: true } window)
+            {
+                dialog.Owner = window;
+            }
             return dialog.ShowDialog() == true ? dialog.TakePassword() : null;
         });
 }

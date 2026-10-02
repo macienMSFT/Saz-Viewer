@@ -8,6 +8,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\SazViewer.ico</ApplicationIcon>
+    <!-- Precompiled code (only when publishing for a runtime) cuts JIT time at launch. -->
+    <PublishReadyToRun Condition="'$(RuntimeIdentifier)' != ''">true</PublishReadyToRun>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +23,11 @@
 
   <ItemGroup>
     <Using Include="System.IO" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Window and taskbar icon; regenerate with Assets\Generate-Icon.ps1. -->
+    <Resource Include="Assets\SazViewer.ico" />
   </ItemGroup>
 
   <ItemGroup>

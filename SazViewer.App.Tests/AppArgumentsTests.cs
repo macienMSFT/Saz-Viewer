@@ -5,7 +5,10 @@ public sealed class AppArgumentsTests
     [Fact]
     public void NoArgumentsOpensEmptyWindow()
     {
-        Assert.Equal(new AppArguments(null, false, null), AppArguments.Parse([]));
+        var parsed = AppArguments.Parse([]);
+        Assert.Empty(parsed.CapturePaths);
+        Assert.False(parsed.ShowHelp);
+        Assert.Null(parsed.Error);
     }
 
     [Theory]
@@ -15,9 +18,28 @@ public sealed class AppArgumentsTests
     public void SinglePathIsAccepted(string path)
     {
         var parsed = AppArguments.Parse([path]);
-        Assert.Equal(path, parsed.CapturePath);
+        Assert.Equal([path], parsed.CapturePaths);
         Assert.Null(parsed.Error);
         Assert.False(parsed.ShowHelp);
+    }
+
+    [Fact]
+    public void MultiplePathsAreAcceptedInOrder()
+    {
+        var parsed = AppArguments.Parse(["b.saz", "a.saz", @"C:\c.saz"]);
+        Assert.Equal(["b.saz", "a.saz", @"C:\c.saz"], parsed.CapturePaths);
+        Assert.Null(parsed.Error);
+    }
+
+    [Fact]
+    public void TooManyPathsAreRejected()
+    {
+        var atLimit = Enumerable.Range(0, AppArguments.MaximumPaths).Select(i => $"{i}.saz").ToArray();
+        Assert.Equal(AppArguments.MaximumPaths, AppArguments.Parse(atLimit).CapturePaths.Count);
+
+        var parsed = AppArguments.Parse([.. atLimit, "extra.saz"]);
+        Assert.Empty(parsed.CapturePaths);
+        Assert.NotNull(parsed.Error);
     }
 
     [Theory]
@@ -39,16 +61,17 @@ public sealed class AppArgumentsTests
     public void UnknownOptionsAreRejected(string option)
     {
         var parsed = AppArguments.Parse([option, "capture.saz"]);
-        Assert.Null(parsed.CapturePath);
+        Assert.Empty(parsed.CapturePaths);
         Assert.Contains(option, parsed.Error);
     }
 
     [Fact]
-    public void MultiplePathsAreRejected()
+    public void PasswordAfterPathIsRejectedNotForwarded()
     {
-        var parsed = AppArguments.Parse(["a.saz", "b.saz"]);
-        Assert.Null(parsed.CapturePath);
+        var parsed = AppArguments.Parse(["capture.saz", "--password", "secret"]);
+        Assert.Empty(parsed.CapturePaths);
         Assert.NotNull(parsed.Error);
+        Assert.DoesNotContain("secret", parsed.Error);
     }
 
     [Fact]
@@ -61,8 +84,8 @@ public sealed class AppArgumentsTests
     public void DoubleDashAllowsPathsThatLookLikeOptions()
     {
         var parsed = AppArguments.Parse(["--", "-odd-name.saz"]);
-        Assert.Equal("-odd-name.saz", parsed.CapturePath);
+        Assert.Equal(["-odd-name.saz"], parsed.CapturePaths);
         Assert.Null(parsed.Error);
-        Assert.Equal("--help", AppArguments.Parse(["--", "--help"]).CapturePath);
+        Assert.Equal(["--help"], AppArguments.Parse(["--", "--help"]).CapturePaths);
     }
 }

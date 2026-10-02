@@ -24,7 +24,7 @@ public sealed partial class SazParser
         {
             using var file = File.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
             using var archive = SazArchiveFactory.Open(file, leaveOpen: false, passwordProvider);
-            ParseArchive(archive, report);
+            ParseArchive(archive, report, DeferBodyDecoding);
         }
         catch (InvalidDataException exception)
         {
@@ -43,36 +43,83 @@ public sealed partial class SazParser
     {
         var report = new SazReport { SourceName = sourceName };
         using var archive = SazArchiveFactory.Open(stream, leaveOpen: true, passwordProvider);
-        ParseArchive(archive, report);
+        ParseArchive(archive, report, DeferBodyDecoding);
         return report;
     }
 
-    private static void ParseArchive(ISazArchive archive, SazReport report)
+    private static void ParseArchive(ISazArchive archive, SazReport report, bool deferBodies)
     {
         var groups = Discover(archive, report.Warnings);
+        var batch = new List<EntryGroup>();
+        long batchBytes = 0;
         foreach (var group in groups.OrderBy(g => g.ArchiveOrder))
         {
-            var session = new HttpSession { Id = group.Id, ArchiveOrder = group.ArchiveOrder };
-            ParseMetadata(group.Metadata, session);
-            ParseRequest(group.Request, session);
-            ParseResponse(group.Response, session);
-            CompleteSession(session);
-            report.Sessions.Add(session);
-
-            if (group.WebSocket is not null)
+            // Archive entries are read sequentially in the original m/c/s/w order (encrypted archives
+            // enforce cumulative budgets), then the CPU-bound HTTP parsing runs in parallel.
+            batchBytes += BufferEntries(group);
+            batch.Add(group);
+            if (group.WebSocket is not null
+                || batch.Count >= MaxParallelBatchSessions
+                || batchBytes >= MaxParallelBatchBytes)
             {
-                WebSocketParser.Parse(
-                    group.WebSocket,
-                    session.Id,
-                    session.ArchiveOrder,
-                    report.WebSocketMessages,
-                    session.Warnings);
+                ParseBatch(batch, report, deferBodies);
+                batch.Clear();
+                batchBytes = 0;
             }
-
         }
+        ParseBatch(batch, report, deferBodies);
 
         report.Sessions.Sort(CompareSessions);
         report.Mapi = MapiCaptureParser.Parse(report.Sessions);
+        if (deferBodies)
+        {
+            report.HasDeferredWork = true;
+        }
+        else
+        {
+            AggregateSessionWarnings(report);
+        }
+        report.WebSocketMessages.Sort(CompareWebSocketMessages);
+        if (groups.Count == 0)
+        {
+            report.Warnings.Add("No raw/<id>_c.txt, _s.txt, _m.xml, or _w.txt entries were found.");
+        }
+    }
+
+    /// <summary>
+    /// Decodes each message body on first access instead of during the parse, so the session list is available
+    /// quickly. <see cref="SazReport.Warnings"/> then lacks the per-session warnings until
+    /// <see cref="CompleteDeferred"/> runs; the completed report is identical to an eager parse.
+    /// </summary>
+    public bool DeferBodyDecoding { get; init; }
+
+    /// <summary>
+    /// Decodes any remaining deferred bodies (in parallel) and aggregates the session warnings exactly as an eager
+    /// parse does. Safe to call more than once and from any thread. <paramref name="maxDegreeOfParallelism"/>
+    /// bounds the worker count (-1 for the default) so background completion can leave cores for the UI.
+    /// </summary>
+    public static void CompleteDeferred(SazReport report, int maxDegreeOfParallelism = -1)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        lock (report.DeferredGate)
+        {
+            if (!report.HasDeferredWork)
+            {
+                return;
+            }
+            var options = new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism };
+            Parallel.ForEach(report.Sessions, options, session =>
+            {
+                _ = session.Request?.Body;
+                _ = session.Response?.Body;
+            });
+            AggregateSessionWarnings(report);
+            report.HasDeferredWork = false;
+        }
+    }
+
+    private static void AggregateSessionWarnings(SazReport report)
+    {
         foreach (var session in report.Sessions)
         {
             foreach (var warning in session.Warnings)
@@ -80,10 +127,124 @@ public sealed partial class SazParser
                 report.Warnings.Add($"Session {session.Id}: {warning}");
             }
         }
-        report.WebSocketMessages.Sort(CompareWebSocketMessages);
-        if (groups.Count == 0)
+    }
+
+    private const int MaxParallelBatchSessions = 256;
+    private const long MaxParallelBatchBytes = 64L * 1024 * 1024;
+
+    private static void ParseBatch(List<EntryGroup> batch, SazReport report, bool deferBodies)
+    {
+        if (batch.Count == 0)
         {
-            report.Warnings.Add("No raw/<id>_c.txt, _s.txt, _m.xml, or _w.txt entries were found.");
+            return;
+        }
+
+        var sessions = new HttpSession[batch.Count];
+        try
+        {
+            Parallel.For(0, batch.Count, index =>
+            {
+                var group = batch[index];
+                var session = new HttpSession { Id = group.Id, ArchiveOrder = group.ArchiveOrder };
+                ParseMetadata(group.Metadata, session);
+                var deferred = deferBodies ? new DeferredWarnings(session.Warnings) : null;
+                ParseRequest(group.Request, session, deferred);
+                ParseResponse(group.Response, session, deferred);
+                CompleteSession(session);
+                sessions[index] = session;
+            });
+        }
+        catch (AggregateException exception) when (exception.InnerExceptions.Count > 0)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception.InnerExceptions[0]).Throw();
+        }
+
+        for (var index = 0; index < batch.Count; index++)
+        {
+            var session = sessions[index];
+            report.Sessions.Add(session);
+            // Only the last group of a batch can carry a WebSocket entry, so streaming it here keeps
+            // the archive read order identical to a fully sequential parse.
+            if (batch[index].WebSocket is { } webSocket)
+            {
+                WebSocketParser.Parse(
+                    webSocket,
+                    session.Id,
+                    session.ArchiveOrder,
+                    report.WebSocketMessages,
+                    session.Warnings);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads the bounded metadata/request/response prefixes the parsers would consume, replacing the
+    /// group's entries with in-memory copies so they can be parsed off the archive's thread.
+    /// </summary>
+    private static long BufferEntries(EntryGroup group)
+    {
+        long total = 0;
+        if (group.Metadata is { } metadata && metadata.Length <= MaxMetadataBytes)
+        {
+            group.Metadata = BufferedEntry.Read(metadata, MaxMetadataBytes + 1);
+            total += ((BufferedEntry)group.Metadata).BufferedBytes;
+        }
+        if (group.Request is { } request)
+        {
+            group.Request = BufferedEntry.Read(request, HttpMessageParser.MaxEntryRead);
+            total += ((BufferedEntry)group.Request).BufferedBytes;
+        }
+        if (group.Response is { } response)
+        {
+            group.Response = BufferedEntry.Read(response, HttpMessageParser.MaxEntryRead);
+            total += ((BufferedEntry)group.Response).BufferedBytes;
+        }
+        return total;
+    }
+
+    private sealed class BufferedEntry : ISazArchiveEntry
+    {
+        private readonly byte[] bytes;
+        private readonly int count;
+        private readonly Exception? failure;
+
+        private BufferedEntry(ISazArchiveEntry source, byte[] bytes, int count, Exception? failure)
+        {
+            FullName = source.FullName;
+            Length = source.Length;
+            this.bytes = bytes;
+            this.count = count;
+            this.failure = failure;
+        }
+
+        public string FullName { get; }
+
+        public long Length { get; }
+
+        public int BufferedBytes => count;
+
+        public static BufferedEntry Read(ISazArchiveEntry source, int limit)
+        {
+            try
+            {
+                using var stream = source.Open();
+                using var buffered = ReadLimited(stream, limit);
+                return new BufferedEntry(source, buffered.GetBuffer(), (int)buffered.Length, null);
+            }
+            catch (Exception exception) when (exception is InvalidDataException or IOException)
+            {
+                // Surface the failure from Open() exactly where the sequential parser would have seen it.
+                return new BufferedEntry(source, [], 0, exception);
+            }
+        }
+
+        public Stream Open()
+        {
+            if (failure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+            }
+            return new MemoryStream(bytes, 0, count, writable: false);
         }
     }
 
@@ -128,15 +289,15 @@ public sealed partial class SazParser
         return groups.Values.ToList();
     }
 
-    private static void ParseRequest(ISazArchiveEntry? entry, HttpSession session)
+    private static void ParseRequest(ISazArchiveEntry? entry, HttpSession session, DeferredWarnings? deferred)
     {
-        session.Request = ParseMessage(entry, "request", session.Warnings, out var length);
+        session.Request = ParseMessage(entry, "request", session.Warnings, deferred, out var length);
         session.RequestBytes = length;
     }
 
-    private static void ParseResponse(ISazArchiveEntry? entry, HttpSession session)
+    private static void ParseResponse(ISazArchiveEntry? entry, HttpSession session, DeferredWarnings? deferred)
     {
-        session.Response = ParseMessage(entry, "response", session.Warnings, out var length);
+        session.Response = ParseMessage(entry, "response", session.Warnings, deferred, out var length);
         session.ResponseBytes = length;
     }
 
@@ -144,6 +305,7 @@ public sealed partial class SazParser
         ISazArchiveEntry? entry,
         string label,
         List<string> warnings,
+        DeferredWarnings? deferred,
         out long length)
     {
         if (entry is null)
@@ -157,7 +319,7 @@ public sealed partial class SazParser
         try
         {
             using var stream = entry.Open();
-            return HttpMessageParser.Parse(stream, entry.Length, label, warnings);
+            return HttpMessageParser.Parse(stream, entry.Length, label, warnings, deferred);
         }
         catch (Exception exception) when (exception is InvalidDataException or IOException)
         {

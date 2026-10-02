@@ -5,27 +5,108 @@ namespace SazViewer.App;
 
 public partial class App : Application
 {
+    private SingleInstanceService? singleInstance;
+
     protected override void OnStartup(StartupEventArgs e)
     {
+        StartupTrace.Mark("OnStartup");
         base.OnStartup(e);
         DispatcherUnhandledException += OnDispatcherUnhandledException;
+        UiPreferences.Initialize(AppPaths.PreferencesPath);
+        Themes.ThemeManager.Initialize();
+        StartupTrace.Mark("theme");
 
         var arguments = AppArguments.Parse(e.Args);
-        var window = new MainWindow(new RecentFilesStore(AppPaths.RecentFilesPath));
-        MainWindow = window;
-        window.Show();
-
         if (arguments.Error is not null)
         {
-            MessageBox.Show(window, $"{arguments.Error}\n\n{AppArguments.Usage}", "SAZ Viewer", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show($"{arguments.Error}\n\n{AppArguments.Usage}", "SAZ Viewer", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         else if (arguments.ShowHelp)
         {
-            MessageBox.Show(window, AppArguments.Usage, "SAZ Viewer", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(AppArguments.Usage, "SAZ Viewer", MessageBoxButton.OK, MessageBoxImage.Information);
         }
-        else if (arguments.CapturePath is not null)
+
+        var paths = new List<string>();
+        var unresolved = new List<string>();
+        foreach (var path in arguments.CapturePaths)
         {
-            _ = window.OpenCaptureAsync(arguments.CapturePath);
+            if (ForwardedPathValidator.TryResolve(path, Environment.CurrentDirectory) is { } resolved)
+            {
+                paths.Add(resolved);
+            }
+            else
+            {
+                unresolved.Add(path);
+            }
+        }
+
+        var role = StartSingleInstance(paths);
+        StartupTrace.Mark("single-instance");
+        if (role is InstanceRole.Forwarded or InstanceRole.ForwardRejected)
+        {
+            if (role == InstanceRole.ForwardRejected)
+            {
+                MessageBox.Show("SAZ Viewer is already running but refused the request to open these files.", "SAZ Viewer", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            Shutdown(role == InstanceRole.Forwarded ? 0 : 1);
+            return;
+        }
+
+        // Parse the first capture while the window is built and shown; the window takes the result over.
+        var prefetch = paths.Count > 0 ? CapturePrefetch.Start(paths[0], Dispatcher) : null;
+        var window = new MainWindow(new RecentFilesStore(AppPaths.RecentFilesPath), FileAssociationService.ForCurrentUser());
+        if (prefetch is not null)
+        {
+            window.SetPrefetch(prefetch);
+        }
+        StartupTrace.Mark("window-created");
+        MainWindow = window;
+        window.Show();
+        StartupTrace.Mark("window-shown");
+        if (unresolved.Count > 0)
+        {
+            MessageBox.Show(window, "Invalid capture path:\n" + string.Join("\n", unresolved), "SAZ Viewer", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        if (paths.Count > 0)
+        {
+            _ = window.OpenCapturesAsync(paths);
+        }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        singleInstance?.Dispose();
+        singleInstance = null;
+        base.OnExit(e);
+    }
+
+    private InstanceRole StartSingleInstance(IReadOnlyList<string> paths)
+    {
+        try
+        {
+            singleInstance = SingleInstanceService.ForCurrentUser(AppPaths.DataDirectory);
+            // Subscribed before the server starts; queued work runs after OnStartup has created the window.
+            singleInstance.PathsReceived += (_, forwarded) => Dispatcher.BeginInvoke(async () =>
+            {
+                if (MainWindow is MainWindow window)
+                {
+                    await window.OpenForwardedAsync(forwarded);
+                }
+            });
+            var role = singleInstance.Start(paths);
+            if (role != InstanceRole.Primary)
+            {
+                singleInstance.Dispose();
+                singleInstance = null;
+            }
+            return role;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException
+            or System.Security.SecurityException or ArgumentException)
+        {
+            singleInstance?.Dispose();
+            singleInstance = null;
+            return InstanceRole.Standalone;
         }
     }
 

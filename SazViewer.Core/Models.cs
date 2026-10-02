@@ -8,6 +8,20 @@ public sealed class SazReport
     public List<string> Warnings { get; } = [];
     public MapiCapture? Mapi { get; internal set; }
     public AuthScrubSummary? AuthScrub { get; internal set; }
+
+    /// <summary>
+    /// True while bodies decoded on demand still have to be decoded and their warnings aggregated into
+    /// <see cref="Warnings"/>; see <see cref="SazParser.CompleteDeferred"/>.
+    /// </summary>
+    public bool HasDeferredWork
+    {
+        get => Volatile.Read(ref hasDeferredWork);
+        internal set => Volatile.Write(ref hasDeferredWork, value);
+    }
+
+    private bool hasDeferredWork;
+
+    internal object DeferredGate { get; } = new();
 }
 
 public sealed record AuthScrubSummary(IReadOnlyDictionary<string, int> Counts)
@@ -40,9 +54,34 @@ public sealed class HttpSession
 
 public sealed class HttpMessage
 {
+    private readonly BodyPreview? body;
+    private readonly Lazy<BodyPreview>? deferredBody;
+
+    public HttpMessage()
+    {
+    }
+
+    /// <summary>Creates a message whose body is decoded on first access (see <see cref="SazParser.DeferBodyDecoding"/>).</summary>
+    [System.Diagnostics.CodeAnalysis.SetsRequiredMembers]
+#pragma warning disable CS8618 // Body is provided by the deferred decoder.
+    internal HttpMessage(string startLine, Func<BodyPreview> decodeBody)
+#pragma warning restore CS8618
+    {
+        StartLine = startLine;
+        deferredBody = new Lazy<BodyPreview>(decodeBody, LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
     public required string StartLine { get; init; }
     public List<HttpHeader> Headers { get; } = [];
-    public required BodyPreview Body { get; init; }
+
+    public required BodyPreview Body
+    {
+        get => body ?? deferredBody!.Value;
+        init => body = value;
+    }
+
+    /// <summary>False until a deferred body has been decoded.</summary>
+    public bool IsBodyDecoded => body is not null || deferredBody!.IsValueCreated;
 
     public string? Header(string name) =>
         Headers.FirstOrDefault(h => h.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value;

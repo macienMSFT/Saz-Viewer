@@ -18,12 +18,27 @@ flowchart LR
     MODEL --> GEN["HtmlReportGenerator"]
     GEN --> HTML["One self-contained<br/>offline HTML file"]
     HTML --> UI["Browser session list<br/>and lazy inspectors"]
-    GEN --> MEM["In-memory report<br/>served to WebView2"]
-    MEM --> UI
-    APP -.->|Export HTML| HTML
+    MODEL --> NATIVE["Native WPF views<br/>(lazy per session)"]
+    APP -.->|Export HTML| GEN
 ```
 
-The CLI writes the report to disk for any browser. The desktop app runs the same parse/scrub/generate pipeline, serves the generated HTML from memory to a locked-down WebView2 control, and writes it to disk only on explicit Export.
+The CLI writes the report to disk for any browser. The desktop app runs the same parse (and optional scrub) pipeline, then shows the `SazReport` model in native WPF views that port the report's behavior. It generates the HTML only for an explicit Export, so exports stay byte-identical to the CLI. See [Desktop app: native views](desktop-app.md).
+
+The desktop app is a tabbed host: `MainWindow` owns a `CaptureTabCollection` of `CaptureTab` objects. Each tab owns one capture's in-memory `ReportDocument`, its `CaptureViewModel` (grid and inspector), any pop-out inspector windows and a file watcher. Three small services sit beside the window: `SingleInstanceService` forwards second launches, `FileAssociationService` registers `.saz` per user, and `CaptureFileWatcher` detects file changes.
+
+```mermaid
+flowchart LR
+    LAUNCH["Second launch<br/>(double-click .saz)"] -->|"pipe: SAZV v1 + {paths}"| SI["SingleInstanceService"]
+    SI --> WIN["MainWindow"]
+    WIN --> TABS["CaptureTabCollection<br/>dedupe · active · cycle"]
+    TABS --> TAB1["CaptureTab"]
+    TABS --> TAB2["CaptureTab"]
+    TAB1 --> CVM["CaptureViewModel<br/>grid · inspector · scrub banner"]
+    TAB1 --> POP["InspectorWindow pop-outs"]
+    TAB1 --> FW["CaptureFileWatcher"]
+    CVM --> WV["WebView tab only:<br/>sandboxed WebView2"]
+    WIN --> FA["FileAssociationService"] --> REG["IRegistryStore<br/>(HKCU\Software\Classes)"]
+```
 
 ## Documents
 
@@ -31,6 +46,7 @@ The CLI writes the report to disk for any browser. The desktop app runs the same
 |---|---|
 | [End-to-end data flow](data-flow.md) | Follow an archive entry from disk through parsing to the report |
 | [MAPI parsing](mapi-parsing.md) | Understand envelopes, ROP dispatch, capture-local state, FastTransfer, and safety budgets |
+| [Desktop app: native views](desktop-app.md) | Change a native view or view-model, the lazy loading path, shell features, or the WebView sandbox |
 | [Report runtime](report-runtime.md) | Change the generated HTML, payload envelopes, inspectors, split view, search, or copy behavior |
 | [Security model](security.md) | Review archive, password, captured-content, CSP, WebView, and Auth trust boundaries |
 | [Testing and extension guide](testing-and-extension.md) | Find the right tests or add a parser, ROP, inspector view, or report field |
@@ -41,14 +57,22 @@ The CLI writes the report to disk for any browser. The desktop app runs the same
 |---|---|
 | `SazViewer.Cli\Program.cs` | Minimal process entry point that delegates to `CliApplication`. |
 | `SazViewer.Cli\CliApplication.cs` | CLI parsing, help/errors/exit codes, secure interactive or redirected password input, parsing, and report writing. |
-| `SazViewer.App\App.xaml.cs` / `AppArguments.cs` | Desktop entry point and `[--] [capture.saz]` / `--help` argument parsing. |
-| `SazViewer.App\MainWindow.xaml.cs` | File menu (Open, Open Recent, Export, Export scrubbed), drag-and-drop, background parse with busy state, title/status, and popup window tracking. |
-| `SazViewer.App\ReportBuilder.cs` | CLI-equivalent parse → optional `AuthScrubber` → `HtmlReportGenerator` pipeline, UTF-8 (no BOM) export, and failure wording. |
-| `SazViewer.App\SecureReportSession.cs` | Shared per-user WebView2 environment and all WebView2 lockdown: in-memory report serving, request/navigation/new-window/download/permission/context-menu policy. |
-| `SazViewer.App\ReportWebViewPolicy.cs` | Pure URI, frame, dropped-file, and context-menu allowlist decisions used by `SecureReportSession`. |
+| `SazViewer.App\App.xaml.cs` / `AppArguments.cs` | Desktop entry point, `[--] [capture.saz ...]` / `--help` parsing, and the single-instance start-up decision (primary, forwarded, or standalone). |
+| `SazViewer.App\MainWindow.xaml.cs` | Tab strip host: File menu (Open, Open Recent, Close tab, View scrubbed, Export, Export scrubbed), Tools menu (register/unregister), drag-and-drop, keyboard shortcuts, serialized background parse/reload/export with busy state, and title/status. |
+| `SazViewer.App\CaptureTab.cs` / `CaptureTabView.xaml` | One open capture: tab header, in-memory `ReportDocument`, its `CaptureViewModel`, pop-out inspector windows, file watcher, and the inline changed/deleted/reload-failed notice. `Dispose` releases all of them. |
+| `SazViewer.App\CaptureTabCollection.cs` | UI-free ordered tab list: path de-duplication, active tab, cycling, and the next tab to activate on close. |
+| `SazViewer.App\SingleInstanceService.cs` / `SingleInstanceProtocol.cs` | Per-user `Local\` mutex plus a current-user-ACL named pipe, and the versioned length-prefixed request format. |
+| `SazViewer.App\ForwardedPathValidator.cs` | Resolves arguments to full paths and accepts only existing, normalized, fully qualified `.saz` paths up to 2,048 characters. |
+| `SazViewer.App\FileAssociationService.cs` / `RegistryStore.cs` | Per-user `.saz` Open-with registration through the `IRegistryStore` abstraction (HKCU implementation plus a test fake), stale-path detection, and `SHChangeNotify`. |
+| `SazViewer.App\CaptureFileWatcher.cs` | `FileSystemWatcher` wrapper, `Debouncer` (`TimeProvider`-based), `FileFingerprint`, and `FileChangeTracker`, which decides whether to show a notice. |
+| `SazViewer.App\ReportBuilder.cs` | CLI-equivalent parse → optional `AuthScrubber` pipeline, `ReportDocument` (model plus HTML generated on first Export), UTF-8 (no BOM) export, and failure wording. |
+| `SazViewer.App\Model\*` | UI-free ports of the report's payload and helpers: `SessionRow`, `MessageContent`, `StructuredData`, `ImageSafety`, `WebPreviewPolicy`. |
+| `SazViewer.App\ViewModels\*` / `Views\*` | One small view-model and view per native view; see the [view-model map](desktop-app.md#view-model-map). |
+| `SazViewer.App\Themes\*` / `UiPreferences.cs` | Light/dark/high-contrast palettes, `ThemeManager`, and persisted theme, layout and banner preferences. |
+| `SazViewer.App\WebPreviewSession.cs` / `WebViewEnvironment.cs` | Applies the WebView tab's sandbox policy to one WebView2; the shared per-user WebView2 environment. |
+| `SazViewer.App\InspectorWindow.xaml.cs` | Pop-out window for **Open in new window**. |
 | `SazViewer.App\PasswordDialog.xaml.cs` | Modal masked password dialog and the three-attempt `ISazPasswordProvider` adapter. |
 | `SazViewer.App\RecentFilesStore.cs` / `AppPaths.cs` | Per-user `%LOCALAPPDATA%\SazViewer` paths and the bounded, path-only `recent.json` list. |
-| `SazViewer.App\ReportPopupWindow.xaml.cs` | App-controlled window for the report's **Open in new tab** inspector. |
 | `SazViewer.Core\Models.cs` | Public report, HTTP, retained-body, WebSocket message, and frame models. |
 | `SazViewer.Core\SazArchive.cs` / `SazArchiveFactory` | ZIP inspection, plain/encrypted reader selection, archive limits, integrity checks, and bounded entry access. |
 | `SazViewer.Core\SazPasswordProvider.cs` | Password-provider contract, password limit, and archive/password exception taxonomy. |
@@ -62,7 +86,7 @@ The CLI writes the report to disk for any browser. The desktop app runs the same
 | `SazViewer.Core\HtmlReportGenerator.cs` | Static HTML/CSS/JavaScript shell, CSP, browser-side list, inspector, tabs, search, copy, theme, popup, and split-view behavior. |
 | `SazViewer.Core\HtmlReportGenerator.Payloads.cs` | Session-list markup plus versioned compressed HTTP, MAPI, and WebSocket payload construction. |
 | `SazViewer.Tests` | Unit, integration, generator/envelope, encryption, CLI, and real Edge coverage. |
-| `SazViewer.App.Tests` | Desktop argument parsing, recent-files storage, CLI byte-for-byte export parity, WebView2 policy, and a launched-app WebView2 smoke test. |
+| `SazViewer.App.Tests` | Desktop argument parsing and forwarding validation, the single-instance protocol and real-pipe service, registry layout through a fake and a sandboxed HKCU key, watcher debounce, change tracking and real file events, tab de-duplication and lifecycle, recent-files storage, byte-for-byte CLI export parity, native view-model logic (grid, filters, trees, search, Auth, image, hex, MAPI, WebSocket, layout, theme, scrub banner), the WebView sandbox policy, and launched-app UI Automation smoke tests (including second-launch forwarding into a new tab). |
 | `docs\mapi-parity.json` | Machine-readable MAPI protocol coverage inventory. |
 
 ### MAPI files
@@ -108,6 +132,6 @@ MAPI output is a bounded immutable `MapiNode` tree. Browser code never reparses 
 1. **One bad entry does not discard the archive.** Session-local failures become warnings whenever safe continuation is possible.
 2. **Bytes are bounded before interpretation.** Archive, HTTP, WebSocket, report, tree, and search layers each enforce their own limits.
 3. **State is capture-local and transactional.** MAPI correlation is committed only after the protocol response establishes success.
-4. **Captured content is data, never application code.** The outer report uses text nodes/encoding; WebView is a separate deny-all sandbox.
+4. **Captured content is data, never application code.** The outer report uses text nodes/encoding and the desktop app uses native text controls; WebView is a separate deny-all sandbox in both.
 5. **The report is portable and offline.** CSS, JavaScript, models, and compressed payloads are embedded; no network dependency exists.
-6. **Expensive views are lazy.** The list metadata is immediately available, while per-session envelopes, trees, images, and frames hydrate only when selected.
+6. **Expensive views are lazy.** The list metadata is immediately available, while per-session envelopes (report) or view-models (desktop), trees, images, and frames hydrate only when selected.

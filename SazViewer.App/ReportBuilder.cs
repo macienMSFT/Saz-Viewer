@@ -3,34 +3,70 @@ using SazViewer.Core;
 
 namespace SazViewer.App;
 
-/// <summary>A generated report held in memory for display and export.</summary>
+/// <summary>
+/// A parsed capture held in memory. Native views read <see cref="Report"/> directly; the HTML report is
+/// generated only when first needed (Export HTML).
+/// </summary>
 internal sealed class ReportDocument
 {
-    public ReportDocument(string sourcePath, string html, SazReport report)
+    private readonly Lazy<string> html;
+    private readonly Lazy<byte[]> utf8;
+
+    public ReportDocument(string sourcePath, SazReport report)
     {
         SourcePath = sourcePath;
-        Html = html;
-        Utf8 = ReportBuilder.Encoding.GetBytes(html);
+        Report = report;
+        html = new Lazy<string>(() =>
+        {
+            SazParser.CompleteDeferred(report);
+            return new HtmlReportGenerator().Generate(report);
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
+        utf8 = new Lazy<byte[]>(() => ReportBuilder.Encoding.GetBytes(html.Value), LazyThreadSafetyMode.ExecutionAndPublication);
         SessionCount = report.Sessions.Count;
         WebSocketMessageCount = report.WebSocketMessages.Count;
-        WarningCount = report.Warnings.Count;
         ScrubbedValueCount = report.AuthScrub?.Total;
     }
+
+    /// <summary>
+    /// Starts (once) background decoding of the bodies not yet viewed; when it completes, <see cref="WarningCount"/>
+    /// includes the per-session warnings. Views decode the bodies they need on demand regardless. Callers start it
+    /// after the first render, with half the cores, so it doesn't compete with opening the capture.
+    /// </summary>
+    public Task StartDeferredWork()
+    {
+        lock (html)
+        {
+            return deferredWork ??= Report.HasDeferredWork
+                ? Task.Run(() => SazParser.CompleteDeferred(Report, Math.Max(1, Environment.ProcessorCount / 2)))
+                : Task.CompletedTask;
+        }
+    }
+
+    private Task? deferredWork;
 
     public string SourcePath { get; }
 
     public string FileName => Path.GetFileName(SourcePath);
 
-    public string Html { get; }
+    /// <summary>The parsed (and, for scrubbed documents, scrubbed) model. Treat as read-only.</summary>
+    public SazReport Report { get; }
 
-    /// <summary>The exact bytes the CLI would write (UTF-8 without BOM); served to WebView2.</summary>
-    public byte[] Utf8 { get; }
+    public bool IsScrubbed => Report.AuthScrub is not null;
+
+    /// <summary>The report HTML exactly as the CLI generates it (generated on first access).</summary>
+    public string Html => html.Value;
+
+    /// <summary>The exact bytes the CLI would write (UTF-8 without BOM).</summary>
+    public byte[] Utf8 => utf8.Value;
+
+    public bool IsHtmlGenerated => html.IsValueCreated;
 
     public int SessionCount { get; }
 
     public int WebSocketMessageCount { get; }
 
-    public int WarningCount { get; }
+    /// <summary>The report warning count, or null while deferred body decoding is still running.</summary>
+    public int? WarningCount => Report.HasDeferredWork ? null : Report.Warnings.Count;
 
     public int? ScrubbedValueCount { get; }
 }
@@ -48,13 +84,17 @@ internal static class ReportBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(capturePath);
         ArgumentNullException.ThrowIfNull(passwordProvider);
         var inputPath = Path.GetFullPath(capturePath);
-        var report = new SazParser().Parse(inputPath, passwordProvider);
+        // Bodies are decoded on demand so the session list is available quickly; the completed report is identical
+        // to the CLI's eager parse (ReportDocument.Html completes it before generating).
+        StartupTrace.Mark("parse-start");
+        var report = new SazParser { DeferBodyDecoding = true }.Parse(inputPath, passwordProvider);
+        StartupTrace.Mark("parse-end");
         if (scrubAuth)
         {
+            SazParser.CompleteDeferred(report);
             AuthScrubber.Scrub(report);
         }
-        var html = new HtmlReportGenerator().Generate(report);
-        return new ReportDocument(inputPath, html, report);
+        return new ReportDocument(inputPath, report);
     }
 
     public static void WriteHtml(ReportDocument document, string outputPath)

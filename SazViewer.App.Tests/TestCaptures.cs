@@ -67,6 +67,23 @@ internal static class TestCaptures
         return path;
     }
 
+    /// <summary>Writes a plain capture with <paramref name="sessions"/> simple GET sessions.</summary>
+    public static string WriteSimple(string path, int sessions)
+    {
+        using var file = System.IO.File.Create(path);
+        using var archive = new ZipArchive(file, ZipArchiveMode.Create);
+        for (var i = 1; i <= sessions; i++)
+        {
+            using (var request = archive.CreateEntry($"raw/{i}_c.txt", CompressionLevel.Fastest).Open())
+            {
+                request.Write(Bytes($"GET /item/{i} HTTP/1.1\r\nHost: example.test\r\n\r\n"));
+            }
+            using var response = archive.CreateEntry($"raw/{i}_s.txt", CompressionLevel.Fastest).Open();
+            response.Write(Bytes($"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nitem {i}"));
+        }
+        return path;
+    }
+
     public static string WriteEncrypted(string path, string password = Password)
     {
         using var file = System.IO.File.Create(path);
