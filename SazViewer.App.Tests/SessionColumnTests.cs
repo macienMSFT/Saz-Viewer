@@ -219,6 +219,47 @@ public sealed class SessionColumnTests
                 Assert.Equal(333, preferences.GridColumns[0].Width);
                 Assert.Equal("URL", grid.Columns.OrderBy(column => column.DisplayIndex).First().Header);
             }
+
+            finally
+            {
+                host.Close();
+                model.Dispose();
+                StaRunner.DoEvents();
+            }
+        });
+    }
+
+    [Fact]
+    public void RightPaneKeepsFixedColumnWidthsAndUsesHorizontalOverflow()
+    {
+        var preferences = new UiPreferences(null) { SessionViewer = SessionViewerLocation.RightPane };
+        var model = new CaptureViewModel(NativeCaptures.Mixed(), new FakeClipboard(), preferences);
+
+        StaRunner.Run(() =>
+        {
+            var view = new CaptureView { DataContext = model };
+            var host = new Window { Content = view, Width = 900, Height = 700, ShowInTaskbar = false };
+            try
+            {
+                host.Show();
+                StaRunner.DoEvents();
+                var grid = (DataGrid)view.FindName("SessionGrid");
+                grid.SelectedIndex = 0;
+                StaRunner.DoEvents();
+
+                var url = Assert.Single(grid.Columns, column => Equals(column.Header, "URL"));
+                Assert.True(url.Width.IsAbsolute);
+                Assert.Equal(400, url.Width.Value);
+                var widths = grid.Columns.ToDictionary(column => column.Header?.ToString() ?? "", column => column.ActualWidth);
+
+                host.Width = 700;
+                StaRunner.DoEvents();
+
+                Assert.Equal(400, url.ActualWidth);
+                Assert.True(grid.Columns.Sum(column => column.ActualWidth) > grid.ActualWidth);
+                Assert.All(widths, pair =>
+                    Assert.Equal(pair.Value, grid.Columns.Single(column => Equals(column.Header, pair.Key)).ActualWidth, 1));
+            }
             finally
             {
                 host.Close();

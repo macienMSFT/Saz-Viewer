@@ -576,9 +576,7 @@ internal partial class CaptureView : UserControl
         {
             if (definition.Setting.Width is null)
             {
-                column.Width = definition.Id == "url"
-                    ? new DataGridLength(1, DataGridLengthUnitType.Star)
-                    : Fit(column, definition);
+                column.Width = Fit(column, definition);
             }
         }
     }

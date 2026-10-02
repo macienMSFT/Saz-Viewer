@@ -137,6 +137,7 @@
                   VirtualizingPanel.IsVirtualizing="True"
                   VirtualizingPanel.VirtualizationMode="Recycling"
                   ScrollViewer.CanContentScroll="True"
+                  ScrollViewer.HorizontalScrollBarVisibility="Auto"
                   ColumnHeaderStyle="{StaticResource GridColumnHeader}"
                   CellStyle="{StaticResource GridCell}"
                   RowStyle="{StaticResource GridRow}"

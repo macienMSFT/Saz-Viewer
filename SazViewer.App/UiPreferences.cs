@@ -71,7 +71,7 @@ internal sealed class UiPreferences
         SessionColumnSetting.BuiltIn("id"),
         SessionColumnSetting.BuiltIn("result"),
         SessionColumnSetting.BuiltIn("method"),
-        SessionColumnSetting.BuiltIn("url"),
+        SessionColumnSetting.BuiltIn("url", width: 400),
         SessionColumnSetting.BuiltIn("elapsed"),
         SessionColumnSetting.BuiltIn("request-size"),
         SessionColumnSetting.BuiltIn("response-size")
