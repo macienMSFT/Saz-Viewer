@@ -48,6 +48,11 @@
                 <Separator />
                 <MenuItem Header="E_xit" Click="OnExit" />
             </MenuItem>
+            <MenuItem Header="_View">
+                <MenuItem x:Name="ViewFilterMenuItem" Header="Advanced _filter…" InputGestureText="Ctrl+Shift+F"
+                          Click="OnAdvancedFilter" IsEnabled="False"
+                          AutomationProperties.Name="Show advanced session filter" />
+            </MenuItem>
             <MenuItem x:Name="OptionsMenu" Header="_Options" SubmenuOpened="OnOptionsMenuOpened"
                       AutomationProperties.Name="Options">
                 <MenuItem Header="_Theme" AutomationProperties.Name="Theme">
@@ -75,6 +80,8 @@
                               Click="OnViewerWindow" AutomationProperties.Name="New window" />
                 </MenuItem>
                 <MenuItem Header="_Columns…" Click="OnColumns" AutomationProperties.Name="Customize session columns" />
+                <MenuItem x:Name="OptionsFilterMenuItem" Header="Advanced _filter…" Click="OnAdvancedFilter"
+                          IsEnabled="False" AutomationProperties.Name="Show advanced session filter" />
                 <Separator />
                 <MenuItem x:Name="HideConnectOnOpenMenuItem" Header="_Hide CONNECT on open" IsCheckable="True"
                           Click="OnHideConnectOnOpen" AutomationProperties.Name="Hide CONNECT on open" />

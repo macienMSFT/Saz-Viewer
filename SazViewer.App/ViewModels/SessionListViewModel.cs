@@ -59,6 +59,7 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
     private IReadOnlySet<SessionRow> payloadMatches = new HashSet<SessionRow>();
     private string? payloadResultQuery;
     private CancellationTokenSource? payloadSearchCancellation;
+    private IReadOnlySet<SessionRow>? advancedFilterMatches;
 
     public SessionListViewModel(
         IReadOnlyList<SessionRow> rows,
@@ -81,6 +82,8 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
     }
 
     public IReadOnlyList<SessionRow> AllRows => rows;
+
+    internal PayloadSearchCache PayloadCache => payloadCache;
 
     public BulkObservableCollection<SessionRow> VisibleRows { get; }
 
@@ -229,6 +232,10 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
         {
             return false;
         }
+        if (advancedFilterMatches is not null && !advancedFilterMatches.Contains(row))
+        {
+            return false;
+        }
         var matchesFilter = filter.Key switch
         {
             "" => true,
@@ -341,6 +348,18 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
         payloadResultQuery = null;
         IsPayloadSearching = false;
         PayloadSearchStatus = "Payload search canceled.";
+        Refresh();
+    }
+
+    internal void SetAdvancedFilterMatches(IReadOnlySet<SessionRow> matches)
+    {
+        advancedFilterMatches = matches;
+        Refresh();
+    }
+
+    internal void ClearAdvancedFilter()
+    {
+        advancedFilterMatches = null;
         Refresh();
     }
 

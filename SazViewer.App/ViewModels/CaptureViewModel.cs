@@ -16,6 +16,7 @@ internal sealed class CaptureViewModel : ObservableObject, IDisposable
         Rows = BuildRows(report);
         Sessions = new SessionListViewModel(Rows, Preferences);
         Sessions.HideConnect = Preferences.HideConnectOnOpen;
+        Filters = new AdvancedFilterViewModel(Sessions, Preferences);
         Clipboard = clipboard ?? WpfClipboardService.Instance;
         Inspector = new InspectorViewModel(Sessions, Clipboard, preferences: Preferences);
         ScrubBanner = report.AuthScrub is { } scrub ? new ScrubBannerViewModel(scrub, Preferences) : null;
@@ -42,6 +43,8 @@ internal sealed class CaptureViewModel : ObservableObject, IDisposable
     public IReadOnlyList<SessionRow> Rows { get; }
 
     public SessionListViewModel Sessions { get; }
+
+    public AdvancedFilterViewModel Filters { get; }
 
     public InspectorViewModel Inspector { get; }
 
@@ -73,5 +76,9 @@ internal sealed class CaptureViewModel : ObservableObject, IDisposable
         return rows;
     }
 
-    public void Dispose() => Sessions.Dispose();
+    public void Dispose()
+    {
+        Filters.Dispose();
+        Sessions.Dispose();
+    }
 }

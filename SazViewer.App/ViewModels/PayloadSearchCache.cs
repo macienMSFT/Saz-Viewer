@@ -101,6 +101,12 @@ internal sealed class PayloadSearchCache
         return new PayloadSearchResult(matches.ToHashSet(), truncated, failed);
     }
 
+    internal string GetBodyText(SessionRow row, bool request, CancellationToken cancellationToken)
+    {
+        var payload = GetOrCreate(row, cancellationToken);
+        return request ? payload.RequestBody : payload.ResponseBody;
+    }
+
     private SearchablePayload GetOrCreate(SessionRow row, CancellationToken cancellationToken)
     {
         lock (gate)
@@ -116,7 +122,8 @@ internal sealed class PayloadSearchCache
         Interlocked.Increment(ref cacheMisses);
         var created = Extract(row, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        var size = checked((long)created.FoldedText.Length * sizeof(char) + 128);
+        var size = checked((long)(created.FoldedText.Length + created.RequestBody.Length + created.ResponseBody.Length)
+            * sizeof(char) + 128);
         lock (gate)
         {
             if (items.TryGetValue(row, out var raced))
@@ -155,9 +162,9 @@ internal sealed class PayloadSearchCache
     {
         var text = new StringBuilder();
         var truncated = false;
-        AppendMessage(row.Session.Request, text, ref truncated, cancellationToken);
+        var requestBody = AppendMessage(row.Session.Request, text, ref truncated, cancellationToken);
         BoundSessionText(text, ref truncated);
-        AppendMessage(row.Session.Response, text, ref truncated, cancellationToken);
+        var responseBody = AppendMessage(row.Session.Response, text, ref truncated, cancellationToken);
         BoundSessionText(text, ref truncated);
         foreach (var message in row.WebSocketMessages)
         {
@@ -182,7 +189,7 @@ internal sealed class PayloadSearchCache
         BoundSessionText(text, ref truncated);
         AppendMapi(row.Session.Mapi?.Response?.Root, text, ref truncated, cancellationToken);
         BoundSessionText(text, ref truncated);
-        return new SearchablePayload(SearchText.Fold(text.ToString()), truncated);
+        return new SearchablePayload(SearchText.Fold(text.ToString()), requestBody, responseBody, truncated);
     }
 
     private static void BoundSessionText(StringBuilder text, ref bool truncated)
@@ -195,7 +202,7 @@ internal sealed class PayloadSearchCache
         truncated = true;
     }
 
-    private static void AppendMessage(
+    private static string AppendMessage(
         HttpMessage? message,
         StringBuilder text,
         ref bool truncated,
@@ -203,7 +210,7 @@ internal sealed class PayloadSearchCache
     {
         if (message is null)
         {
-            return;
+            return "";
         }
         text.Append(message.StartLine).Append('\n');
         foreach (var header in message.Headers)
@@ -217,22 +224,29 @@ internal sealed class PayloadSearchCache
         {
             text.Append(body.Preview).Append('\n');
             truncated |= body.IsTruncated;
-            return;
+            return body.Preview;
         }
 
+        var bodyText = new StringBuilder();
         if (!body.IsBinary && TryDecodeDeclaredText(bytes.Span, body.Charset, body.IsTruncated, out var declared))
         {
-            text.Append(declared).Append('\n');
+            bodyText.Append(declared);
         }
         else
         {
             if (TryDecodeUtf8(bytes.Span, body.IsTruncated, out var utf8))
             {
-                text.Append(utf8).Append('\n');
+                bodyText.Append(utf8);
             }
-            text.Append(Encoding.Latin1.GetString(bytes.Span)).Append('\n');
+            if (bodyText.Length > 0)
+            {
+                bodyText.Append('\n');
+            }
+            bodyText.Append(Encoding.Latin1.GetString(bytes.Span));
         }
+        text.Append(bodyText).Append('\n');
         truncated |= body.IsTruncated || body.Length > bytes.Length;
+        return bodyText.ToString();
     }
 
     private static bool TryDecodeDeclaredText(
@@ -333,7 +347,11 @@ internal sealed class PayloadSearchCache
         }
     }
 
-    private sealed record SearchablePayload(string FoldedText, bool Truncated);
+    private sealed record SearchablePayload(
+        string FoldedText,
+        string RequestBody,
+        string ResponseBody,
+        bool Truncated);
 
     private sealed record CacheItem(
         SearchablePayload Payload,

@@ -9,6 +9,17 @@ internal sealed record SessionColumnValue(string Display, IComparable? SortValue
     public bool IsBlank => SortValue is null;
 }
 
+internal enum SessionColumnType
+{
+    Text,
+    Number,
+    Timestamp,
+    Duration,
+    Size,
+    Status,
+    Method
+}
+
 internal sealed record SessionColumnDefinition(
     SessionColumnSetting Setting,
     string Header,
@@ -19,20 +30,22 @@ internal sealed record SessionColumnDefinition(
     public string Id => Setting.Id;
 
     public bool IsCustom => Setting.Kind != SessionColumnSetting.BuiltInKind;
+
+    public SessionColumnType Type { get; init; } = Numeric ? SessionColumnType.Number : SessionColumnType.Text;
 }
 
 internal static class SessionColumnCatalog
 {
     public static readonly IReadOnlyList<SessionColumnDefinition> BuiltIns =
     [
-        Text("time", "Time", "Default", row => new(row.Time, row.Session.Timestamp)),
+        Text("time", "Time", "Default", row => new(row.Time, row.Session.Timestamp), type: SessionColumnType.Timestamp),
         Text("id", "ID", "Default", row => new(row.Id, NumericId(row.Id)), numeric: true),
-        Text("result", "Result", "Default", row => new(row.Result, row.ResultCode), numeric: true),
-        Text("method", "Method", "Default", row => Value(row.Method)),
+        Text("result", "Result", "Default", row => new(row.Result, row.ResultCode), numeric: true, type: SessionColumnType.Status),
+        Text("method", "Method", "Default", row => Value(row.Method), type: SessionColumnType.Method),
         Text("url", "URL", "Default", row => Value(row.Url)),
-        Text("elapsed", "Elapsed Time", "Default", row => Duration(row.Session.ElapsedMilliseconds), numeric: true),
-        Text("request-size", "Req", "Default", row => Bytes(row.Session.RequestBytes), numeric: true),
-        Text("response-size", "Resp", "Default", row => Bytes(row.Session.ResponseBytes), numeric: true),
+        Text("elapsed", "Elapsed Time", "Default", row => Duration(row.Session.ElapsedMilliseconds), numeric: true, type: SessionColumnType.Duration),
+        Text("request-size", "Req", "Default", row => Bytes(row.Session.RequestBytes), numeric: true, type: SessionColumnType.Size),
+        Text("response-size", "Resp", "Default", row => Bytes(row.Session.ResponseBytes), numeric: true, type: SessionColumnType.Size),
 
         Text("protocol", "Protocol", "Basics", row => Value(Protocol(row.Session))),
         Text("scheme", "Scheme", "Basics", row => UriPart(row.Session.Url, uri => uri.Scheme)),
@@ -46,9 +59,9 @@ internal static class SessionColumnCatalog
         Text("content-type", "Content-Type", "Basics", row => Value(row.Session.ContentType)),
         Text("content-encoding", "Content-Encoding", "Basics", row => Header(row.Session.Response, "Content-Encoding")),
         Text("caching", "Caching", "Basics", row => Caching(row.Session)),
-        Text("request-body-size", "Request body", "Basics", row => BodySize(row.Session.Request), numeric: true),
-        Text("response-wire-size", "Response on wire", "Basics", row => ResponseWireSize(row.Session), numeric: true),
-        Text("response-decoded-size", "Decoded response", "Basics", row => DecodedBodySize(row.Session.Response), numeric: true),
+        Text("request-body-size", "Request body", "Basics", row => BodySize(row.Session.Request), numeric: true, type: SessionColumnType.Size),
+        Text("response-wire-size", "Response on wire", "Basics", row => ResponseWireSize(row.Session), numeric: true, type: SessionColumnType.Size),
+        Text("response-decoded-size", "Decoded response", "Basics", row => DecodedBodySize(row.Session.Response), numeric: true, type: SessionColumnType.Size),
         Text("compression-ratio", "Compression ratio", "Basics", row => CompressionRatio(row.Session), numeric: true),
         Text("redirect-location", "Redirect Location", "Basics", row => Header(row.Session.Response, "Location")),
 
@@ -68,9 +81,9 @@ internal static class SessionColumnCatalog
         DurationTimer("tcp-connect-time", "TCP connect", "TCPConnectTime", "x-tcpconnecttime"),
         DurationTimer("tls-handshake-time", "TLS handshake", "HTTPSHandshakeTime", "x-httpsHandshakeTime"),
         DurationTimer("gateway-time", "Gateway time", "GatewayTime", "x-gatewaytime"),
-        Text("ttfb", "TTFB", "Timing", row => TimerDelta(row.Session, "ClientBeginRequest", "ServerBeginResponse"), numeric: true),
-        Text("server-time", "Server time", "Timing", row => TimerDelta(row.Session, "ServerGotRequest", "ServerBeginResponse"), numeric: true),
-        Text("download-time", "Download time", "Timing", row => TimerDelta(row.Session, "ServerBeginResponse", "ServerDoneResponse"), numeric: true),
+        Text("ttfb", "TTFB", "Timing", row => TimerDelta(row.Session, "ClientBeginRequest", "ServerBeginResponse"), numeric: true, type: SessionColumnType.Duration),
+        Text("server-time", "Server time", "Timing", row => TimerDelta(row.Session, "ServerGotRequest", "ServerBeginResponse"), numeric: true, type: SessionColumnType.Duration),
+        Text("download-time", "Download time", "Timing", row => TimerDelta(row.Session, "ServerBeginResponse", "ServerDoneResponse"), numeric: true, type: SessionColumnType.Duration),
 
         Text("client-endpoint", "Client IP:port", "Connection and process", row => Endpoint(row.Session.ClientEndpoint)),
         Text("server-ip", "Server IP", "Connection and process", row => Endpoint(Metadata(row.Session, "x-hostip"))),
@@ -85,7 +98,7 @@ internal static class SessionColumnCatalog
         Text("mark-background", "Mark background", "Connection and process", row => Value(Metadata(row.Session, "ui-backcolor"))),
 
         Text("websocket-count", "WebSocket messages", "Content-specific", row => Integer(row.WebSocketMessages.Count), numeric: true),
-        Text("websocket-bytes", "WebSocket bytes", "Content-specific", row => Bytes(row.WebSocketMessages.Sum(message => Math.Max(0, message.PayloadLength))), numeric: true),
+        Text("websocket-bytes", "WebSocket bytes", "Content-specific", row => Bytes(row.WebSocketMessages.Sum(message => Math.Max(0, message.PayloadLength))), numeric: true, type: SessionColumnType.Size),
         Text("mapi-request-type", "MAPI request", "Content-specific", row => Value(row.Session.Mapi?.RequestType)),
         Text("mapi-rop-summary", "MAPI ROP summary", "Content-specific", row => Value(MapiSummary(row.Session.Mapi))),
         Text("auth-scheme", "Auth scheme", "Content-specific", row => Value(AuthScheme(row.Session)))
@@ -150,15 +163,20 @@ internal static class SessionColumnCatalog
         string header,
         string category,
         Func<SessionRow, SessionColumnValue> read,
-        bool numeric = false) =>
-        new(SessionColumnSetting.BuiltIn(id), header, category, read, numeric);
+        bool numeric = false,
+        SessionColumnType type = SessionColumnType.Text) =>
+        new(SessionColumnSetting.BuiltIn(id), header, category, read, numeric)
+        {
+            Type = type == SessionColumnType.Text && numeric ? SessionColumnType.Number : type
+        };
 
     private static SessionColumnDefinition Timer(string id, string timer) =>
-        Text(id, timer, "Timing", row => Timestamp(row.Session.Timers.GetValueOrDefault(timer)));
+        Text(id, timer, "Timing", row => Timestamp(row.Session.Timers.GetValueOrDefault(timer)), type: SessionColumnType.Timestamp);
 
     private static SessionColumnDefinition DurationTimer(string id, string header, string timer, string flag) =>
         Text(id, header, "Timing", row => Duration(ParseMilliseconds(
-            row.Session.Timers.GetValueOrDefault(timer) ?? row.Session.Metadata.GetValueOrDefault(flag))), numeric: true);
+            row.Session.Timers.GetValueOrDefault(timer) ?? row.Session.Metadata.GetValueOrDefault(flag))),
+            numeric: true, type: SessionColumnType.Duration);
 
     private static SessionColumnValue Value(string? value) =>
         string.IsNullOrWhiteSpace(value) ? new("") : new(value, value);

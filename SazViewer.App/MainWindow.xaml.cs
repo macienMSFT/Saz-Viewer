@@ -270,6 +270,8 @@ public partial class MainWindow : Window, ICaptureTabHost
         ExportScrubbedMenuItem.IsEnabled = !Busy && active?.Document is not null;
         ViewScrubbedMenuItem.IsEnabled = !Busy && active?.Document is not null && !active.IsReloading;
         ViewScrubbedMenuItem.IsChecked = active?.IsScrubbed == true;
+        ViewFilterMenuItem.IsEnabled = active is not null;
+        OptionsFilterMenuItem.IsEnabled = active is not null;
         StatusText.Text = busyMessage ?? (string.IsNullOrEmpty(active?.Status) ? "Ready" : active.Status);
     }
 
@@ -487,6 +489,9 @@ public partial class MainWindow : Window, ICaptureTabHost
     private void OnColumns(object sender, RoutedEventArgs e) =>
         new ColumnChooserWindow(UiPreferences.Current) { Owner = this }.ShowDialog();
 
+    private void OnAdvancedFilter(object sender, RoutedEventArgs e) =>
+        tabs.Active?.NativeView?.ShowAdvancedFilter();
+
     private void OnHideConnectOnOpen(object sender, RoutedEventArgs e)
     {
         UiPreferences.Current.HideConnectOnOpen = HideConnectOnOpenMenuItem.IsChecked;
@@ -546,6 +551,10 @@ public partial class MainWindow : Window, ICaptureTabHost
                 {
                     CloseTab(active);
                 }
+                e.Handled = true;
+                break;
+            case Key.F when shift:
+                tabs.Active?.NativeView?.ShowAdvancedFilter();
                 e.Handled = true;
                 break;
         }
