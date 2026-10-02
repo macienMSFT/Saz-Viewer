@@ -1,5 +1,7 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using SazViewer.App.Themes;
 using SazViewer.App.ViewModels;
 using SazViewer.App.Views;
@@ -20,6 +22,9 @@ public sealed class ShellFeatureTests
         Assert.Null(preferences.Theme);
         Assert.Equal(InspectorLayoutMode.Automatic, preferences.DefaultInspectorLayout);
         Assert.Equal(SessionViewerLocation.BottomPane, preferences.SessionViewer);
+        Assert.Equal(.40, preferences.BottomPaneGridFraction);
+        Assert.Equal(.45, preferences.RightPaneGridFraction);
+        Assert.Equal(.50, preferences.RightPaneHttpSplitFraction);
         Assert.False(preferences.HideConnectOnOpen);
         Assert.False(preferences.ScrubBannerExpanded);
         Assert.Equal(LayoutWidthClass.Narrow, UiPreferences.WidthClassFor(899.5));
@@ -36,7 +41,10 @@ public sealed class ShellFeatureTests
         first.Theme = "dark";
         first.ScrubBannerExpanded = true;
         first.DefaultInspectorLayout = InspectorLayoutMode.AlwaysSingle;
-        first.SessionViewer = SessionViewerLocation.NewWindow;
+        first.SessionViewer = SessionViewerLocation.RightPane;
+        first.BottomPaneGridFraction = .35;
+        first.RightPaneGridFraction = .55;
+        first.RightPaneHttpSplitFraction = .60;
         first.HideConnectOnOpen = true;
 
         var reloaded = new UiPreferences(path);
@@ -46,10 +54,15 @@ public sealed class ShellFeatureTests
         Assert.Equal("dark", reloaded.Theme);
         Assert.True(reloaded.ScrubBannerExpanded);
         Assert.Equal(InspectorLayoutMode.AlwaysSingle, reloaded.DefaultInspectorLayout);
-        Assert.Equal(SessionViewerLocation.NewWindow, reloaded.SessionViewer);
+        Assert.Equal(SessionViewerLocation.RightPane, reloaded.SessionViewer);
+        Assert.Equal(.35, reloaded.BottomPaneGridFraction);
+        Assert.Equal(.55, reloaded.RightPaneGridFraction);
+        Assert.Equal(.60, reloaded.RightPaneHttpSplitFraction);
         Assert.True(reloaded.HideConnectOnOpen);
         Assert.False(File.Exists(path + ".tmp"));
 
+        reloaded.SessionViewer = SessionViewerLocation.NewWindow;
+        Assert.Equal(SessionViewerLocation.NewWindow, new UiPreferences(path).SessionViewer);
         reloaded.Theme = "system";
         Assert.Null(new UiPreferences(path).Theme);
     }
@@ -347,6 +360,104 @@ public sealed class ShellFeatureTests
                 Assert.False(splitter.IsVisible);
                 Assert.Equal(0, Grid.GetColumn(response));
                 Assert.Equal(2, Grid.GetRow(response));
+            }
+            finally
+            {
+                window.Close();
+                StaRunner.DoEvents();
+            }
+        });
+    }
+
+    [Fact]
+    public void RightPaneSwitchesOuterSplitterAndUsesRememberedStackedHttpSplit()
+    {
+        using var temp = new TempDirectory();
+        var document = ReportBuilder.Build(TestCaptures.WritePlain(temp.File("right-pane.saz")), false, new QueuePasswordProvider());
+        var preferences = new UiPreferences(null) { SessionViewer = SessionViewerLocation.RightPane };
+        StaRunner.Run(() =>
+        {
+            var model = new CaptureViewModel(document.Report, new FakeClipboard(), preferences);
+            var view = new CaptureView { DataContext = model };
+            var window = NativeViewSmokeTests.Host(view);
+            try
+            {
+                model.Inspector.Load(model.Sessions.VisibleRows[0]);
+                StaRunner.DoEvents();
+
+                var grid = (DataGrid)view.FindName("SessionGrid");
+                var host = (Border)view.FindName("InspectorHost");
+                var outerSplitter = (GridSplitter)view.FindName("InspectorSplitter");
+                var gridColumn = (ColumnDefinition)view.FindName("GridColumnDefinition");
+                var inspectorColumn = (ColumnDefinition)view.FindName("InspectorColumnDefinition");
+                var inspector = Assert.IsType<InspectorView>(view.Inspector);
+                var innerSplitter = (GridSplitter)inspector.FindName("PaneSplitter");
+                var response = (FrameworkElement)inspector.FindName("ResponseSplitPane");
+                var requestRow = (RowDefinition)inspector.FindName("SplitFirstRow");
+                var responseRow = (RowDefinition)inspector.FindName("SplitSecondRow");
+
+                Assert.True(host.IsVisible);
+                Assert.Equal(2, Grid.GetColumn(host));
+                Assert.Equal(1, Grid.GetColumnSpan(grid));
+                Assert.Equal(GridResizeDirection.Columns, outerSplitter.ResizeDirection);
+                Assert.Equal("Resize session grid and right inspector", AutomationProperties.GetName(outerSplitter));
+                Assert.True(inspector.IsRightPane);
+                Assert.Equal(GridResizeDirection.Rows, innerSplitter.ResizeDirection);
+                Assert.True(innerSplitter.IsVisible);
+                Assert.Equal(2, Grid.GetRow(response));
+                Assert.Equal(0, Grid.GetColumn(response));
+                Assert.Equal(3, Grid.GetColumnSpan(response));
+                Assert.InRange(requestRow.ActualHeight / (requestRow.ActualHeight + responseRow.ActualHeight), .48, .52);
+
+                model.Inspector.ToggleLayoutCommand.Execute(null);
+                StaRunner.DoEvents();
+                Assert.True(model.Inspector.IsSingle);
+                model.Inspector.ToggleLayoutCommand.Execute(null);
+                StaRunner.DoEvents();
+                Assert.True(model.Inspector.IsSplit);
+                Assert.Equal(2, Grid.GetRow(response));
+
+                gridColumn.Width = new GridLength(2, GridUnitType.Star);
+                inspectorColumn.Width = new GridLength(1, GridUnitType.Star);
+                view.UpdateLayout();
+                outerSplitter.RaiseEvent(new DragCompletedEventArgs(0, 0, false)
+                {
+                    RoutedEvent = Thumb.DragCompletedEvent
+                });
+                Assert.InRange(preferences.RightPaneGridFraction, .60, .70);
+
+                requestRow.Height = new GridLength(3, GridUnitType.Star);
+                responseRow.Height = new GridLength(2, GridUnitType.Star);
+                inspector.UpdateLayout();
+                innerSplitter.RaiseEvent(new DragCompletedEventArgs(0, 0, false)
+                {
+                    RoutedEvent = Thumb.DragCompletedEvent
+                });
+                Assert.InRange(preferences.RightPaneHttpSplitFraction, .55, .65);
+
+                preferences.SessionViewer = SessionViewerLocation.BottomPane;
+                model.ApplyPreferences();
+                StaRunner.DoEvents();
+                Assert.Equal(GridResizeDirection.Rows, outerSplitter.ResizeDirection);
+                Assert.Equal(3, Grid.GetRow(host));
+                Assert.False(inspector.IsRightPane);
+                Assert.Equal(GridResizeDirection.Columns, innerSplitter.ResizeDirection);
+                Assert.Equal(2, Grid.GetColumn(response));
+                var gridRow = (RowDefinition)view.FindName("GridRowDefinition");
+                var inspectorRow = (RowDefinition)view.FindName("InspectorRowDefinition");
+                gridRow.Height = new GridLength(1, GridUnitType.Star);
+                inspectorRow.Height = new GridLength(2, GridUnitType.Star);
+                view.UpdateLayout();
+                outerSplitter.RaiseEvent(new DragCompletedEventArgs(0, 0, false)
+                {
+                    RoutedEvent = Thumb.DragCompletedEvent
+                });
+                Assert.InRange(preferences.BottomPaneGridFraction, .30, .37);
+
+                preferences.SessionViewer = SessionViewerLocation.RightPane;
+                model.ApplyPreferences();
+                StaRunner.DoEvents();
+                Assert.InRange(requestRow.ActualHeight / (requestRow.ActualHeight + responseRow.ActualHeight), .55, .65);
             }
             finally
             {

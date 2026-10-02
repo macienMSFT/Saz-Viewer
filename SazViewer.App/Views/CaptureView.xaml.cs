@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using SazViewer.App.Model;
@@ -10,11 +12,17 @@ using SazViewer.App.ViewModels;
 namespace SazViewer.App.Views;
 
 /// <summary>
-/// Native view of one capture: the session grid with its toolbar and, below a splitter, the inspector.
+/// Native view of one capture: the session grid with its toolbar and an optional bottom/right inspector.
 /// </summary>
 internal partial class CaptureView : UserControl
 {
+    internal const double MinimumGridWidth = 280;
+    internal const double MinimumInspectorWidth = 320;
+    internal const double MinimumGridHeight = 120;
+    internal const double MinimumInspectorHeight = 160;
+
     private CaptureViewModel? model;
+    private SessionViewerLocation? appliedLocation;
 
     public CaptureView()
     {
@@ -29,7 +37,11 @@ internal partial class CaptureView : UserControl
     {
         if (Inspector is null)
         {
-            Inspector = new InspectorView { DataContext = model?.Inspector };
+            Inspector = new InspectorView
+            {
+                DataContext = model?.Inspector,
+                IsRightPane = model?.SessionViewerLocation == SessionViewerLocation.RightPane
+            };
             Inspector.FocusGridRequested += (_, _) => FocusSelectedRow();
             InspectorHost.Child = Inspector;
         }
@@ -90,25 +102,155 @@ internal partial class CaptureView : UserControl
 
     private void UpdateInspectorLayout()
     {
-        var open = model is { Inspector.IsOpen: true, SessionViewerLocation: SessionViewerLocation.BottomPane };
-        if (open == (InspectorHost.Visibility == Visibility.Visible))
+        var location = model?.SessionViewerLocation ?? SessionViewerLocation.BottomPane;
+        if (appliedLocation is { } previous && previous != location && InspectorHost.IsVisible)
         {
-            return;
+            RememberSplitter(previous);
         }
+        appliedLocation = location;
+        var open = model is { Inspector.IsOpen: true } && location != SessionViewerLocation.NewWindow;
         if (open)
         {
-            EnsureInspector().DataContext = model?.Inspector;
+            var inspector = EnsureInspector();
+            inspector.IsRightPane = location == SessionViewerLocation.RightPane;
+            inspector.DataContext = model?.Inspector;
         }
-        else if (model?.SessionViewerLocation == SessionViewerLocation.NewWindow && Inspector is not null)
+        else if (location == SessionViewerLocation.NewWindow && Inspector is not null)
         {
+            Inspector.IsRightPane = false;
             Inspector.DataContext = null;
         }
         InspectorHost.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
         InspectorSplitter.Visibility = InspectorHost.Visibility;
-        GridRowDefinition.Height = new GridLength(open ? 2 : 1, GridUnitType.Star);
-        SplitterRowDefinition.Height = open ? GridLength.Auto : new GridLength(0);
-        InspectorRowDefinition.Height = open ? new GridLength(3, GridUnitType.Star) : new GridLength(0);
-        InspectorRowDefinition.MinHeight = open ? 160 : 0;
+        if (!open)
+        {
+            ShowGridOnly();
+        }
+        else if (location == SessionViewerLocation.RightPane)
+        {
+            ShowRightPane();
+        }
+        else
+        {
+            ShowBottomPane();
+        }
+    }
+
+    private void ShowGridOnly()
+    {
+        Grid.SetRow(SessionGrid, 1);
+        Grid.SetRowSpan(SessionGrid, 3);
+        Grid.SetColumn(SessionGrid, 0);
+        Grid.SetColumnSpan(SessionGrid, 3);
+        GridRowDefinition.Height = new GridLength(1, GridUnitType.Star);
+        GridRowDefinition.MinHeight = 80;
+        SplitterRowDefinition.Height = new GridLength(0);
+        InspectorRowDefinition.Height = new GridLength(0);
+        InspectorRowDefinition.MinHeight = 0;
+        GridColumnDefinition.Width = new GridLength(1, GridUnitType.Star);
+        GridColumnDefinition.MinWidth = 80;
+        SplitterColumnDefinition.Width = new GridLength(0);
+        InspectorColumnDefinition.Width = new GridLength(0);
+        InspectorColumnDefinition.MinWidth = 0;
+    }
+
+    private void ShowBottomPane()
+    {
+        var fraction = model?.Preferences.BottomPaneGridFraction ?? .40;
+        Grid.SetRow(SessionGrid, 1);
+        Grid.SetRowSpan(SessionGrid, 1);
+        Grid.SetColumn(SessionGrid, 0);
+        Grid.SetColumnSpan(SessionGrid, 3);
+        Grid.SetRow(InspectorSplitter, 2);
+        Grid.SetRowSpan(InspectorSplitter, 1);
+        Grid.SetColumn(InspectorSplitter, 0);
+        Grid.SetColumnSpan(InspectorSplitter, 3);
+        Grid.SetRow(InspectorHost, 3);
+        Grid.SetRowSpan(InspectorHost, 1);
+        Grid.SetColumn(InspectorHost, 0);
+        Grid.SetColumnSpan(InspectorHost, 3);
+        GridRowDefinition.Height = new GridLength(fraction, GridUnitType.Star);
+        GridRowDefinition.MinHeight = MinimumGridHeight;
+        SplitterRowDefinition.Height = GridLength.Auto;
+        InspectorRowDefinition.Height = new GridLength(1 - fraction, GridUnitType.Star);
+        InspectorRowDefinition.MinHeight = MinimumInspectorHeight;
+        GridColumnDefinition.Width = new GridLength(1, GridUnitType.Star);
+        GridColumnDefinition.MinWidth = 80;
+        SplitterColumnDefinition.Width = new GridLength(0);
+        InspectorColumnDefinition.Width = new GridLength(0);
+        InspectorColumnDefinition.MinWidth = 0;
+        InspectorSplitter.Width = double.NaN;
+        InspectorSplitter.Height = 5;
+        InspectorSplitter.ResizeDirection = GridResizeDirection.Rows;
+        AutomationProperties.SetName(InspectorSplitter, "Resize session grid and bottom inspector");
+        InspectorHost.BorderThickness = new Thickness(0, 1, 0, 0);
+    }
+
+    private void ShowRightPane()
+    {
+        var fraction = model?.Preferences.RightPaneGridFraction ?? .45;
+        Grid.SetRow(SessionGrid, 1);
+        Grid.SetRowSpan(SessionGrid, 3);
+        Grid.SetColumn(SessionGrid, 0);
+        Grid.SetColumnSpan(SessionGrid, 1);
+        Grid.SetRow(InspectorSplitter, 1);
+        Grid.SetRowSpan(InspectorSplitter, 3);
+        Grid.SetColumn(InspectorSplitter, 1);
+        Grid.SetColumnSpan(InspectorSplitter, 1);
+        Grid.SetRow(InspectorHost, 1);
+        Grid.SetRowSpan(InspectorHost, 3);
+        Grid.SetColumn(InspectorHost, 2);
+        Grid.SetColumnSpan(InspectorHost, 1);
+        GridRowDefinition.Height = new GridLength(1, GridUnitType.Star);
+        GridRowDefinition.MinHeight = 80;
+        SplitterRowDefinition.Height = new GridLength(0);
+        InspectorRowDefinition.Height = new GridLength(0);
+        InspectorRowDefinition.MinHeight = 0;
+        GridColumnDefinition.Width = new GridLength(fraction, GridUnitType.Star);
+        GridColumnDefinition.MinWidth = MinimumGridWidth;
+        SplitterColumnDefinition.Width = GridLength.Auto;
+        InspectorColumnDefinition.Width = new GridLength(1 - fraction, GridUnitType.Star);
+        InspectorColumnDefinition.MinWidth = MinimumInspectorWidth;
+        InspectorSplitter.Width = 5;
+        InspectorSplitter.Height = double.NaN;
+        InspectorSplitter.ResizeDirection = GridResizeDirection.Columns;
+        AutomationProperties.SetName(InspectorSplitter, "Resize session grid and right inspector");
+        InspectorHost.BorderThickness = new Thickness(1, 0, 0, 0);
+    }
+
+    private void OnInspectorSplitterDragCompleted(object sender, DragCompletedEventArgs e) =>
+        RememberSplitter(appliedLocation);
+
+    private void OnInspectorSplitterKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End)
+        {
+            RememberSplitter(appliedLocation);
+        }
+    }
+
+    private void RememberSplitter(SessionViewerLocation? location)
+    {
+        if (model is null)
+        {
+            return;
+        }
+        if (location == SessionViewerLocation.BottomPane)
+        {
+            var total = GridRowDefinition.ActualHeight + InspectorRowDefinition.ActualHeight;
+            if (total > 0)
+            {
+                model.Preferences.BottomPaneGridFraction = GridRowDefinition.ActualHeight / total;
+            }
+        }
+        else if (location == SessionViewerLocation.RightPane)
+        {
+            var total = GridColumnDefinition.ActualWidth + InspectorColumnDefinition.ActualWidth;
+            if (total > 0)
+            {
+                model.Preferences.RightPaneGridFraction = GridColumnDefinition.ActualWidth / total;
+            }
+        }
     }
 
     private void OnSorting(object sender, DataGridSortingEventArgs e)
@@ -179,7 +321,7 @@ internal partial class CaptureView : UserControl
         {
             model.Inspector.Load(row);
         }
-        if (focus && model.SessionViewerLocation == SessionViewerLocation.BottomPane)
+        if (focus && model.SessionViewerLocation != SessionViewerLocation.NewWindow)
         {
             Dispatcher.BeginInvoke(EnsureInspector().FocusContent, System.Windows.Threading.DispatcherPriority.Input);
         }

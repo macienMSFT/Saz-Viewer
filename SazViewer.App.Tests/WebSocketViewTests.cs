@@ -268,6 +268,18 @@ public sealed class WebSocketViewTests
                 var splitter = Descendants(view).OfType<GridSplitter>().Single();
                 Assert.Equal(Visibility.Visible, splitter.Visibility);
                 Assert.Equal("Resize WebSocket traffic and payload panes", System.Windows.Automation.AutomationProperties.GetName(splitter));
+                var detailPane = (FrameworkElement)view.FindName("DetailPane");
+
+                view.ForceStacked = true;
+                StaRunner.DoEvents();
+                Assert.True(view.IsNarrow);
+                Assert.Equal(Visibility.Collapsed, splitter.Visibility);
+                Assert.Equal(2, Grid.GetRow(detailPane));
+
+                view.ForceStacked = false;
+                StaRunner.DoEvents();
+                Assert.False(view.IsNarrow);
+                Assert.Equal(Visibility.Visible, splitter.Visibility);
 
                 grid.SelectedItem = model.Items[2];
                 StaRunner.DoEvents();
@@ -279,6 +291,44 @@ public sealed class WebSocketViewTests
                 StaRunner.DoEvents();
                 Assert.True(view.IsNarrow);
                 Assert.Equal(Visibility.Collapsed, splitter.Visibility);
+            }
+            finally
+            {
+                window.Close();
+                StaRunner.DoEvents();
+            }
+        });
+    }
+
+    [Fact]
+    public void CaptureRightPaneForcesWebSocketListAboveDetail()
+    {
+        var preferences = new UiPreferences(null) { SessionViewer = SessionViewerLocation.RightPane };
+        StaRunner.Run(() =>
+        {
+            var model = new CaptureViewModel(Report(), new FakeClipboard(), preferences);
+            var capture = new CaptureView { DataContext = model };
+            var window = NativeViewSmokeTests.Host(capture);
+            try
+            {
+                model.Inspector.Load(model.Sessions.VisibleRows.Single(row => row.IsWebSocket));
+                StaRunner.DoEvents();
+                var inspector = Assert.IsType<InspectorView>(capture.Inspector);
+                var webSocket = (WebSocketInspectorView)inspector.FindName("WebSocketView");
+                var splitter = (GridSplitter)webSocket.FindName("Splitter");
+                var detail = (FrameworkElement)webSocket.FindName("DetailPane");
+
+                Assert.True(webSocket.ForceStacked);
+                Assert.True(webSocket.IsNarrow);
+                Assert.Equal(Visibility.Collapsed, splitter.Visibility);
+                Assert.Equal(2, Grid.GetRow(detail));
+
+                preferences.SessionViewer = SessionViewerLocation.BottomPane;
+                model.ApplyPreferences();
+                StaRunner.DoEvents();
+                Assert.False(webSocket.ForceStacked);
+                Assert.False(webSocket.IsNarrow);
+                Assert.Equal(Visibility.Visible, splitter.Visibility);
             }
             finally
             {

@@ -10,14 +10,15 @@ using SazViewer.App.ViewModels;
 namespace SazViewer.App.Views;
 
 /// <summary>
-/// WebSocket inspector: resizable traffic / detail panes (stacked below 900 px like the report), the
-/// content-fit message list and the payload filter (Enter / Shift+Enter select the next / previous match).
+/// WebSocket inspector: resizable traffic / detail panes (stacked below 900 px or whenever hosted in the
+/// right pane), the content-fit message list and the payload filter (Enter / Shift+Enter select matches).
 /// </summary>
 internal partial class WebSocketInspectorView : UserControl
 {
     public const double NarrowWidth = 900;
 
     private bool? narrow;
+    private bool forceStacked;
 
     public WebSocketInspectorView()
     {
@@ -38,6 +39,20 @@ internal partial class WebSocketInspectorView : UserControl
     }
 
     public bool IsNarrow => narrow == true;
+
+    internal bool ForceStacked
+    {
+        get => forceStacked;
+        set
+        {
+            if (forceStacked == value)
+            {
+                return;
+            }
+            forceStacked = value;
+            ApplyLayout(forceStacked || ActualWidth < NarrowWidth);
+        }
+    }
 
     public void FocusSearch()
     {
@@ -88,7 +103,8 @@ internal partial class WebSocketInspectorView : UserControl
         }
     }
 
-    private void OnSizeChanged(object sender, SizeChangedEventArgs e) => ApplyLayout(e.NewSize.Width < NarrowWidth);
+    private void OnSizeChanged(object sender, SizeChangedEventArgs e) =>
+        ApplyLayout(ForceStacked || e.NewSize.Width < NarrowWidth);
 
     /// <summary>Side by side with a splitter on wide layouts; stacked (traffic above detail) on narrow ones.</summary>
     private void ApplyLayout(bool isNarrow)

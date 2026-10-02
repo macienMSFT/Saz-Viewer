@@ -19,6 +19,11 @@
     </UserControl.Resources>
 
     <Grid x:Name="Layout">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="GridColumnDefinition" Width="*" MinWidth="80" />
+            <ColumnDefinition x:Name="SplitterColumnDefinition" Width="0" />
+            <ColumnDefinition x:Name="InspectorColumnDefinition" Width="0" />
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition x:Name="GridRowDefinition" Height="*" MinHeight="80" />
@@ -26,7 +31,7 @@
             <RowDefinition x:Name="InspectorRowDefinition" Height="0" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0">
+        <StackPanel Grid.Row="0" Grid.ColumnSpan="3">
         <!-- Toolbar: search, filter, Hide CONNECT, count, theme. -->
         <Border Background="{DynamicResource Saz.Panel}" BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,0,0,1" Padding="10,8">
             <DockPanel DataContext="{Binding Sessions}">
@@ -151,7 +156,9 @@
 
         <GridSplitter x:Name="InspectorSplitter" Grid.Row="2" Height="5" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                       ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" Visibility="Collapsed"
-                      AutomationProperties.Name="Resize session grid and inspector" />
+                      Focusable="True" KeyboardIncrement="12"
+                      AutomationProperties.Name="Resize session grid and inspector"
+                      DragCompleted="OnInspectorSplitterDragCompleted" KeyUp="OnInspectorSplitterKeyUp" />
 
         <Border Grid.Row="3" x:Name="InspectorHost" Visibility="Collapsed" BorderBrush="{DynamicResource Saz.Line}" BorderThickness="0,1,0,0">
         </Border>

@@ -148,6 +148,8 @@ public sealed class AppSmokeTests
             "\"SessionViewer\": \"window\"", verification: OptionUiVerification.NewWindow);
         await VerifyOptionAsync(temp.Path, "viewer-bottom", capturePath, """{"Version":2,"SessionViewer":"window"}""",
             "Open session viewer in", "Bottom pane", "\"SessionViewer\": \"bottom\"", verification: OptionUiVerification.BottomPane);
+        await VerifyOptionAsync(temp.Path, "viewer-right", capturePath, null, "Open session viewer in", "Right pane",
+            "\"SessionViewer\": \"right\"", verification: OptionUiVerification.RightPane);
         await VerifyOptionAsync(temp.Path, "hide-connect", capturePath, null, null, "Hide CONNECT on open",
             "\"HideConnectOnOpen\": true");
         await VerifyOptionAsync(temp.Path, "show-connect", capturePath, """{"Version":2,"HideConnectOnOpen":true}""",
@@ -207,6 +209,15 @@ public sealed class AppSmokeTests
                 await WaitForAsync(() => ProcessWindows(process).Count == 1 ? window : null, "bottom pane mode");
                 await WaitForAsync(() => Find(window, "Close inspector", ControlType.Button), "bottom inspector");
             }
+            else if (verification == OptionUiVerification.RightPane)
+            {
+                await SelectFirstRowAsync(window);
+                await WaitForAsync(() => Find(window, "Close inspector", ControlType.Button), "right inspector");
+                await WaitForAsync(
+                    () => Find(window, "Resize session grid and right inspector", ControlType.Thumb),
+                    "right pane splitter");
+                Assert.Single(ProcessWindows(process));
+            }
         }
         finally
         {
@@ -226,7 +237,8 @@ public sealed class AppSmokeTests
     {
         None,
         NewWindow,
-        BottomPane
+        BottomPane,
+        RightPane
     }
 
     private static async Task InvokeOptionAsync(Process process, string? groupName, string optionName)

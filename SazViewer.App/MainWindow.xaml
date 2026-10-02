@@ -69,6 +69,8 @@
                 <MenuItem Header="_Open session viewer in" AutomationProperties.Name="Open session viewer in">
                     <MenuItem x:Name="ViewerBottomMenuItem" Header="_Bottom pane" IsCheckable="True"
                               Click="OnViewerBottom" AutomationProperties.Name="Bottom pane" />
+                    <MenuItem x:Name="ViewerRightMenuItem" Header="_Right pane" IsCheckable="True"
+                              Click="OnViewerRight" AutomationProperties.Name="Right pane" />
                     <MenuItem x:Name="ViewerWindowMenuItem" Header="_New window" IsCheckable="True"
                               Click="OnViewerWindow" AutomationProperties.Name="New window" />
                 </MenuItem>

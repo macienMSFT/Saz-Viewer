@@ -103,6 +103,8 @@ internal sealed class InspectorViewModel : ObservableObject
 
     public bool CanPopOut => followsGrid;
 
+    internal UiPreferences Preferences => preferences;
+
     /// <summary>Active-view search in single view (follows the selected Request/Response side).</summary>
     public ActiveSearchViewModel Search { get; }
 

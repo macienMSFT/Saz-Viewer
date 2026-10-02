@@ -417,6 +417,7 @@ public partial class MainWindow : Window, ICaptureTabHost
         LayoutSplitMenuItem.IsChecked = preferences.DefaultInspectorLayout == InspectorLayoutMode.AlwaysSplit;
         LayoutSingleMenuItem.IsChecked = preferences.DefaultInspectorLayout == InspectorLayoutMode.AlwaysSingle;
         ViewerBottomMenuItem.IsChecked = preferences.SessionViewer == SessionViewerLocation.BottomPane;
+        ViewerRightMenuItem.IsChecked = preferences.SessionViewer == SessionViewerLocation.RightPane;
         ViewerWindowMenuItem.IsChecked = preferences.SessionViewer == SessionViewerLocation.NewWindow;
         HideConnectOnOpenMenuItem.IsChecked = preferences.HideConnectOnOpen;
     }
@@ -476,6 +477,9 @@ public partial class MainWindow : Window, ICaptureTabHost
 
     private void OnViewerBottom(object sender, RoutedEventArgs e) =>
         SetSessionViewerLocation(SessionViewerLocation.BottomPane);
+
+    private void OnViewerRight(object sender, RoutedEventArgs e) =>
+        SetSessionViewerLocation(SessionViewerLocation.RightPane);
 
     private void OnViewerWindow(object sender, RoutedEventArgs e) =>
         SetSessionViewerLocation(SessionViewerLocation.NewWindow);

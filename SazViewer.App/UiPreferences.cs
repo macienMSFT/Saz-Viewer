@@ -26,6 +26,7 @@ internal enum InspectorLayoutMode
 internal enum SessionViewerLocation
 {
     BottomPane,
+    RightPane,
     NewWindow
 }
 
@@ -102,10 +103,53 @@ internal sealed class UiPreferences
 
     public SessionViewerLocation SessionViewer
     {
-        get => document.SessionViewer == "window" ? SessionViewerLocation.NewWindow : SessionViewerLocation.BottomPane;
+        get => document.SessionViewer switch
+        {
+            "right" => SessionViewerLocation.RightPane,
+            "window" => SessionViewerLocation.NewWindow,
+            _ => SessionViewerLocation.BottomPane
+        };
         set
         {
-            document.SessionViewer = value == SessionViewerLocation.NewWindow ? "window" : "bottom";
+            document.SessionViewer = value switch
+            {
+                SessionViewerLocation.RightPane => "right",
+                SessionViewerLocation.NewWindow => "window",
+                _ => "bottom"
+            };
+            Save();
+        }
+    }
+
+    /// <summary>Fraction of the embedded content area kept for the grid above a bottom-pane viewer.</summary>
+    public double BottomPaneGridFraction
+    {
+        get => Fraction(document.BottomPaneGridFraction, .40);
+        set
+        {
+            document.BottomPaneGridFraction = Fraction(value, .40);
+            Save();
+        }
+    }
+
+    /// <summary>Fraction of the embedded content area kept for the grid left of a right-pane viewer.</summary>
+    public double RightPaneGridFraction
+    {
+        get => Fraction(document.RightPaneGridFraction, .45);
+        set
+        {
+            document.RightPaneGridFraction = Fraction(value, .45);
+            Save();
+        }
+    }
+
+    /// <summary>Fraction of a right-pane HTTP split reserved for the Request pane above Response.</summary>
+    public double RightPaneHttpSplitFraction
+    {
+        get => Fraction(document.RightPaneHttpSplitFraction, .50);
+        set
+        {
+            document.RightPaneHttpSplitFraction = Fraction(value, .50);
             Save();
         }
     }
@@ -161,6 +205,9 @@ internal sealed class UiPreferences
         "single" => InspectorLayout.Single,
         _ => null
     };
+
+    private static double Fraction(double? value, double fallback) =>
+        value is { } fraction && double.IsFinite(fraction) ? Math.Clamp(fraction, .10, .90) : fallback;
 
     private static Document Load(string? path)
     {
@@ -224,5 +271,11 @@ internal sealed class UiPreferences
         public string? SessionViewer { get; set; }
 
         public bool? HideConnectOnOpen { get; set; }
+
+        public double? BottomPaneGridFraction { get; set; }
+
+        public double? RightPaneGridFraction { get; set; }
+
+        public double? RightPaneHttpSplitFraction { get; set; }
     }
 }
