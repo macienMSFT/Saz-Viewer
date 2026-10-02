@@ -9,6 +9,7 @@ using SazViewer.Core;
 
 namespace SazViewer.Tests;
 
+[Collection(EdgeBrowserCollection.Name)]
 public sealed class HtmlReportBrowserTests
 {
     private const string InjectionText = "<img src=x onerror=globalThis.pwned=true>";

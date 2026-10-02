@@ -4,6 +4,7 @@ using SazViewer.Core;
 
 namespace SazViewer.Tests;
 
+[Collection(EdgeBrowserCollection.Name)]
 public sealed class AuthScrubberBrowserTests
 {
     [WindowsEdgeFact]
