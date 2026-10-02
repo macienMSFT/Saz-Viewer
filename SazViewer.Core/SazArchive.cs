@@ -27,6 +27,12 @@ internal static class SazArchiveFactory
     private const long MaxNonSeekableArchiveBytes = 512L * 1024 * 1024;
     private const long MaxCompressionRatio = 1_000;
 
+    internal static bool IsEncryptedEntryReadFailure(Exception exception) =>
+        exception is SharpZipBaseException
+            or InvalidDataException
+            or IOException
+            or IndexOutOfRangeException;
+
     public static ISazArchive Open(
         Stream input,
         bool leaveOpen,
@@ -423,8 +429,7 @@ internal static class SazArchiveFactory
             {
                 throw;
             }
-            catch (Exception exception) when (
-                exception is SharpZipBaseException or InvalidDataException or IOException)
+            catch (Exception exception) when (IsEncryptedEntryReadFailure(exception))
             {
                 throw new SazArchiveCorruptException("an entry could not be fully authenticated and read.", exception);
             }
@@ -503,8 +508,7 @@ internal static class SazArchiveFactory
             {
                 throw;
             }
-            catch (Exception exception) when (
-                exception is SharpZipBaseException or InvalidDataException or IOException)
+            catch (Exception exception) when (IsEncryptedEntryReadFailure(exception))
             {
                 throw new SazArchiveCorruptException(
                     "an encrypted entry could not be fully authenticated and read.",

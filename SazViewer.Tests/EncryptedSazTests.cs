@@ -195,6 +195,12 @@ public sealed class EncryptedSazTests
     }
 
     [Fact]
+    public void ClassifiesSharpZipLibInflaterBoundsFailureAsCorrupt()
+    {
+        Assert.True(SazArchiveFactory.IsEncryptedEntryReadFailure(new IndexOutOfRangeException()));
+    }
+
+    [Fact]
     public void RetriesAmbiguousZipCryptoPasswordVerifierCollision()
     {
         using var valid = EncryptedFixture(

@@ -1188,6 +1188,7 @@ public sealed class HtmlReportBrowserTests
             Assert.Equal(0, await page.Locator(".http-search-match").CountAsync());
             await page.SetViewportSizeAsync(480, 800);
             search = page.Locator(".http-view-search-input");
+            await page.Locator("#request-panel-json .tree-view").WaitForAsync();
             await search.FillAsync("payload");
             await Assertions.Expect(page.Locator(".http-view-search-status")).ToHaveTextAsync("1 of 1 matches");
             Assert.True(await page.Locator(".http-view-search").EvaluateAsync<bool>(

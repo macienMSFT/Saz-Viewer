@@ -75,12 +75,23 @@ public sealed class HttpBodyDecodingTests
     {
         const string brotliText = "Brotli decoded text";
         const string deflateText = "zlib wrapped deflate";
+        byte[] brotliFixture =
+        [
+            0x0B, 0x09, 0x80, 0x42, 0x72, 0x6F, 0x74, 0x6C, 0x69, 0x20, 0x64, 0x65,
+            0x63, 0x6F, 0x64, 0x65, 0x64, 0x20, 0x74, 0x65, 0x78, 0x74, 0x03
+        ];
+        byte[] zlibFixture =
+        [
+            0x78, 0xDA, 0xAB, 0xCA, 0xC9, 0x4C, 0x52, 0x28, 0x2F, 0x4A, 0x2C, 0x28,
+            0x48, 0x4D, 0x51, 0x48, 0x49, 0x4D, 0xCB, 0x49, 0x2C, 0x49, 0x05, 0x00,
+            0x51, 0x64, 0x07, 0xBA
+        ];
         using var brotliSaz = ResponseFixture(
-            Brotli(Bytes(brotliText)),
+            brotliFixture,
             ("Content-Type", "text/plain; charset=utf-8"),
             ("Content-Encoding", "br"));
         using var deflateSaz = ResponseFixture(
-            Zlib(Bytes(deflateText)),
+            zlibFixture,
             ("Content-Type", "text/plain"),
             ("Content-Encoding", "deflate"));
 
