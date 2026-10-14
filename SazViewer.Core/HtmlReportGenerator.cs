@@ -106,7 +106,6 @@ public sealed partial class HtmlReportGenerator
 @media(prefers-color-scheme:light){:root[data-theme=system]{--app-bg:#eef0f6;--bg:#fff;--panel:#f6f7fb;--panel2:#ebedf5;--text:#1b1f2a;--muted:#5f6676;--line:#e4e7ef;--accent:#4f6bed;--accent-soft:#e8ecff;--ok:#1a7f4b;--err:#d13438;--err-bg:#fdecec;--warn:#9a6700;--warning-bg:#fff3d6;--info-bg:#e5f0ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#5f6676;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#4f6bed;--direction-server:#1a7f4b;--selected:#eef1ff;--hover:#f3f4fa}}
 @media print{:root,:root[data-theme=system],:root[data-theme=light],:root[data-theme=dark]{color-scheme:light;--app-bg:#fff;--bg:#fff;--panel:#fff;--panel2:#f6f7fb;--text:#1b1f2a;--muted:#5f6676;--line:#e4e7ef;--accent:#4f6bed;--accent-soft:#e8ecff;--ok:#1a7f4b;--err:#d13438;--err-bg:#fdecec;--warn:#9a6700;--warning-bg:#fff3d6;--info-bg:#e5f0ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#5f6676;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#4f6bed;--direction-server:#1a7f4b;--selected:#eef1ff;--hover:#f3f4fa}}
 *{box-sizing:border-box}html{scrollbar-gutter:stable}body{margin:0;background:var(--app-bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
-body.inspector-open{overflow:hidden}
 body.inspector-only main{display:none}
 main{width:100%;padding:4px}h2,h3,h4{margin:.25em 0}.muted,.format-status{color:var(--muted)}
 .capture-header{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:3px 4px 6px}.capture-header h1{margin:0;font-size:18px}.capture-header dl{display:flex;gap:8px;flex-wrap:wrap;margin:0;color:var(--muted)}.capture-header dt{font-weight:700}.capture-header dd{margin:0}
@@ -124,14 +123,16 @@ details{margin:4px 0}summary{cursor:pointer;color:var(--accent)}pre{white-space:
 .warning{border-left:4px solid var(--warn);padding:6px 10px;margin:5px 0;background:var(--warning-bg)}.hidden{display:none!important}
 .http-workspace{min-height:420px}.http-table-scroll{min-height:180px;overflow:auto;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
 main{padding:12px}input,select,button{border-radius:8px}button:hover{background:var(--hover)}th{font-size:11px;letter-spacing:.04em;color:var(--muted)}.badge,.format-badge{background:var(--accent-soft);border-color:transparent}
-dialog#httpInspector{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh;margin:0;padding:0;border:none;background:var(--bg);color:var(--text)}
-dialog#httpInspector::backdrop{background:#000c}
+dialog#httpInspector{position:fixed;inset:0 0 0 auto;z-index:100;overflow:visible;width:var(--reader-w,50vw);height:100vh;max-width:100vw;max-height:100vh;margin:0;padding:0;border:none;border-left:1px solid var(--line);box-shadow:-6px 0 24px #0000002e;background:var(--bg);color:var(--text)}
+body.inspector-open:not(.inspector-only) dialog#httpInspector{top:var(--reader-top,0px);height:calc(100vh - var(--reader-top,0px))}body.inspector-open:not(.inspector-only) .http-table-scroll{margin-right:var(--reader-w,50vw);height:calc(100vh - var(--reader-top,0px) - 28px);min-height:180px}body.inspector-open:not(.inspector-only) #httpTable{min-width:760px}body.inspector-only dialog#httpInspector{width:100%;border-left:none;box-shadow:none}
+.reader-resizer{position:absolute;left:-4px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:5;touch-action:none}.reader-resizer:hover,.reader-resizer.dragging,.reader-resizer:focus-visible{background:var(--accent);opacity:.45;outline:none}body.inspector-only .reader-resizer{display:none}
+@media(max-width:900px){dialog#httpInspector{width:100%;border-left:none;box-shadow:none}body.inspector-open:not(.inspector-only) dialog#httpInspector{top:0;height:100vh}.reader-resizer{display:none}body.inspector-open:not(.inspector-only) .http-table-scroll{margin-right:0;height:auto}}
 dialog#httpInspector[open]{display:flex;flex-direction:column}
 .inspector-header{display:flex;align-items:flex-start;gap:10px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel2);flex-wrap:wrap}
 .inspector-heading{flex:1;min-width:220px;margin:0;font-size:16px;overflow-wrap:anywhere}
 .inspector-nav{display:flex;align-items:center;gap:6px}
 .inspector-position{color:var(--muted);font-size:12px;white-space:nowrap;min-width:70px;text-align:center}
-.inspector-close{font-size:16px;line-height:1;padding:6px 10px}
+.inspector-close{font-size:16px;line-height:1;padding:6px 10px}.inspector-popout{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:7px}.inspector-popout svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .inspector-open-status{flex-basis:100%;min-height:0;color:var(--muted)}.inspector-open-status.warning{color:var(--text)}
 .session-details{flex:0 0 auto;max-height:30vh;overflow:auto;margin:2px 14px 0}.session-details summary{font-size:12px}
 .inspector-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
@@ -199,7 +200,8 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
         AppendHttpSection(html, report.Sessions, report.WebSocketMessages);
         html.Append("""
 </main>
-<dialog id="httpInspector" aria-labelledby="inspectorTitle" aria-modal="true">
+<dialog id="httpInspector" aria-labelledby="inspectorTitle">
+<div id="readerResizer" class="reader-resizer" role="separator" aria-orientation="vertical" aria-label="Resize reader pane" tabindex="0" title="Drag or use Left and Right arrow keys to resize the reader"></div>
 <header class="inspector-header">
 <h2 id="inspectorTitle" class="inspector-heading"></h2>
 <div class="inspector-nav">
@@ -209,7 +211,7 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 <button type="button" id="inspectorLayoutToggle" class="http-layout-toggle hidden" aria-label="Split view" title="Split view" aria-pressed="false" aria-controls="inspectorBody"><svg aria-hidden="true" viewBox="0 0 24 24"><g class="layout-icon-split"><rect x="3.5" y="4" width="7" height="16" rx="1"/><rect x="13.5" y="4" width="7" height="16" rx="1"/></g><g class="layout-icon-single"><rect x="4" y="4" width="16" height="16" rx="1"/></g></svg></button>
 </div>
 <button type="button" class="theme-toggle" aria-label="Switch theme" title="Switch theme" aria-pressed="false"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M8.5 15.5A6 6 0 1 1 15.5 15.5C14.6 16.2 14 17 14 18h-4c0-1-.6-1.8-1.5-2.5Z"/><circle class="theme-bulb-core" cx="12" cy="11" r="2.4"/></svg></button>
-<button type="button" id="inspectorOpenTab" aria-label="Open in new tab: this session inspector" title="Open this session inspector in a new tab">Open in new tab</button>
+<button type="button" id="inspectorOpenTab" class="inspector-popout" aria-label="Open in new tab: this session inspector" title="Open in new tab"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>
 <button type="button" id="inspectorClose" class="inspector-close" aria-label="Close session inspector">&#10005;</button>
 <span id="inspectorOpenStatus" class="inspector-open-status" role="status" aria-live="polite"></span>
 </header>
@@ -2883,8 +2885,16 @@ function openInspector(row){
   if(!loadRow(row))return;
   originRow=row;
   document.body.classList.add('inspector-open');
-  inspector.showModal();
+  inspector.show();
+  updateReaderTop();
 }
+function updateReaderTop(){
+  const scroller=document.querySelector('.http-table-scroll');
+  if(!scroller||document.body.classList.contains('inspector-only'))return;
+  document.documentElement.style.setProperty('--reader-top',Math.max(0,Math.round(scroller.getBoundingClientRect().top))+'px');
+}
+addEventListener('scroll',()=>{if(document.body.classList.contains('inspector-open'))updateReaderTop()},{passive:true});
+addEventListener('resize',()=>{if(document.body.classList.contains('inspector-open'))updateReaderTop()});
 function openInspectorInNewTab(){
   if(!currentRow)return;
   const url=inspectorUrl(currentRow);
@@ -2942,6 +2952,36 @@ inspector.addEventListener('close',()=>{
   focusRow?.focus();
 });
 inspectorOpenTab.addEventListener('click',openInspectorInNewTab);
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'&&!event.defaultPrevented&&inspector.open)closeInspector();
+});
+(()=>{
+  const resizer=document.getElementById('readerResizer');
+  const root=document.documentElement;
+  const clamp=width=>Math.max(360,Math.min(width,window.innerWidth-280));
+  const setWidth=width=>root.style.setProperty('--reader-w',`${Math.round(clamp(width))}px`);
+  resizer.addEventListener('pointerdown',event=>{
+    event.preventDefault();
+    resizer.setPointerCapture(event.pointerId);
+    resizer.classList.add('dragging');
+    const move=moveEvent=>setWidth(window.innerWidth-moveEvent.clientX);
+    const stop=()=>{
+      resizer.classList.remove('dragging');
+      resizer.removeEventListener('pointermove',move);
+      resizer.removeEventListener('pointerup',stop);
+      resizer.removeEventListener('pointercancel',stop);
+    };
+    resizer.addEventListener('pointermove',move);
+    resizer.addEventListener('pointerup',stop);
+    resizer.addEventListener('pointercancel',stop);
+  });
+  resizer.addEventListener('keydown',event=>{
+    if(event.key!=='ArrowLeft'&&event.key!=='ArrowRight')return;
+    event.preventDefault();
+    const width=inspector.getBoundingClientRect().width;
+    setWidth(width+(event.key==='ArrowLeft'?32:-32));
+  });
+})();
 inspectorClose.addEventListener('click',closeInspector);
 function navigate(delta){
   const rows=visibleRows();
@@ -2999,7 +3039,7 @@ function enterInspectorOnlyMode(state){
   inspectorPosition.textContent='0 of 0';
   setInspectorStatus('The requested session could not be opened.',true);
   document.body.classList.add('inspector-open');
-  inspector.showModal();
+  inspector.show();
 }
 const initialInspectorState=parseInspectorState(window.location.hash);
 if(initialInspectorState?.error)showReportStatus(initialInspectorState.error);

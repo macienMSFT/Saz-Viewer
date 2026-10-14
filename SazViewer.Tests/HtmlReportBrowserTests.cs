@@ -54,7 +54,7 @@ public sealed class HtmlReportBrowserTests
             await VerifyHttpSplitViewAsync(browser, reportPath);
             await VerifyStructuredTreeToolbarsAsync(browser, tempDirectory);
             await VerifyXmlTreeStyleAsync(browser, tempDirectory);
-            await VerifyWebSocketInspectorAsync(browser, reportPath, 1440);
+            await VerifyWebSocketInspectorAsync(browser, reportPath, 2400);
             await VerifyWebSocketInspectorAsync(browser, reportPath, 320);
             await VerifyNewTabInspectorAsync(browser, reportPath);
             await VerifyBlockedNewTabKeepsInspectorAsync(browser, reportPath);
@@ -1431,7 +1431,7 @@ public sealed class HtmlReportBrowserTests
         await File.WriteAllTextAsync(lifecyclePath, new HtmlReportGenerator().Generate(CreateSplitLifecycleReport()));
         var page = await browser.NewPageAsync(new()
         {
-            ViewportSize = new ViewportSize { Width = 1280, Height = 800 },
+            ViewportSize = new ViewportSize { Width = 1920, Height = 800 },
         });
         await InstallClipboardTestHookAsync(page);
         CaptureErrors(page, errors);
@@ -1862,7 +1862,7 @@ public sealed class HtmlReportBrowserTests
             Assert.NotNull(dialog);
             Assert.NotNull(tabs);
             Assert.NotNull(request);
-            Assert.True(dialog.Width >= width - 1 && dialog.Height >= 899);
+            Assert.True(dialog.Width >= (width > 900 ? width / 2.0 : width) - 20 && dialog.Height >= (width > 900 ? 600 : 899));
             Assert.True(
                 tabs.Y < 250,
                 $"Primary tabs were pushed out of the usable viewport at y={tabs.Y}.");
@@ -2119,7 +2119,7 @@ public sealed class HtmlReportBrowserTests
             Assert.NotNull(dialog);
             Assert.NotNull(traffic);
             Assert.NotNull(detail);
-            Assert.True(dialog.Width >= width - 1 && dialog.Height >= 899);
+            Assert.True(dialog.Width >= (width > 900 ? width / 2.0 : width) - 20 && dialog.Height >= (width > 900 ? 600 : 899));
             double? rememberedSplitRatio = null;
             if (width > 900)
             {

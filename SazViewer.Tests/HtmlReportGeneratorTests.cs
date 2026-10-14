@@ -37,10 +37,10 @@ public sealed class HtmlReportGeneratorTests
         var html = new HtmlReportGenerator().Generate(report);
 
         // Full-screen dialog inspector with correct dialog aria-modal/name semantics.
-        Assert.Contains("<dialog id=\"httpInspector\" aria-labelledby=\"inspectorTitle\" aria-modal=\"true\">", html, StringComparison.Ordinal);
+        Assert.Contains("<dialog id=\"httpInspector\" aria-labelledby=\"inspectorTitle\">", html, StringComparison.Ordinal);
         Assert.Contains("<h2 id=\"inspectorTitle\" class=\"inspector-heading\"></h2>", html, StringComparison.Ordinal);
         Assert.Contains("<div id=\"inspectorBody\" class=\"inspector-body\"></div>", html, StringComparison.Ordinal);
-        Assert.Contains("dialog#httpInspector{position:fixed;inset:0;width:100vw;height:100vh", html, StringComparison.Ordinal);
+        Assert.Contains("dialog#httpInspector{position:fixed;inset:0 0 0 auto;z-index:100;overflow:visible;width:var(--reader-w,50vw);height:100vh", html, StringComparison.Ordinal);
         Assert.Contains(".session-details{flex:0 0 auto;max-height:30vh;overflow:auto", html, StringComparison.Ordinal);
         Assert.Contains(".tab-panels.primary-panels{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden", html, StringComparison.Ordinal);
         Assert.DoesNotContain(".session-details{flex-basis:100%", html, StringComparison.Ordinal);
@@ -48,7 +48,7 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("tabindex=\"0\" aria-selected=\"false\"", html, StringComparison.Ordinal);
         Assert.Contains("template.content.cloneNode(true)", html, StringComparison.Ordinal);
         Assert.Contains("event.key==='Enter'||event.key===' '", html, StringComparison.Ordinal);
-        Assert.Contains("inspector.showModal()", html, StringComparison.Ordinal);
+        Assert.Contains("inspector.show()", html, StringComparison.Ordinal);
 
         // Accessible Close/X, Escape close (native <dialog> cancel/close), and focus restore.
         Assert.Contains(
@@ -138,7 +138,7 @@ public sealed class HtmlReportGeneratorTests
         var html = new HtmlReportGenerator().Generate(report);
 
         Assert.Contains(
-            "id=\"inspectorOpenTab\" aria-label=\"Open in new tab: this session inspector\"",
+            "id=\"inspectorOpenTab\" class=\"inspector-popout\" aria-label=\"Open in new tab: this session inspector\"",
             html,
             StringComparison.Ordinal);
         Assert.Contains("id=\"inspectorOpenStatus\"", html, StringComparison.Ordinal);
@@ -1022,7 +1022,7 @@ public sealed class HtmlReportGeneratorTests
         var html = new HtmlReportGenerator().Generate(report);
 
         Assert.Contains(".ws-layout{flex:1;min-height:0;display:flex;gap:6px;overflow:hidden}", html, StringComparison.Ordinal);
-        Assert.Contains("dialog#httpInspector{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh", html, StringComparison.Ordinal);
+        Assert.Contains("dialog#httpInspector{position:fixed;inset:0 0 0 auto;z-index:100;overflow:visible;width:var(--reader-w,50vw);height:100vh;max-width:100vw;max-height:100vh", html, StringComparison.Ordinal);
         Assert.Contains("@media(max-width:900px){main{padding:2px}.ws-layout{display:grid;grid-template-columns:1fr;grid-template-rows:", html, StringComparison.Ordinal);
         Assert.Contains(".primary-panel{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column", html, StringComparison.Ordinal);
         Assert.Contains(".inspector-body.http-split .primary-panels{flex-direction:row;gap:6px;padding:8px 10px}", html, StringComparison.Ordinal);
