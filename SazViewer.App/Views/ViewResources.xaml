@@ -109,6 +109,25 @@
             </Style.Triggers>
         </Style>
 
+    <DataTemplate x:Key="TypeTagTemplate">
+        <Border x:Name="Tag" Style="{StaticResource Saz.Tag}" Margin="8,0">
+            <TextBlock x:Name="TagText" Text="{Binding TypeLabel, Mode=OneTime}" Style="{StaticResource Saz.TagText}" />
+        </Border>
+        <DataTemplate.Triggers>
+            <DataTrigger Binding="{Binding TypeLabel}" Value="MAPI">
+                <Setter TargetName="Tag" Property="Style" Value="{StaticResource Saz.Tag.Mapi}" />
+                <Setter TargetName="TagText" Property="Style" Value="{StaticResource Saz.TagText.Mapi}" />
+            </DataTrigger>
+            <DataTrigger Binding="{Binding TypeLabel}" Value="WebSocket">
+                <Setter TargetName="Tag" Property="Style" Value="{StaticResource Saz.Tag.WebSocket}" />
+                <Setter TargetName="TagText" Property="Style" Value="{StaticResource Saz.TagText.WebSocket}" />
+            </DataTrigger>
+            <DataTrigger Binding="{Binding TypeLabel}" Value="">
+                <Setter TargetName="Tag" Property="Visibility" Value="Collapsed" />
+            </DataTrigger>
+        </DataTemplate.Triggers>
+    </DataTemplate>
+
     <DataTemplate DataType="{x:Type vm:TextDocumentViewModel}">
         <views:LineDocumentView />
     </DataTemplate>

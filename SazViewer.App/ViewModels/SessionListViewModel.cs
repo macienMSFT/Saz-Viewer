@@ -10,6 +10,26 @@ internal sealed record SessionFilterOption(string Key, string Label)
     public override string ToString() => Label;
 }
 
+/// <summary>A quick-filter chip (All / MAPI / WebSocket / 4xx-5xx) with its row count.</summary>
+internal sealed class SessionFilterChip(string key, string label, int count) : ObservableObject
+{
+    private bool isActive;
+
+    public string Key { get; } = key;
+
+    public string Label { get; } = label;
+
+    public int Count { get; } = count;
+
+    public string Text => $"{Label}  {Count:N0}";
+
+    public bool IsActive
+    {
+        get => isActive;
+        set => SetProperty(ref isActive, value);
+    }
+}
+
 /// <summary>Sortable grid columns.</summary>
 internal enum SessionSortColumn
 {
@@ -49,6 +69,7 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
     private string query = "";
     private SessionFilterOption filter = FilterOptions[0];
     private bool hideConnect;
+    private bool compactRows = true;
     private SessionSortColumn sortColumn = SessionSortColumn.Index;
     private SessionColumnDefinition? sortDefinition;
     private ListSortDirection sortDirection = ListSortDirection.Ascending;
@@ -69,6 +90,14 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
     {
         this.rows = rows;
         this.preferences = preferences;
+        Chips =
+        [
+            new("", "All", rows.Count),
+            new("mapi", "MAPI", rows.Count(row => row.IsMapi)),
+            new("websocket", "WebSocket", rows.Count(row => row.IsWebSocket)),
+            new("error", "4xx/5xx", rows.Count(row => row.FilterKey is "4" or "5"))
+        ];
+        Chips[0].IsActive = true;
         this.payloadCache = payloadCache ?? new PayloadSearchCache();
         this.payloadDebounce = payloadDebounce ?? TimeSpan.FromMilliseconds(250);
         searchPayloads = preferences?.SearchPayloads == true;
@@ -153,8 +182,40 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref filter, value ?? FilterOptions[0]))
             {
+                foreach (var chip in Chips)
+                {
+                    chip.IsActive = chip.Key == filter.Key;
+                }
                 Refresh();
             }
+        }
+    }
+
+    /// <summary>Quick-filter chips with counts over all rows.</summary>
+    public IReadOnlyList<SessionFilterChip> Chips { get; }
+
+    /// <summary>Selects a chip's filter; clicking the active chip returns to All.</summary>
+    public void SelectChip(SessionFilterChip chip) =>
+        Filter = chip.Key == filter.Key || chip.Key.Length == 0
+            ? FilterOptions[0]
+            : FilterOptions.FirstOrDefault(option => option.Key == chip.Key) ?? new(chip.Key, chip.Label);
+
+    /// <summary>Compact (default) or comfortable row density.</summary>
+    public bool CompactRows
+    {
+        get => preferences?.CompactRows ?? compactRows;
+        set
+        {
+            if (CompactRows == value)
+            {
+                return;
+            }
+            compactRows = value;
+            if (preferences is not null)
+            {
+                preferences.CompactRows = value;
+            }
+            OnPropertyChanged();
         }
     }
 
@@ -241,6 +302,7 @@ internal sealed class SessionListViewModel : ObservableObject, IDisposable
             "" => true,
             "websocket" => row.IsWebSocket,
             "mapi" => row.IsMapi,
+            "error" => row.FilterKey is "4" or "5",
             var key => row.FilterKey == key
         };
         return matchesFilter && !(hideConnect && row.IsConnect);

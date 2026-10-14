@@ -79,7 +79,38 @@ internal partial class CaptureView : UserControl
         model.Inspector.Loaded += OnInspectorLoaded;
         model.Sessions.GridColumnsChanged += OnGridColumnsChanged;
         BuildColumns();
+        ApplyDensity();
         UpdateInspectorLayout();
+    }
+
+    private void ApplyDensity()
+    {
+        if (model is null)
+        {
+            return;
+        }
+        var compact = model.Sessions.CompactRows;
+        SessionGrid.RowHeight = compact ? 28 : 38;
+        CompactRadio.IsChecked = compact;
+        ComfortableRadio.IsChecked = !compact;
+    }
+
+    private void OnDensityChecked(object sender, RoutedEventArgs e)
+    {
+        if (model is null || !IsLoaded)
+        {
+            return;
+        }
+        model.Sessions.CompactRows = ReferenceEquals(sender, CompactRadio);
+        SessionGrid.RowHeight = model.Sessions.CompactRows ? 28 : 38;
+    }
+
+    private void OnChipClick(object sender, RoutedEventArgs e)
+    {
+        if (model is not null && sender is FrameworkElement { DataContext: SessionFilterChip chip })
+        {
+            model.Sessions.SelectChip(chip);
+        }
     }
 
     private void OnGridColumnsChanged(object? sender, EventArgs e) => BuildColumns();
@@ -549,8 +580,29 @@ internal partial class CaptureView : UserControl
             };
         }
 
+        if (definition.Id == "type")
+        {
+            return new DataGridTemplateColumn
+            {
+                Header = definition.Header,
+                SortMemberPath = definition.Id,
+                MinWidth = 40,
+                CellTemplate = (DataTemplate)FindResource("TypeTagTemplate")
+            };
+        }
+
         var baseStyle = (Style)FindResource(definition.Numeric ? "GridNumberText" : "GridCellText");
         var elementStyle = new Style(typeof(TextBlock), baseStyle);
+        if (definition.Id == "result")
+        {
+            foreach (var (key, brush) in new[] { ("2", "Saz.Success"), ("3", "Saz.Info"), ("4", "Saz.Warn"), ("5", "Saz.Err") })
+            {
+                var trigger = new DataTrigger { Binding = new Binding(nameof(SessionRow.FilterKey)), Value = key };
+                trigger.Setters.Add(new Setter(TextBlock.ForegroundProperty, new DynamicResourceExtension(brush)));
+                trigger.Setters.Add(new Setter(TextBlock.FontWeightProperty, FontWeights.SemiBold));
+                elementStyle.Triggers.Add(trigger);
+            }
+        }
         Binding tooltip = definition.Id switch
         {
             "time" => new Binding(nameof(SessionRow.TimeToolTip)) { Mode = BindingMode.OneTime },

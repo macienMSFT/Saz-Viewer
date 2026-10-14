@@ -72,6 +72,7 @@ internal sealed class UiPreferences
         SessionColumnSetting.BuiltIn("result"),
         SessionColumnSetting.BuiltIn("method"),
         SessionColumnSetting.BuiltIn("url"),
+        SessionColumnSetting.BuiltIn("type"),
         SessionColumnSetting.BuiltIn("elapsed"),
         SessionColumnSetting.BuiltIn("request-size"),
         SessionColumnSetting.BuiltIn("response-size")
@@ -220,6 +221,17 @@ internal sealed class UiPreferences
         set
         {
             document.SearchPayloads = value;
+            Save();
+        }
+    }
+
+    /// <summary>Compact (default) or comfortable session-grid row height.</summary>
+    public bool CompactRows
+    {
+        get => document.CompactRows != false;
+        set
+        {
+            document.CompactRows = value;
             Save();
         }
     }
@@ -417,6 +429,8 @@ internal sealed class UiPreferences
         public bool? HideConnectOnOpen { get; set; }
 
         public bool? SearchPayloads { get; set; }
+
+        public bool? CompactRows { get; set; }
 
         public double? BottomPaneGridFraction { get; set; }
 

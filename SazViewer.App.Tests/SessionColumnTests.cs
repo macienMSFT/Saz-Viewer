@@ -47,7 +47,7 @@ public sealed class SessionColumnTests
 
         reloaded.ResetGridColumns();
         Assert.Equal(
-            ["time", "id", "result", "method", "url", "elapsed", "request-size", "response-size"],
+            ["time", "id", "result", "method", "url", "type", "elapsed", "request-size", "response-size"],
             new UiPreferences(path).GridColumns.Select(column => column.Id));
 
         reloaded.SetGridColumns(
@@ -71,7 +71,7 @@ public sealed class SessionColumnTests
         Assert.Equal("light", preferences.Theme);
         Assert.True(preferences.SearchPayloads);
         Assert.Equal(SessionViewerLocation.RightPane, preferences.SessionViewer);
-        Assert.Equal(8, preferences.GridColumns.Count);
+        Assert.Equal(9, preferences.GridColumns.Count);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public sealed class SessionColumnTests
         using var list = new SessionListViewModel([], preferences);
 
         Assert.Equal(
-            ["time", "id", "result", "method", "url", "elapsed", "request-size", "response-size"],
+            ["time", "id", "result", "method", "url", "type", "elapsed", "request-size", "response-size"],
             list.GridColumns.Select(column => column.Id));
     }
 
@@ -224,7 +224,7 @@ public sealed class SessionColumnTests
                 Assert.True(grid.CanUserReorderColumns);
                 Assert.True(grid.EnableColumnVirtualization);
                 Assert.Equal(
-                    ["Time", "ID", "Result", "Method", "URL", "Elapsed Time", "Req", "Resp"],
+                    ["Time", "ID", "Result", "Method", "URL", "Type", "Elapsed Time", "Req", "Resp"],
                     grid.Columns.OrderBy(column => column.DisplayIndex).Select(column => column.Header));
 
                 grid.Columns[4].DisplayIndex = 0;
