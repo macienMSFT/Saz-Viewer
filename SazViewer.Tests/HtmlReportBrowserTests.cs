@@ -315,7 +315,7 @@ public sealed class HtmlReportBrowserTests
         {
             await page.GotoAsync(new Uri(reportPath).AbsoluteUri);
             Assert.Equal(
-                ["Time", "ID", "Result", "Method", "URL", "Elapsed Time", "Req", "Resp"],
+                ["Time", "ID", "Result", "Method", "Type", "URL", "Elapsed Time", "Req", "Resp"],
                 await page.Locator("#httpTable thead th").AllInnerTextsAsync());
             Assert.Equal("200", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-result").InnerTextAsync());
             Assert.Equal("HTTP 200 OK", await page.Locator("#httpTable tbody tr").Nth(0).Locator(".http-result").GetAttributeAsync("title"));
@@ -329,7 +329,7 @@ public sealed class HtmlReportBrowserTests
                 """
                     table=>{
                       const header=[...table.tHead.rows[0].cells],rows=[...table.tBodies[0].rows];
-                      if(header.length!==8||rows.length!==4)return'wrong table shape';
+                      if(header.length!==9||rows.length!==4)return'wrong table shape';
                       const contentWidth=cell=>{
                         const range=document.createRange();range.selectNodeContents(cell);
                         const style=getComputedStyle(cell);
@@ -337,7 +337,7 @@ public sealed class HtmlReportBrowserTests
                           +parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)
                           +parseFloat(style.borderLeftWidth)+parseFloat(style.borderRightWidth);
                       };
-                      for(const column of [0,1,2,3,5,6,7]){
+                      for(const column of [0,1,2,3,4,6,7,8]){
                         const cells=[header[column],...rows.map(row=>row.cells[column])];
                         const widths=cells.map(cell=>cell.getBoundingClientRect().width);
                         if(Math.max(...widths)-Math.min(...widths)>.75)return`column ${column} is not aligned`;
@@ -345,13 +345,13 @@ public sealed class HtmlReportBrowserTests
                         if(Math.abs(widths[0]-longest)>1.5)return`column ${column} is not content-fit`;
                         if(cells.some(cell=>cell.scrollWidth>cell.clientWidth+1))return`column ${column} clips its header or value`;
                       }
-                      const first=rows[0],url=first.cells[4],urlText=url.querySelector('.http-url-value');
-                      const otherWidth=[0,1,2,3,5,6,7].reduce((total,index)=>total+first.cells[index].getBoundingClientRect().width,0);
+                      const first=rows[0],url=first.cells[5],urlText=url.querySelector('.http-url-value');
+                      const otherWidth=[0,1,2,3,4,6,7,8].reduce((total,index)=>total+first.cells[index].getBoundingClientRect().width,0);
                       if(Math.abs(url.getBoundingClientRect().width-(first.getBoundingClientRect().width-otherWidth))>1.5)return'URL does not receive remaining width';
                       const style=getComputedStyle(urlText);
                       if(style.overflow!=='hidden'||style.textOverflow!=='ellipsis'||style.whiteSpace!=='nowrap')return'URL ellipsis styling is missing';
                       if(urlText.scrollWidth<=urlText.clientWidth)return'long URL did not overflow';
-                      for(const column of [2,5,6,7]){
+                      for(const column of [2,6,7,8]){
                         if(getComputedStyle(first.cells[column]).textAlign!=='right')return`numeric column ${column} is not right aligned`;
                       }
                       return'';
@@ -808,14 +808,14 @@ public sealed class HtmlReportBrowserTests
         Assert.InRange(buttonBox.Width, 35, 40);
         Assert.InRange(buttonBox.Height, 35, 40);
         Assert.Equal(
-            "rgb(13, 17, 23)",
+            "rgb(18, 20, 28)",
             await page.Locator("body").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundColor"));
 
         await page.EmulateMediaAsync(new() { ColorScheme = ColorScheme.Light });
         await Assertions.Expect(mainTheme).ToHaveAttributeAsync("aria-label", "Switch to dark theme");
         Assert.Equal("system", await page.Locator("html").GetAttributeAsync("data-theme"));
         Assert.Equal(
-            "rgb(255, 255, 255)",
+            "rgb(238, 240, 246)",
             await page.Locator("body").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundColor"));
 
         await mainTheme.FocusAsync();
@@ -849,7 +849,7 @@ public sealed class HtmlReportBrowserTests
         await Assertions.Expect(secondPage.Locator("html")).ToHaveAttributeAsync("data-theme", "light");
         await secondPage.CloseAsync();
         Assert.Equal(
-            "rgb(255, 255, 255)",
+            "rgb(238, 240, 246)",
             await page.Locator("body").EvaluateAsync<string>("element=>getComputedStyle(element).backgroundColor"));
         await page.ReloadAsync();
         Assert.Equal("light", await page.Locator("html").GetAttributeAsync("data-theme"));

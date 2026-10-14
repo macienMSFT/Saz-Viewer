@@ -91,11 +91,22 @@ window.addEventListener('storage',event=>{
         html.Append("""
 <section class="http-workspace" aria-label="HTTP sessions">
 <div class="controls"><input id="httpSearch" type="search" aria-label="Search HTTP sessions" placeholder="Search method, URL, result, elapsed time, content type, endpoints...">
-<select id="httpFilter" aria-label="Filter HTTP status or protocol"><option value="">All sessions</option><option value="websocket">WebSocket only</option><option value="mapi">MAPI/NSPI only</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option></select>
+<select id="httpFilter" aria-label="Filter HTTP status or protocol"><option value="">All sessions</option><option value="websocket">WebSocket only</option><option value="mapi">MAPI/NSPI only</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Missing/other</option><option value="error">4xx/5xx errors</option></select>
 <label class="filter-toggle" for="hideConnect"><input id="hideConnect" type="checkbox">Hide CONNECT</label>
 <button type="button" class="theme-toggle" aria-label="Switch theme" title="Switch theme" aria-pressed="false"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M8.5 15.5A6 6 0 1 1 15.5 15.5C14.6 16.2 14 17 14 18h-4c0-1-.6-1.8-1.5-2.5Z"/><circle class="theme-bulb-core" cx="12" cy="11" r="2.4"/></svg></button></div>
+""");
+        var mapiCount = sessions.Count(session => session.Mapi is not null);
+        var webSocketCount = sessions.Count(session => webSocketsBySession.ContainsKey(session.Id));
+        var errorCount = sessions.Count(session => session.Response is not null && session.StatusCode is >= 400 and <= 599);
+        html.Append("<div class=\"chip-bar\"><div class=\"chips\" id=\"httpChips\" role=\"group\" aria-label=\"Quick session filters\">");
+        AppendChip(html, string.Empty, "All", sessions.Count);
+        AppendChip(html, "mapi", "MAPI", mapiCount);
+        AppendChip(html, "websocket", "WebSocket", webSocketCount);
+        AppendChip(html, "error", "4xx/5xx", errorCount);
+        html.Append("""
+</div><div class="segment" id="densityToggle" role="group" aria-label="Row density"><button type="button" data-density="compact" aria-pressed="false">Compact</button><button type="button" data-density="comfortable" aria-pressed="true">Comfortable</button></div></div>
 <div id="reportStatus" class="warning hidden" role="status" aria-live="polite"></div>
-<div class="http-table-scroll"><table id="httpTable"><thead><tr><th class="http-time">Time</th><th class="http-id">ID</th><th class="http-result num">Result</th><th class="http-method">Method</th><th class="http-url">URL</th><th class="http-elapsed num">Elapsed Time</th><th class="http-bytes num">Req</th><th class="http-bytes num">Resp</th></tr></thead><tbody>
+<div class="http-table-scroll"><table id="httpTable"><thead><tr><th class="http-time">Time</th><th class="http-id">ID</th><th class="http-result num">Result</th><th class="http-method">Method</th><th class="http-type">Type</th><th class="http-url">URL</th><th class="http-elapsed num">Elapsed Time</th><th class="http-bytes num">Req</th><th class="http-bytes num">Resp</th></tr></thead><tbody>
 """);
         for (var index = 0; index < sessions.Count; index++)
         {
@@ -109,6 +120,14 @@ window.addEventListener('storage',event=>{
             AppendSessionTemplate(html, sessions[index], index, sessionWebSockets ?? []);
         }
         html.Append("</div></section>");
+    }
+
+    private static void AppendChip(StringBuilder html, string filter, string label, int count)
+    {
+        html.Append("<button type=\"button\" class=\"chip\" data-chip=\"").Append(filter)
+            .Append("\" aria-pressed=\"").Append(filter.Length == 0 ? "true" : "false").Append("\">")
+            .Append(label).Append(" <span class=\"chip-count\">")
+            .Append(count.ToString(CultureInfo.InvariantCulture)).Append("</span></button>");
     }
 
     private static void AppendHttpRow(
@@ -148,7 +167,13 @@ window.addEventListener('storage',event=>{
         AppendHttpTimestamp(html, session.Timestamp);
         html.Append("</td><td class=\"http-id\">");
         Text(html, session.Id);
-        html.Append("</td><td class=\"http-result num\"");
+        var resultClass = resultCode switch
+        {
+            >= 400 => " res-err",
+            >= 200 and < 400 => " res-ok",
+            _ => string.Empty
+        };
+        html.Append("</td><td class=\"http-result num").Append(resultClass).Append('"');
         if (!string.IsNullOrWhiteSpace(session.StatusText))
         {
             html.Append(" title=\"");
@@ -163,7 +188,16 @@ window.addEventListener('storage',event=>{
         Text(html, resultCode?.ToString(CultureInfo.InvariantCulture) ?? "\u2014");
         html.Append("</td><td class=\"http-method\"><span class=\"badge\">");
         Text(html, session.Method ?? "-");
-        html.Append("</span></td><td class=\"http-url\" title=\"");
+        html.Append("</span></td><td class=\"http-type\">");
+        if (webSocketMessages.Count > 0)
+        {
+            html.Append("<span class=\"tag tag-ws\">WebSocket</span>");
+        }
+        else if (session.Mapi is not null)
+        {
+            html.Append("<span class=\"tag tag-mapi\">MAPI</span>");
+        }
+        html.Append("</td><td class=\"http-url\" title=\"");
         Attribute(html, session.Url ?? "-");
         html.Append("\"><span class=\"http-url-value\">");
         Text(html, session.Url ?? "-");

@@ -100,12 +100,12 @@ public sealed partial class HtmlReportGenerator
 (()=>{try{const value=localStorage.getItem('saz-viewer-theme');if(value==='light'||value==='dark')document.documentElement.dataset.theme=value}catch{}})();
 </script>
 <style>
-:root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--panel2:#21262d;--text:#e6edf3;--muted:#8b949e;--line:#30363d;--accent:#58a6ff;--warn:#d29922;--warning-bg:#2b2111;--info-bg:#13233a;--protocol-kind:#d2a8ff;--protocol-binary:#ffa657;--syn-blue:#79c0ff;--syn-string:#a5d6ff;--syn-number:#ffa657;--syn-red:#ff7b72;--syn-punct:#8b949e;--syn-green:#7ee787;--syn-purple:#d2a8ff;--direction-client:#58a6ff;--direction-server:#3fb950;--selected:#1f6feb55;--hover:#1f2630}
+:root{color-scheme:dark;--app-bg:#12141c;--bg:#1a1d28;--panel:#202433;--panel2:#2a2f42;--text:#e6e8f0;--muted:#8d94aa;--line:#2b3042;--accent:#7b91ff;--accent-soft:#272d52;--ok:#58d3ae;--err:#ff6b70;--err-bg:#3a1f26;--warn:#f0b43c;--warning-bg:#3a3020;--info-bg:#1f2d47;--protocol-kind:#d2a8ff;--protocol-binary:#ffa657;--syn-blue:#79c0ff;--syn-string:#a5d6ff;--syn-number:#ffa657;--syn-red:#ff7b72;--syn-punct:#8d94aa;--syn-green:#7ee787;--syn-purple:#d2a8ff;--direction-client:#7b91ff;--direction-server:#58d3ae;--selected:#232a4a;--hover:#232738}
 :root[data-theme=system]{color-scheme:light dark}
-:root[data-theme=light]{color-scheme:light;--bg:#fff;--panel:#f6f8fa;--panel2:#eaeef2;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--accent:#0969da;--warn:#9a6700;--warning-bg:#fff8c5;--info-bg:#ddf4ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#59636e;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#0969da;--direction-server:#1a7f37;--selected:#ddf4ff;--hover:#f3f4f6}
-@media(prefers-color-scheme:light){:root[data-theme=system]{--bg:#fff;--panel:#f6f8fa;--panel2:#eaeef2;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--accent:#0969da;--warn:#9a6700;--warning-bg:#fff8c5;--info-bg:#ddf4ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#59636e;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#0969da;--direction-server:#1a7f37;--selected:#ddf4ff;--hover:#f3f4f6}}
-@media print{:root,:root[data-theme=system],:root[data-theme=light],:root[data-theme=dark]{color-scheme:light;--bg:#fff;--panel:#fff;--panel2:#f6f8fa;--text:#1f2328;--muted:#59636e;--line:#d0d7de;--accent:#0969da;--warn:#9a6700;--warning-bg:#fff8c5;--info-bg:#ddf4ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#59636e;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#0969da;--direction-server:#1a7f37;--selected:#ddf4ff;--hover:#f3f4f6}}
-*{box-sizing:border-box}html{scrollbar-gutter:stable}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
+:root[data-theme=light]{color-scheme:light;--app-bg:#eef0f6;--bg:#fff;--panel:#f6f7fb;--panel2:#ebedf5;--text:#1b1f2a;--muted:#5f6676;--line:#e4e7ef;--accent:#4f6bed;--accent-soft:#e8ecff;--ok:#1a7f4b;--err:#d13438;--err-bg:#fdecec;--warn:#9a6700;--warning-bg:#fff3d6;--info-bg:#e5f0ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#5f6676;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#4f6bed;--direction-server:#1a7f4b;--selected:#eef1ff;--hover:#f3f4fa}
+@media(prefers-color-scheme:light){:root[data-theme=system]{--app-bg:#eef0f6;--bg:#fff;--panel:#f6f7fb;--panel2:#ebedf5;--text:#1b1f2a;--muted:#5f6676;--line:#e4e7ef;--accent:#4f6bed;--accent-soft:#e8ecff;--ok:#1a7f4b;--err:#d13438;--err-bg:#fdecec;--warn:#9a6700;--warning-bg:#fff3d6;--info-bg:#e5f0ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#5f6676;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#4f6bed;--direction-server:#1a7f4b;--selected:#eef1ff;--hover:#f3f4fa}}
+@media print{:root,:root[data-theme=system],:root[data-theme=light],:root[data-theme=dark]{color-scheme:light;--app-bg:#fff;--bg:#fff;--panel:#fff;--panel2:#f6f7fb;--text:#1b1f2a;--muted:#5f6676;--line:#e4e7ef;--accent:#4f6bed;--accent-soft:#e8ecff;--ok:#1a7f4b;--err:#d13438;--err-bg:#fdecec;--warn:#9a6700;--warning-bg:#fff3d6;--info-bg:#e5f0ff;--protocol-kind:#6639ba;--protocol-binary:#805000;--syn-blue:#0550ae;--syn-string:#0a3069;--syn-number:#953800;--syn-red:#cf222e;--syn-punct:#5f6676;--syn-green:#116329;--syn-purple:#6639ba;--direction-client:#4f6bed;--direction-server:#1a7f4b;--selected:#eef1ff;--hover:#f3f4fa}}
+*{box-sizing:border-box}html{scrollbar-gutter:stable}body{margin:0;background:var(--app-bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
 body.inspector-open{overflow:hidden}
 body.inspector-only main{display:none}
 main{width:100%;padding:4px}h2,h3,h4{margin:.25em 0}.muted,.format-status{color:var(--muted)}
@@ -122,7 +122,8 @@ th,td{padding:8px;border:1px solid var(--line);vertical-align:top}tbody tr:hover
 .num{text-align:right;white-space:nowrap}.badge,.format-badge{padding:2px 7px;border:1px solid var(--line);border-radius:10px;white-space:nowrap}
 details{margin:4px 0}summary{cursor:pointer;color:var(--accent)}pre{white-space:pre-wrap;overflow:auto;background:var(--bg);border:1px solid var(--line);padding:10px;word-break:break-word;tab-size:2}
 .warning{border-left:4px solid var(--warn);padding:6px 10px;margin:5px 0;background:var(--warning-bg)}.hidden{display:none!important}
-.http-workspace{min-height:420px}.http-table-scroll{min-height:180px;overflow:auto;border:1px solid var(--line)}
+.http-workspace{min-height:420px}.http-table-scroll{min-height:180px;overflow:auto;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
+main{padding:12px}input,select,button{border-radius:8px}button:hover{background:var(--hover)}th{font-size:11px;letter-spacing:.04em;color:var(--muted)}.badge,.format-badge{background:var(--accent-soft);border-color:transparent}
 dialog#httpInspector{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;max-height:100vh;margin:0;padding:0;border:none;background:var(--bg);color:var(--text)}
 dialog#httpInspector::backdrop{background:#000c}
 dialog#httpInspector[open]{display:flex;flex-direction:column}
@@ -168,7 +169,13 @@ dialog#httpInspector[open]{display:flex;flex-direction:column}
 .websocket-inspector{flex:1;min-height:0;display:flex;flex-direction:column;padding:10px 14px}.ws-layout{flex:1;min-height:0;display:flex;gap:6px;overflow:hidden}
 .ws-traffic-pane,.ws-detail-pane{min-height:0;display:flex;flex-direction:column;border:1px solid var(--line);background:var(--panel)}.ws-traffic-pane{min-width:280px;flex:0 1 var(--ws-left,38%)}.ws-detail-pane{min-width:320px;flex:1 1 0}.ws-pane-heading{font-size:14px;padding:8px 10px;margin:0;border-bottom:1px solid var(--line)}
 .ws-splitter{flex:0 0 8px;align-self:stretch;border-radius:4px;background:var(--line);cursor:col-resize;touch-action:none;position:relative}.ws-splitter::after{content:"";position:absolute;inset:0 2px;border-left:1px solid var(--muted);border-right:1px solid var(--muted)}.ws-splitter:hover,.ws-splitter:focus-visible{background:var(--accent);outline:2px solid var(--accent);outline-offset:1px}.ws-resizing{cursor:col-resize!important;user-select:none!important}
-.ws-search-controls{display:flex;align-items:center;gap:8px;padding:6px;border-bottom:1px solid var(--line)}.ws-search-controls input{min-width:0;width:100%;padding:5px 8px}.ws-search-status{flex:none;color:var(--muted);font-size:12px;white-space:nowrap}
+.ws-search-controls{display:flex;align-items:center;gap:8px;padding:6px;border-bottom:1px solid var(--line)}.ws-search-controls input{min-width:0;width:100%;padding:5px 8px}
+.chip-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:8px 0}.chips{display:flex;gap:6px;flex-wrap:wrap}.ws-chips{padding:6px;border-bottom:1px solid var(--line)}
+.chip{padding:3px 10px;border-radius:999px;background:var(--bg);color:var(--muted);font-size:12px}.chip[aria-pressed=true]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}.chip-count{font-weight:600;margin-left:2px}
+.segment{display:inline-flex}.segment button{border-radius:0;padding:3px 10px;font-size:12px;margin-left:-1px}.segment button:first-child{border-radius:8px 0 0 8px;margin-left:0}.segment button:last-child{border-radius:0 8px 8px 0}.segment button[aria-pressed=true]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent);position:relative}
+.tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:var(--accent-soft);color:var(--accent)}.tag-ws{background:var(--info-bg);color:var(--direction-client)}
+.res-ok{color:var(--ok);font-weight:600}#httpTable .http-type{width:1%;white-space:nowrap}.res-err{color:var(--err);font-weight:600;background:var(--err-bg)}
+#httpTable.compact td{padding-top:2px;padding-bottom:2px}.ws-search-status{flex:none;color:var(--muted);font-size:12px;white-space:nowrap}
 .ws-message-scroll{flex:1;min-height:0;overflow:auto}.ws-message-tracks{display:grid;grid-template-columns:max-content max-content max-content minmax(180px,1fr);min-width:100%}
 .ws-message-header,.ws-message-list,.ws-message-row{display:grid;grid-template-columns:subgrid;grid-column:1/-1}
 .ws-message-header{position:sticky;top:0;z-index:1;background:var(--panel2);font-size:12px;font-weight:600}.ws-message-header>span{padding:3px 5px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
@@ -1677,6 +1684,17 @@ async function renderWebSocketInspector(host,generation){
     search.setAttribute('aria-describedby',searchHelpId);search.title=searchHelp.textContent;
     const searchStatus=wsElement('span','ws-search-status');searchStatus.setAttribute('role','status');searchStatus.setAttribute('aria-live','polite');
     const searchControls=wsElement('div','ws-search-controls');searchControls.append(search,searchStatus,searchHelp);traffic.append(searchControls);
+    const isControl=message=>message.type==='Ping'||message.type==='Pong'||message.type==='Close';
+    const directionDefs=[['','All',()=>true],['Client','Sent',m=>m.direction==='Client'],['Server','Received',m=>m.direction==='Server'],['Control','Control',isControl]];
+    let directionFilter='';
+    const chipBar=wsElement('div','chips ws-chips');chipBar.setAttribute('role','group');chipBar.setAttribute('aria-label','Filter WebSocket messages by direction');
+    const chipButtons=directionDefs.map(([key,label,test])=>{
+      const chip=wsElement('button','chip');chip.type='button';chip.setAttribute('aria-pressed',String(key===''));
+      chip.append(document.createTextNode(`${label} `),wsElement('span','chip-count',String(messages.filter(test).length)));
+      chip.addEventListener('click',()=>{directionFilter=directionFilter===key?'':key;chipButtons.forEach((c,i)=>c.setAttribute('aria-pressed',String(directionDefs[i][0]===directionFilter)));applySearch()});
+      chipBar.append(chip);return chip;
+    });
+    traffic.append(chipBar);
     const scroll=wsElement('div','ws-message-scroll');
     const grid=wsElement('div','ws-message-tracks');
     const header=wsElement('div','ws-message-header');header.setAttribute('role','row');
@@ -1710,7 +1728,7 @@ async function renderWebSocketInspector(host,generation){
       const query=search.value.trim().toLowerCase();
       visibleIndices=[];
       rows.forEach((row,index)=>{
-        const visible=!query||searchKeys[index].includes(query);
+        const visible=(!query||searchKeys[index].includes(query))&&directionDefs.find(d=>d[0]===directionFilter)[2](messages[index]);
         row.classList.toggle('ws-filtered',!visible);
         row.setAttribute('aria-hidden',String(!visible));
         if(visible)visibleIndices.push(index);
@@ -2384,7 +2402,7 @@ function bindFilter(inputId,selectId,checkboxId,tableId){
   function apply(){
     const query=input.value.toLowerCase(),filter=select.value;
     rows.forEach(row=>{
-      const filterMatch=!filter||(filter==='mapi'?row.dataset.mapi==='true':filter==='websocket'?row.dataset.websocket==='true':row.dataset.filter===filter);
+      const filterMatch=!filter||(filter==='mapi'?row.dataset.mapi==='true':filter==='websocket'?row.dataset.websocket==='true':filter==='error'?(row.dataset.filter==='4'||row.dataset.filter==='5'):row.dataset.filter===filter);
       const visible=(!query||row.dataset.search.includes(query))&&filterMatch&&(!checkbox.checked||row.dataset.method!=='connect');
       row.classList.toggle('hidden',!visible);
     });
@@ -2396,10 +2414,28 @@ const httpSearch=document.getElementById('httpSearch');
 const httpFilter=document.getElementById('httpFilter');
 const hideConnect=document.getElementById('hideConnect');
 const applyHttpFilter=bindFilter('httpSearch','httpFilter','hideConnect','httpTable');
+function syncHttpChips(){
+  document.querySelectorAll('#httpChips .chip').forEach(chip=>chip.setAttribute('aria-pressed',String(chip.dataset.chip===httpFilter.value)));
+}
+document.querySelectorAll('#httpChips .chip').forEach(chip=>chip.addEventListener('click',()=>{
+  httpFilter.value=chip.dataset.chip===httpFilter.value?'':chip.dataset.chip;
+  httpFilter.dispatchEvent(new Event('change'));
+}));
+httpFilter.addEventListener('change',syncHttpChips);
+function setDensity(value){
+  const compact=value==='compact';
+  document.getElementById('httpTable').classList.toggle('compact',compact);
+  document.querySelectorAll('#densityToggle button').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.density===(compact?'compact':'comfortable'))));
+}
+document.querySelectorAll('#densityToggle button').forEach(button=>button.addEventListener('click',()=>{
+  setDensity(button.dataset.density);
+  try{localStorage.setItem('saz-viewer-density',button.dataset.density)}catch(error){}
+}));
+try{setDensity(localStorage.getItem('saz-viewer-density')==='compact'?'compact':'comfortable')}catch(error){}
 const INSPECTOR_HASH_PREFIX='#saz-inspector?';
 const MAX_INSPECTOR_HASH_LENGTH=4096;
 const MAX_INSPECTOR_QUERY_LENGTH=512;
-const ALLOWED_INSPECTOR_FILTERS=new Set(['','websocket','mapi','0','2','3','4','5']);
+const ALLOWED_INSPECTOR_FILTERS=new Set(['','websocket','mapi','error','0','2','3','4','5']);
 function serializeInspectorState(row){
   if(httpSearch.value.length>MAX_INSPECTOR_QUERY_LENGTH)return null;
   const params=new URLSearchParams();
@@ -2937,7 +2973,7 @@ function enterInspectorOnlyMode(state){
   inspectorClose.setAttribute('aria-label','Back to sessions');
   inspectorClose.title='Return to the session table in this tab';
   httpSearch.value=state.query;
-  httpFilter.value=state.filter;
+  httpFilter.value=state.filter;syncHttpChips();
   hideConnect.checked=state.hideConnect;
   applyHttpFilter();
   const rows=visibleRows();
