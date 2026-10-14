@@ -34,6 +34,38 @@
                     AutomationProperties.Name="Next session" ToolTip="Next session (Alt+Right)" />
             <Button x:Name="PreviousButton" DockPanel.Dock="Right" Content="◀ Previous" Command="{Binding PreviousCommand}" Margin="8,0,0,0"
                     AutomationProperties.Name="Previous session" ToolTip="Previous session (Alt+Left)" />
+            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" DataContext="{Binding Row}" VerticalAlignment="Center" Margin="0,0,10,0"
+                        Visibility="{Binding Converter={StaticResource NotNullToVisibility}}">
+                <Border Style="{StaticResource Saz.Tag}" Margin="0,0,6,0">
+                    <TextBlock Text="{Binding Method, Mode=OneWay}" Style="{StaticResource Saz.TagText}" />
+                </Border>
+                <Border Style="{StaticResource Saz.Tag}" Margin="0,0,6,0">
+                    <TextBlock Text="{Binding Result, Mode=OneWay}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource Saz.TagText}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding FilterKey}" Value="2"><Setter Property="Foreground" Value="{DynamicResource Saz.Success}" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding FilterKey}" Value="3"><Setter Property="Foreground" Value="{DynamicResource Saz.Info}" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding FilterKey}" Value="4"><Setter Property="Foreground" Value="{DynamicResource Saz.Warn}" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding FilterKey}" Value="5"><Setter Property="Foreground" Value="{DynamicResource Saz.Err}" /></DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Border>
+                <Border>
+                    <Border.Style>
+                        <Style TargetType="Border" BasedOn="{StaticResource Saz.Tag}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding TypeLabel}" Value=""><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                <DataTrigger Binding="{Binding TypeLabel}" Value="MAPI"><Setter Property="Background" Value="{DynamicResource Saz.TagMapiBg}" /></DataTrigger>
+                                <DataTrigger Binding="{Binding TypeLabel}" Value="WebSocket"><Setter Property="Background" Value="{DynamicResource Saz.TagWebSocketBg}" /></DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="{Binding TypeLabel, Mode=OneWay}" Style="{StaticResource Saz.TagText}" />
+                </Border>
+            </StackPanel>
             <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"
                        TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" AutomationProperties.HeadingLevel="Level2" />
         </DockPanel>
