@@ -9,7 +9,7 @@
         DragOver="OnDragOver"
         Drop="OnDrop"
         PreviewKeyDown="OnPreviewKeyDown"
-        Background="{DynamicResource Saz.Bg}"
+        Background="{DynamicResource Saz.AppBg}"
         Foreground="{DynamicResource Saz.Text}">
     <Window.Resources>
         <ResourceDictionary>

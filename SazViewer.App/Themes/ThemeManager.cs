@@ -157,7 +157,8 @@ internal static class ThemeManager
         }
         foreach (var key in new[]
         {
-            "Saz.Bg", "Saz.Panel", "Saz.Panel2", "Saz.Hover", "Saz.InfoBg", "Saz.WarningBg",
+            "Saz.Bg", "Saz.AppBg", "Saz.Panel", "Saz.Panel2", "Saz.Hover", "Saz.InfoBg", "Saz.WarningBg",
+            "Saz.AccentSoft", "Saz.ErrBg", "Saz.SuccessBg", "Saz.TagMapiBg", "Saz.TagNeutralBg", "Saz.TagWebSocketBg",
             "Saz.ScrollBarCorner", "Saz.ScrollBarTrack"
         })
         {
@@ -166,7 +167,8 @@ internal static class ThemeManager
         foreach (var key in new[]
         {
             "Saz.Text", "Saz.Muted", "Saz.Line", "Saz.Warn", "Saz.DirClient", "Saz.DirServer", "Saz.ProtocolBinary",
-            "Saz.ProtocolKind", "Saz.ScrollBarThumb", "Saz.SynBlue", "Saz.SynGreen", "Saz.SynNumber", "Saz.SynPunct", "Saz.SynPurple",
+            "Saz.ProtocolKind", "Saz.Err", "Saz.Info", "Saz.Success", "Saz.TagMapi", "Saz.TagNeutral", "Saz.TagWebSocket",
+            "Saz.ScrollBarThumb", "Saz.SynBlue", "Saz.SynGreen", "Saz.SynNumber", "Saz.SynPunct", "Saz.SynPurple",
             "Saz.SynRed", "Saz.SynString"
         })
         {

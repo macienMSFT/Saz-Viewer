@@ -188,7 +188,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ButtonBase">
                     <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -426,16 +426,15 @@
         </Setter>
     </Style>
 
-    <!-- Report-style tab strip (.tab-strip / [role=tab]). -->
+    <!-- Tab strip: muted labels, accent text and a 2px accent underline on the selected tab. -->
     <Style x:Key="Saz.TabItem" TargetType="TabItem">
         <Setter Property="Foreground" Value="{DynamicResource Saz.Muted}" />
-        <Setter Property="Padding" Value="12,5" />
+        <Setter Property="Padding" Value="12,8" />
         <Setter Property="FocusVisualStyle" Value="{StaticResource Saz.InsetFocusVisual}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TabItem">
-                    <Border x:Name="Chrome" Background="Transparent" BorderBrush="Transparent" BorderThickness="1,1,1,0"
-                            CornerRadius="6,6,0,0" Margin="0,0,2,-1" SnapsToDevicePixels="True">
+                    <Border x:Name="Chrome" Background="Transparent" CornerRadius="6,6,0,0" Margin="0,0,2,-1" SnapsToDevicePixels="True">
                         <Grid>
                             <ContentPresenter x:Name="Header" ContentSource="Header" Margin="{TemplateBinding Padding}"
                                               HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"
@@ -446,11 +445,11 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.Hover}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
                         </Trigger>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
-                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.Panel}" />
-                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource Saz.Line}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Saz.Accent}" />
+                            <Setter TargetName="Chrome" Property="Background" Value="Transparent" />
                             <Setter TargetName="Underline" Property="Visibility" Value="Visible" />
                             <Setter Property="Panel.ZIndex" Value="1" />
                         </Trigger>
@@ -467,19 +466,19 @@
     <Style TargetType="TabItem" BasedOn="{StaticResource Saz.TabItem}" />
 
     <Style TargetType="TabControl">
-        <Setter Property="Background" Value="{DynamicResource Saz.Panel}" />
+        <Setter Property="Background" Value="{DynamicResource Saz.Bg}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Saz.Line}" />
         <Setter Property="Padding" Value="10,8" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TabControl">
                     <DockPanel KeyboardNavigation.TabNavigation="Local">
-                        <Border DockPanel.Dock="Top" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="0,0,0,1">
+                        <Border DockPanel.Dock="Top" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="0,0,0,1" Padding="6,0">
                             <!-- A WrapPanel rather than TabPanel: when narrow panes wrap the tabs, the fixed tab order is kept (TabPanel moves the selected row last). -->
                             <WrapPanel x:Name="HeaderPanel" IsItemsHost="True" KeyboardNavigation.TabIndex="1" KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Cycle" Panel.ZIndex="1" />
                         </Border>
                         <Border x:Name="ContentBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="1,0,1,1" Padding="{TemplateBinding Padding}" KeyboardNavigation.TabIndex="2">
+                                BorderThickness="0" Padding="{TemplateBinding Padding}" KeyboardNavigation.TabIndex="2">
                             <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent" />
                         </Border>
                     </DockPanel>
@@ -536,6 +535,118 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+    </Style>
+
+    <!-- Rounded surface that holds a pane (session list, inspector). -->
+    <Style x:Key="Saz.Card" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource Saz.Bg}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Saz.Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <!-- Small rounded label, e.g. a MAPI / WebSocket type marker. Variants set the colours. -->
+    <Style x:Key="Saz.Tag" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource Saz.TagNeutralBg}" />
+        <Setter Property="CornerRadius" Value="5" />
+        <Setter Property="Padding" Value="7,0" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style x:Key="Saz.Tag.Mapi" TargetType="Border" BasedOn="{StaticResource Saz.Tag}">
+        <Setter Property="Background" Value="{DynamicResource Saz.TagMapiBg}" />
+    </Style>
+    <Style x:Key="Saz.Tag.WebSocket" TargetType="Border" BasedOn="{StaticResource Saz.Tag}">
+        <Setter Property="Background" Value="{DynamicResource Saz.TagWebSocketBg}" />
+    </Style>
+    <Style x:Key="Saz.TagText" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource Saz.TagNeutral}" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style x:Key="Saz.TagText.Mapi" TargetType="TextBlock" BasedOn="{StaticResource Saz.TagText}">
+        <Setter Property="Foreground" Value="{DynamicResource Saz.TagMapi}" />
+    </Style>
+    <Style x:Key="Saz.TagText.WebSocket" TargetType="TextBlock" BasedOn="{StaticResource Saz.TagText}">
+        <Setter Property="Foreground" Value="{DynamicResource Saz.TagWebSocket}" />
+    </Style>
+
+    <!-- Pill-shaped filter toggle (All / MAPI / WebSocket / 4xx-5xx). -->
+    <Style x:Key="Saz.Chip" TargetType="ToggleButton">
+        <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
+        <Setter Property="Background" Value="{DynamicResource Saz.Panel}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Saz.Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="10,3" />
+        <Setter Property="Margin" Value="0,0,6,0" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource Saz.FocusVisual}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="999" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.AccentSoft}" />
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource Saz.Accent}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Saz.Accent}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.5" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Filled accent button for the main action in a toolbar or dialog. -->
+    <Style x:Key="Saz.PrimaryButton" TargetType="Button" BasedOn="{StaticResource Saz.ButtonBase}">
+        <Setter Property="Foreground" Value="{DynamicResource Saz.AccentText}" />
+        <Setter Property="Background" Value="{DynamicResource Saz.Accent}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Saz.Accent}" />
+    </Style>
+
+    <!-- One option of a joined segmented control (Comfortable | Compact, Chat | List). Use with RadioButton. -->
+    <Style x:Key="Saz.Segment" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{DynamicResource Saz.Muted}" />
+        <Setter Property="Padding" Value="10,3" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource Saz.InsetFocusVisual}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Chrome" Background="Transparent" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.Hover}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Saz.AccentSoft}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Saz.Accent}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <Style x:Key="Saz.SegmentGroup" TargetType="Border">
+        <Setter Property="BorderBrush" Value="{DynamicResource Saz.Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="ClipToBounds" Value="True" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
     </Style>
 
     <Style x:Key="Saz.Warning" TargetType="Border">
