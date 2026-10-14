@@ -75,6 +75,14 @@ internal partial class WebSocketInspectorView : UserControl
         }
     }
 
+    private void OnDirectionChipClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is WebSocketInspectorViewModel model && sender is FrameworkElement { DataContext: SessionFilterChip chip })
+        {
+            model.SelectDirection(chip);
+        }
+    }
+
     private void OnFilterKeyDown(object sender, KeyEventArgs e)
     {
         if (DataContext is not WebSocketInspectorViewModel model)

@@ -73,6 +73,22 @@ public sealed class WebSocketViewTests
     }
 
     [Fact]
+    public void DirectionChipsFilterMessagesAndShowCounts()
+    {
+        var model = Inspector(out _);
+
+        Assert.Equal(["All", "Sent", "Received", "Control"], model.DirectionChips.Select(chip => chip.Label));
+        Assert.Equal(7, model.DirectionChips[0].Count);
+        Assert.Equal(3, model.DirectionChips[3].Count);
+        model.SelectDirection(model.DirectionChips[3]);
+        Assert.Equal(["Ping", "Pong", "Close"], model.VisibleItems.Select(item => item.ListType));
+        Assert.True(model.DirectionChips[3].IsActive);
+        model.SelectDirection(model.DirectionChips[3]);
+        Assert.Equal(7, model.VisibleItems.Count);
+        Assert.True(model.DirectionChips[0].IsActive);
+    }
+
+    [Fact]
     public void MessageListMatchesTheReportColumns()
     {
         var model = Inspector(out _);
