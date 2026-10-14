@@ -43,6 +43,7 @@ internal static class SessionColumnCatalog
         Text("result", "Result", "Default", row => new(row.Result, row.ResultCode), numeric: true, type: SessionColumnType.Status),
         Text("method", "Method", "Default", row => Value(row.Method), type: SessionColumnType.Method),
         Text("url", "URL", "Default", row => Value(row.Url)),
+        Text("type", "Type", "Default", row => Value(row.TypeLabel)),
         Text("elapsed", "Elapsed Time", "Default", row => Duration(row.Session.ElapsedMilliseconds), numeric: true, type: SessionColumnType.Duration),
         Text("request-size", "Req", "Default", row => Bytes(row.Session.RequestBytes), numeric: true, type: SessionColumnType.Size),
         Text("response-size", "Resp", "Default", row => Bytes(row.Session.ResponseBytes), numeric: true, type: SessionColumnType.Size),
@@ -113,7 +114,7 @@ internal static class SessionColumnCatalog
     public static IReadOnlyList<SessionColumnDefinition> Resolve(IEnumerable<SessionColumnSetting> settings)
     {
         var resolved = settings.Select(Resolve).Where(column => column is not null).Cast<SessionColumnDefinition>().ToArray();
-        return resolved.Any(column => column.Setting.Visible) ? resolved : BuiltIns.Take(8).ToArray();
+        return resolved.Any(column => column.Setting.Visible) ? resolved : BuiltIns.Take(9).ToArray();
     }
 
     public static SessionColumnDefinition? Resolve(SessionColumnSetting setting)

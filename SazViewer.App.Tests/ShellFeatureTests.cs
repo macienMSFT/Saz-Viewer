@@ -30,7 +30,7 @@ public sealed class ShellFeatureTests
         Assert.Null(preferences.FilterWindowBounds);
         Assert.False(preferences.ScrubBannerExpanded);
         Assert.Equal(
-            ["time", "id", "result", "method", "url", "elapsed", "request-size", "response-size"],
+            ["time", "id", "result", "method", "url", "type", "elapsed", "request-size", "response-size"],
             preferences.GridColumns.Select(column => column.Id));
         Assert.Null(preferences.GridColumns.Single(column => column.Id == "url").Width);
         Assert.Equal(LayoutWidthClass.Narrow, UiPreferences.WidthClassFor(899.5));

@@ -76,6 +76,9 @@ internal sealed class SessionRow
 
     public bool IsConnect { get; }
 
+    /// <summary>"MAPI", "WebSocket", or empty for plain HTTP.</summary>
+    public string TypeLabel => IsMapi ? "MAPI" : IsWebSocket ? "WebSocket" : "";
+
     /// <summary>Lower-cased text the grid search matches against (same fields as the report).</summary>
     public string SearchText { get; }
 
