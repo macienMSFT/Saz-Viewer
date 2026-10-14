@@ -574,19 +574,30 @@
 
     <!-- Pill-shaped filter toggle (All / MAPI / WebSocket / 4xx-5xx). -->
     <Style x:Key="Saz.Chip" TargetType="ToggleButton">
-        <Setter Property="Foreground" Value="{DynamicResource Saz.Text}" />
-        <Setter Property="Background" Value="{DynamicResource Saz.Panel}" />
+        <Setter Property="Foreground" Value="{DynamicResource Saz.Muted}" />
+        <Setter Property="Background" Value="{DynamicResource Saz.Bg}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Saz.Line}" />
         <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Height" Value="24" />
         <Setter Property="Padding" Value="10,3" />
         <Setter Property="Margin" Value="0,0,6,0" />
+        <Setter Property="ContentTemplate">
+            <Setter.Value>
+                <DataTemplate>
+                    <TextBlock>
+                        <Run Text="{Binding Label, Mode=OneWay}" /><Run Text=" " /><Run Text="{Binding Count, Mode=OneWay, StringFormat=N0}" FontWeight="SemiBold" />
+                    </TextBlock>
+                </DataTemplate>
+            </Setter.Value>
+        </Setter>
         <Setter Property="FocusVisualStyle" Value="{StaticResource Saz.FocusVisual}" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ToggleButton">
                     <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="999" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="12" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -615,7 +626,7 @@
         <Setter Property="BorderBrush" Value="{DynamicResource Saz.Accent}" />
     </Style>
 
-    <!-- One option of a joined segmented control (Comfortable | Compact, Chat | List). Use with RadioButton. -->
+    <!-- One option of a joined segmented control (Roomy | Compact, Chat | List). Use with RadioButton. -->
     <Style x:Key="Saz.Segment" TargetType="RadioButton">
         <Setter Property="Foreground" Value="{DynamicResource Saz.Muted}" />
         <Setter Property="Padding" Value="10,3" />

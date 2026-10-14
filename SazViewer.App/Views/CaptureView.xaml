@@ -84,8 +84,8 @@
                                 <RadioButton x:Name="CompactRadio" Content="Compact" GroupName="Density" Style="{StaticResource Saz.Segment}"
                                              IsChecked="{Binding CompactRows, Mode=OneWay}" Checked="OnDensityChecked"
                                              AutomationProperties.Name="Compact rows" />
-                                <RadioButton x:Name="ComfortableRadio" Content="Comfortable" GroupName="Density" Style="{StaticResource Saz.Segment}"
-                                             Checked="OnDensityChecked" AutomationProperties.Name="Comfortable rows" />
+                                <RadioButton x:Name="ComfortableRadio" Content="Roomy" GroupName="Density" Style="{StaticResource Saz.Segment}"
+                                             Checked="OnDensityChecked" AutomationProperties.Name="Roomy rows" />
                             </StackPanel>
                         </Border>
                         <ItemsControl x:Name="ChipList" ItemsSource="{Binding Chips}" Focusable="False" VerticalAlignment="Center">
@@ -96,7 +96,7 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <ToggleButton Style="{StaticResource Saz.Chip}" Content="{Binding Text}"
+                                    <ToggleButton Style="{StaticResource Saz.Chip}" Content="{Binding}"
                                                   IsChecked="{Binding IsActive, Mode=OneWay}" Click="OnChipClick"
                                                   AutomationProperties.Name="{Binding Label, StringFormat='Filter: {0}'}" />
                                 </DataTemplate>
