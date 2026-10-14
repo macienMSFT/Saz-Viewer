@@ -104,7 +104,7 @@ window.addEventListener('storage',event=>{
         AppendChip(html, "websocket", "WebSocket", webSocketCount);
         AppendChip(html, "error", "4xx/5xx", errorCount);
         html.Append("""
-</div><div class="segment" id="densityToggle" role="group" aria-label="Row density"><button type="button" data-density="compact" aria-pressed="false">Compact</button><button type="button" data-density="comfortable" aria-pressed="true">Comfortable</button></div></div>
+</div><div class="segment" id="densityToggle" role="group" aria-label="Row density"><button type="button" data-density="compact" aria-pressed="false">Compact</button><button type="button" data-density="comfortable" aria-pressed="true">Roomy</button></div></div>
 <div id="reportStatus" class="warning hidden" role="status" aria-live="polite"></div>
 <div class="http-table-scroll"><table id="httpTable"><thead><tr><th class="http-time">Time</th><th class="http-id">ID</th><th class="http-result num">Result</th><th class="http-method">Method</th><th class="http-type">Type</th><th class="http-url">URL</th><th class="http-elapsed num">Elapsed Time</th><th class="http-bytes num">Req</th><th class="http-bytes num">Resp</th></tr></thead><tbody>
 """);

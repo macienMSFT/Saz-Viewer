@@ -8,34 +8,32 @@ using SazViewer.App.Themes;
 namespace SazViewer.App.Controls;
 
 /// <summary>
-/// The report's light-bulb theme toggle: switches between light and dark (remembered), with the bulb lit in the
-/// dark theme. Disabled while Windows high contrast is on, which always wins.
+/// Sun/moon theme toggle: switches between light and dark (remembered), showing the icon of the theme it will
+/// switch to (sun in dark, moon in light). Disabled while Windows high contrast is on, which always wins.
 /// </summary>
 internal sealed class ThemeToggleButton : Button
 {
-    private static readonly Geometry Bulb = Geometry.Parse(
-        "M9 18h6M10 21h4M8.5 15.5A6 6 0 1 1 15.5 15.5C14.6 16.2 14 17 14 18h-4c0-1-.6-1.8-1.5-2.5Z");
+    private static readonly Geometry Sun = Geometry.Parse(
+        "M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8Z M12 2v2 M12 20v2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M2 12h2 M20 12h2 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4");
 
-    private readonly Ellipse core;
+    private static readonly Geometry Moon = Geometry.Parse("M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z");
+
+    private readonly System.Windows.Shapes.Path icon;
 
     public ThemeToggleButton()
     {
         SetResourceReference(StyleProperty, typeof(Button));
-        var outline = new System.Windows.Shapes.Path
+        icon = new System.Windows.Shapes.Path
         {
-            Data = Bulb,
+            Data = Moon,
             StrokeThickness = 1.8,
             StrokeLineJoin = PenLineJoin.Round,
             StrokeStartLineCap = PenLineCap.Round,
             StrokeEndLineCap = PenLineCap.Round
         };
-        outline.SetBinding(Shape.StrokeProperty, new System.Windows.Data.Binding(nameof(Foreground)) { Source = this });
-        core = new Ellipse { Width = 4.8, Height = 4.8 };
-        Canvas.SetLeft(core, 12 - 2.4);
-        Canvas.SetTop(core, 11 - 2.4);
+        icon.SetBinding(Shape.StrokeProperty, new System.Windows.Data.Binding(nameof(Foreground)) { Source = this });
         var canvas = new Canvas { Width = 24, Height = 24 };
-        canvas.Children.Add(outline);
-        canvas.Children.Add(core);
+        canvas.Children.Add(icon);
         Content = new Viewbox { Width = 18, Height = 18, Child = canvas };
         Padding = new Thickness(6, 3, 6, 3);
         Click += (_, _) => ThemeManager.Toggle();
@@ -58,8 +56,6 @@ internal sealed class ThemeToggleButton : Button
         AutomationProperties.SetItemStatus(this, ThemeManager.IsDark ? "Dark theme" : ThemeManager.IsHighContrast ? "High contrast" : "Light theme");
         ToolTip = label;
         IsEnabled = !ThemeManager.IsHighContrast;
-        core.Fill = ThemeManager.IsDark ? (Brush)FindResourceOrDefault("Saz.SynNumber") : Brushes.Transparent;
+        icon.Data = ThemeManager.IsDark ? Sun : Moon;
     }
-
-    private object FindResourceOrDefault(string key) => TryFindResource(key) ?? Foreground;
 }
