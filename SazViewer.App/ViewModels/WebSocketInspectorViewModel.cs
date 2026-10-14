@@ -23,6 +23,7 @@ internal sealed class WebSocketInspectorViewModel : ObservableObject
     private WebSocketMessageItem? selectedItem;
     private WebSocketMessageDetailViewModel? detail;
     private string query = "";
+    private string directionFilter = "";
     private string searchStatus = "";
 
     public WebSocketInspectorViewModel(IReadOnlyList<WebSocketMessage> messages, IClipboardService clipboard)
@@ -38,6 +39,14 @@ internal sealed class WebSocketInspectorViewModel : ObservableObject
             ? "Searches retained decoded text and JSON payload content only. Binary payloads and bytes omitted by safety truncation are not searched."
             : "Searches retained decoded text and JSON payload content only. Binary payloads are not searched.";
         visibleItems = Items;
+        DirectionChips =
+        [
+            new("", "All", Items.Count),
+            new("Client", "Sent", Items.Count(item => item.DirectionKey == "Client")),
+            new("Server", "Received", Items.Count(item => item.DirectionKey == "Server")),
+            new("control", "Control", Items.Count(item => item.IsControl))
+        ];
+        DirectionChips[0].IsActive = true;
         SelectNextCommand = new RelayCommand(() => SelectRelative(1), () => visibleItems.Count > 0);
         SelectPreviousCommand = new RelayCommand(() => SelectRelative(-1), () => visibleItems.Count > 0);
         Apply();
@@ -52,6 +61,29 @@ internal sealed class WebSocketInspectorViewModel : ObservableObject
     }
 
     public string? OmittedWarning { get; }
+
+    /// <summary>Direction quick filters (All / Sent / Received / Control) with counts.</summary>
+    public IReadOnlyList<SessionFilterChip> DirectionChips { get; }
+
+    public string DirectionFilter
+    {
+        get => directionFilter;
+        set
+        {
+            if (SetProperty(ref directionFilter, value ?? ""))
+            {
+                foreach (var chip in DirectionChips)
+                {
+                    chip.IsActive = chip.Key == directionFilter;
+                }
+                Apply();
+            }
+        }
+    }
+
+    /// <summary>Selects a direction chip; clicking the active chip returns to All.</summary>
+    public void SelectDirection(SessionFilterChip chip) =>
+        DirectionFilter = chip.Key == directionFilter ? "" : chip.Key;
 
     public string SearchHelp { get; }
 
@@ -120,7 +152,15 @@ internal sealed class WebSocketInspectorViewModel : ObservableObject
     private void Apply()
     {
         var folded = query.Trim();
-        VisibleItems = folded.Length == 0 ? Items : Items.Where(item => item.Matches(folded)).ToList();
+        IEnumerable<WebSocketMessageItem> source = directionFilter switch
+        {
+            "" => Items,
+            "control" => Items.Where(item => item.IsControl),
+            var key => Items.Where(item => item.DirectionKey == key)
+        };
+        VisibleItems = folded.Length == 0
+            ? (directionFilter.Length == 0 ? Items : source.ToList())
+            : source.Where(item => item.Matches(folded)).ToList();
         SearchStatus = $"{visibleItems.Count.ToString(CultureInfo.InvariantCulture)} of {Items.Count.ToString(CultureInfo.InvariantCulture)} messages";
         OnPropertyChanged(nameof(EmptyText));
         SelectNextCommand.RaiseCanExecuteChanged();

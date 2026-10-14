@@ -51,6 +51,20 @@
                         Visibility="{Binding OmittedWarning, Converter={StaticResource NotNullToVisibility}}">
                     <TextBlock Text="{Binding OmittedWarning}" TextWrapping="Wrap" />
                 </Border>
+                <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding DirectionChips}" Focusable="False" Margin="6,6,6,0">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <ToggleButton Style="{StaticResource Saz.Chip}" Content="{Binding Text}"
+                                          IsChecked="{Binding IsActive, Mode=OneWay}" Click="OnDirectionChipClick"
+                                          AutomationProperties.Name="{Binding Label, StringFormat='Show {0} messages'}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
                 <DockPanel DockPanel.Dock="Top" Margin="6">
                     <TextBlock DockPanel.Dock="Right" Text="{Binding SearchStatus}" Foreground="{DynamicResource Saz.Muted}" FontSize="12"
                                VerticalAlignment="Center" Margin="8,0,0,0" AutomationProperties.LiveSetting="Polite" />

@@ -45,6 +45,7 @@ internal sealed class WebSocketMessageItem
 
     public string ListType { get; }
 
+    public bool IsControl => Message.Type is "Ping" or "Pong" or "Close";
     public bool IsLimited { get; }
 
     public string Body { get; }
