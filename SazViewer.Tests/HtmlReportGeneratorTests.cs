@@ -1738,7 +1738,7 @@ public sealed class HtmlReportGeneratorTests
         var httpHeader = html[httpHeaderStart..httpHeaderEnd];
 
         Assert.Contains(
-            "<th class=\"http-time\">Time</th><th class=\"http-id\">ID</th><th class=\"http-result num\">Result</th><th class=\"http-method\">Method</th><th class=\"http-url\">URL</th><th class=\"http-elapsed num\">Elapsed Time</th><th class=\"http-bytes num\">Req</th><th class=\"http-bytes num\">Resp</th>",
+            "<th class=\"http-time\">Time</th><th class=\"http-id\">ID</th><th class=\"http-result num\">Result</th><th class=\"http-method\">Method</th><th class=\"http-type\">Type</th><th class=\"http-url\">URL</th><th class=\"http-elapsed num\">Elapsed Time</th><th class=\"http-bytes num\">Req</th><th class=\"http-bytes num\">Resp</th>",
             httpHeader,
             StringComparison.Ordinal);
         Assert.DoesNotContain(">Protocol</th>", httpHeader, StringComparison.Ordinal);
@@ -1749,7 +1749,7 @@ public sealed class HtmlReportGeneratorTests
         Assert.Contains("#httpTable .http-url-value{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}", html, StringComparison.Ordinal);
         Assert.Contains("#httpTable tbody tr.hidden{display:table-row!important;visibility:collapse}", html, StringComparison.Ordinal);
         Assert.Contains("#httpTable th,#httpTable td{padding:5px 7px;line-height:1.3}", html, StringComparison.Ordinal);
-        Assert.Contains("<td class=\"http-result num\" title=\"HTTP 200 OK\">200</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"http-result num res-ok\" title=\"HTTP 200 OK\">200</td>", html, StringComparison.Ordinal);
         Assert.Contains("<td class=\"http-result num\" title=\"Aborted by client\">\u2014</td>", html, StringComparison.Ordinal);
         Assert.DoesNotContain(">200 OK</td>", html, StringComparison.Ordinal);
         Assert.Contains("<td class=\"http-elapsed num\">1,234 ms</td>", html, StringComparison.Ordinal);
